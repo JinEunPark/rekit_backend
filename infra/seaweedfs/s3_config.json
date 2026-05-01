@@ -1,0 +1,26 @@
+{
+  "identities": [
+    {
+      "name": "rekle",
+      "credentials": [
+        {
+          "accessKey": "rekle-dev-access",
+          "secretKey": "rekle-dev-secret"
+        }
+      ],
+      "actions": [
+        "Admin",
+        "Read",
+        "Write",
+        "List",
+        "Tagging"
+      ]
+    },
+    {
+      "name": "anonymous",
+      "actions": [
+        "Read"
+      ]
+    }
+  ]
+}
