@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     database_pool_size: int = 5
     database_max_overflow: int = 10
 
+    # JWT
+    jwt_secret: str
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 14
+    refresh_token_remember_days: int = 30
+
+    # Redis
+    redis_url: str = "redis://localhost:6379/0"
+
     # CORS (JSON 배열 형식)
     cors_origins: list[str] = Field(default_factory=list)
 

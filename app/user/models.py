@@ -5,13 +5,13 @@ from typing import TYPE_CHECKING
 from sqlalchemy import Boolean, Date, DateTime, Enum, Identity, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin
+from app.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
-    from app.models.address import Address
-    from app.models.cart import CartItem
-    from app.models.identity_verification import IdentityVerification
-    from app.models.order import Order
+    from app.address.models import Address
+    from app.auth.models import IdentityVerification
+    from app.cart.models import CartItem
+    from app.order.models import Order
 
 
 class UserRole(str, enum.Enum):

@@ -5,13 +5,13 @@ from typing import TYPE_CHECKING
 from sqlalchemy import DateTime, Enum, ForeignKey, Identity, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin
-from app.models.shipment import ShipmentMethod
+from app.db.base import Base, TimestampMixin
+from app.order.shipment import ShipmentMethod
 
 if TYPE_CHECKING:
-    from app.models.payment import Payment
-    from app.models.shipment import Shipment
-    from app.models.user import User
+    from app.order.shipment import Shipment
+    from app.payment.models import Payment
+    from app.user.models import User
 
 
 class OrderStatus(str, enum.Enum):

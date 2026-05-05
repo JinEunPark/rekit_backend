@@ -4,10 +4,10 @@ from typing import TYPE_CHECKING
 from sqlalchemy import Boolean, Enum, Float, ForeignKey, Identity, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin
+from app.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
-    from app.models.cart import CartItem
+    from app.cart.models import CartItem
 
 
 class ProductCategory(str, enum.Enum):

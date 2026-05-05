@@ -3,11 +3,11 @@ from typing import TYPE_CHECKING
 from sqlalchemy import ForeignKey, Identity, Integer, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin
+from app.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
-    from app.models.product import Product
-    from app.models.user import User
+    from app.catalog.models import Product
+    from app.user.models import User
 
 
 class CartItem(Base, TimestampMixin):

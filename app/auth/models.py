@@ -5,10 +5,10 @@ from typing import TYPE_CHECKING
 from sqlalchemy import DateTime, Enum, ForeignKey, Identity, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin
+from app.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
-    from app.models.user import User
+    from app.user.models import User
 
 
 class IdentityProvider(str, enum.Enum):

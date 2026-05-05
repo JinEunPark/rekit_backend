@@ -7,7 +7,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.config import settings
-from app.models import Base  # noqa: F401 — 모든 모델을 메타데이터에 등록
+from app.db.registry import Base  # noqa: F401 — 모든 모델을 메타데이터에 등록
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

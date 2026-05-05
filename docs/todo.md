@@ -546,3 +546,124 @@ class Promotion(Base, TimestampMixin):
 - [ ] 결제 완료 화면의 "신한카드 1234 · 일시불" — `Payment.card_company / card_last4 / installment_months` 응답으로 렌더 가능
 - [ ] 마이페이지 4단계 카운트 — `OrderStatus`별 집계 API 1회 호출로 채울 수 있음
 - [ ] Admin 주문 표 송장입력 액션 — `결제완료` / `준비중` 상태에서만 노출 (디자인 §A03에서 그렇게 분기됨)
+
+---
+
+## 9. 구현 순서 (Implementation Roadmap)
+
+> **아키텍처**: Modular Monolith + Layered (기본) + Ports & Adapters (외부 통합 모듈만)
+> **모듈 위치**: `app/{auth,user,catalog,cart,address,order,payment,common}/` — `docs/memory.md` 참고
+> **현재 상태 (2026-05-02)**: 모델 9종 + Alembic 4 마이그레이션 + uploads(presign/confirm) 완료. 모듈 구조로 재배치됨.
+
+각 주차 끝에 마이그레이션 1개씩 추가하고, 모든 새 엔드포인트는 통합 테스트(pytest + httpx) 1개씩 동반.
+
+### Week 0 — 인프라 / 공통 기반 (반나절)
+
+- [ ] `app/core/security.py` — JWT 발급/검증 (`python-jose`), 비번 해시 (`bcrypt` 또는 `argon2`)
+- [ ] `app/core/deps.py` 확장 — `get_current_user`, `get_current_admin` (Bearer 토큰 파싱)
+- [ ] `app/core/pagination.py` — `PageParams`, `CursorParams`, 응답 `meta` 헬퍼
+- [ ] `app/core/middleware.py` — 보안 헤더(HSTS/X-Content-Type-Options), 요청 로깅(structlog)
+- [ ] `app/core/redis.py` — `redis-py` async 클라이언트 + `Depends(get_redis)`
+- [ ] `app/core/rate_limit.py` — Redis 기반 (auth류 1분 10회, 일반 60회)
+- [ ] `tests/conftest.py` — async test client, 테스트 DB fixture, 인증 토큰 헬퍼
+- [ ] `pyproject.toml dev extras` 설치 (`uv pip install -e ".[dev]"`) + ruff/mypy CI
+
+### Week 1 — Auth + User 모듈 (1.1, 1.2)
+
+- [ ] `app/auth/{router,service,repository,schemas}.py` 골격
+- [ ] `POST /auth/register` — 이메일/비번/이름/휴대폰, `UsernameTaken`/`EmailTaken` 처리
+- [ ] `POST /auth/login` — JWT access(헤더) + refresh(HttpOnly 쿠키), `remember`로 만료 분기
+- [ ] `POST /auth/refresh` — refresh 쿠키만으로 새 access 발급
+- [ ] `POST /auth/logout` — refresh 무효화 + 빈 쿠키
+- [ ] `POST /auth/sms/send`, `POST /auth/sms/verify` — Redis 코드 캐시(만료 3분), `OtpRateLimited`
+- [ ] `POST /auth/password/reset/{request,confirm}` — 1회용 토큰 30분 만료
+- [ ] `POST /auth/social/{kakao,naver}/callback` — `SocialOAuthProvider` adapter 1개씩
+- [ ] `app/user/{router,service,repository,schemas}.py`
+- [ ] `GET /users/me`, `PATCH /users/me`, `DELETE /users/me`
+- [ ] CI/DI 컬럼 `AttributeConverter` 또는 SQLAlchemy `TypeDecorator`로 양방향 암호화(AES-GCM)
+
+### Week 2 — Catalog (상품) 모듈 (1.4, 1.10 일부)
+
+- [ ] `app/catalog/{router,service,repository,schemas}.py`
+- [ ] `GET /products` — 필터(category/q/grade/min_price/max_price/warranty) + 정렬 + 페이지네이션
+- [ ] `GET /products/{id}` — 이미지·스펙·등급 안내·배송정보 통합 응답
+- [ ] `GET /products/featured` — 홈 "오늘 입고된 상품" 4건
+- [ ] `GET /categories` — 카테고리 메타 (캐시 10분)
+- [ ] `GET /products/popular-keywords` — 검색 페이지 (Redis 1시간 집계 캐시)
+- [ ] **시드 데이터**: 디자인 mockup의 8개 상품 Alembic seed 마이그레이션
+- [ ] (Admin) `POST/PATCH/DELETE /admin/products/*` — 상품 CRUD + 이미지 추가/삭제 (uploads/confirm 키 검증)
+
+### Week 3 — Cart + Wishlist + Address 모듈 (1.3, 1.5, 1.6)
+
+- [ ] `app/wishlist/` 모델 + 마이그레이션 — `WishlistItem(user_id, product_id, added_at)` UNIQUE
+- [ ] `GET /favorites`, `POST/DELETE /favorites/{product_id}` (멱등)
+- [ ] `app/cart/{router,service,repository,schemas}.py`
+- [ ] `GET /cart` — items + summary(itemsTotal/shippingFee/estimatedTotal)
+- [ ] `POST /cart/items` — 동일 상품 시 수량 합산, 재고 검증
+- [ ] `PATCH /cart/items/{id}`, `DELETE /cart/items/{id}`, `POST /cart/items/bulk-delete`
+- [ ] `POST /cart/sync` — 비로그인→로그인 머지
+- [ ] `app/address/{router,service,repository,schemas}.py`
+- [ ] `GET/POST/PATCH/DELETE /addresses/*` + `POST /addresses/{id}/default`
+- [ ] 직배송 가능 zip 화이트리스트 검증 (서울/경기 prefix)
+
+### Week 4 — Order 모듈 (가장 어려움) (1.7 일부)
+
+- [ ] `app/order/{router,service,repository,schemas}.py`
+- [ ] `app/order/order_number.py` — RK-YYMMDD#### 시퀀스 (Postgres `nextval`)
+- [ ] `POST /orders/quote` — 배송방식별 견적, `IDENTITY_REQUIRED` 사전 응답
+- [ ] `POST /orders` — **트랜잭션 안에서**: 본인인증 → 재고 락(`with_for_update`) → 가격 재검증(`PriceChanged`) → 주문 생성 → cart에서 라인 제거
+- [ ] `GET /orders`, `GET /orders/{order_number}` — 본인 주문만, 타임라인 포함
+- [ ] `POST /orders/{order_number}/cancel` — 결제완료/준비중만, `cancelled_at` 기록
+- [ ] `POST /orders/{id}/refund/request` — 첨부 이미지 키 검증, status → `환불요청`
+- [ ] 주문 생성 동시성 테스트 — 동일 상품 동시 주문 시 1건만 성공해야 함
+
+### Week 5 — Payment 모듈 (PG 어댑터) (1.7 결제부)
+
+- [ ] `app/payment/adapters/tosspayments.py` — `PaymentGateway` Protocol 구현
+- [ ] `app/core/deps.py`에 `get_payment_gateway()` 와이어링 (Toss 단일 → 추후 PortOne 추가 가능)
+- [ ] `POST /payments/init` — 주문 검증(소유자 + PENDING) + Toss `paymentKey` 발급
+- [ ] `POST /payments/confirm` — Toss confirm + 금액 검증(`PaymentFailed`) + Order PAID 전환
+- [ ] `POST /payments/webhooks/toss` — **멱등성 필수**: `webhook_logs(provider, event_id) UNIQUE` + `INSERT ... ON CONFLICT DO NOTHING`
+- [ ] X-PG-Signature 검증 (`PaymentGateway.verify_webhook_signature`)
+- [ ] `POST /payments/{id}/cancel`, `POST /payments/{id}/refund`
+- [ ] **본인인증 PG**: `app/auth/adapters/toss_identity.py` — `IdentityVerifier` 구현
+- [ ] `POST /verifications/{start,callback}` — 콜백 멱등성 (`request_id` UNIQUE)
+
+### Week 6 — Shipment + Help + Admin (1.8, 1.9, 1.10~1.13)
+
+- [ ] `app/order/shipment_router.py` — 배송 정보/추적 (`/orders/{n}/shipment`, `/shipments/{tn}/track`)
+- [ ] 스마트택배 API 어댑터 (Redis 캐시 5분)
+- [ ] `app/help/` 모듈 — 공지/FAQ/문의 (`Notice`, `Faq`, `ContactInquiry` 신규 모델 + 마이그레이션)
+- [ ] `app/notification/` 모듈 — `Notification` 신규 모델 + 알림 목록/읽음
+- [ ] **Admin 라우터** (모두 `Depends(get_current_admin)` 가드):
+  - [ ] `/admin/dashboard/{summary,sales-chart,pending-orders,popular-categories,stock-alerts}`
+  - [ ] `/admin/products` CRUD + 이미지 관리
+  - [ ] `/admin/orders` 목록/상세 + `POST /admin/orders/{id}/shipment` 송장 입력 → status 자동 전환
+  - [ ] `/admin/members` 목록 + 상세 + 검색
+  - [ ] `/admin/sales/{summary,chart,by-method,top-products}` (월/일별)
+  - [ ] `/admin/inventory` 재고 관리 + bulk 등록 CSV import
+  - [ ] CSV 내보내기 — 주문/매출/회원
+
+### Week 7 — 운영 / 마무리 (필수)
+
+- [ ] **감사 로그** — Hibernate Envers 대용으로 SQLAlchemy `event.listens_for` 또는 `Audited` 패턴 (mutation 1년 보존)
+- [ ] **모니터링** — Sentry SDK + structlog JSON 포맷 + Datadog 또는 Grafana 메트릭
+- [ ] **운영 헤더** — `Strict-Transport-Security`, `X-Content-Type-Options: nosniff` 미들웨어
+- [ ] **레이트 리밋** 전 라우터 적용 (auth류 / 일반 / admin)
+- [ ] **PII 양방향 암호화** 검증 — phone/email AES-GCM, 비번 argon2id
+- [ ] **백업** — pg_dump 일 1회 + WAL 5분 단위 (infra 작업)
+- [ ] **부하 테스트** — k6 또는 locust로 P95 read 200ms / write 500ms 검증
+- [ ] **운영 문서** — `docs/runbook.md` (PG 결제 실패 / 재고 race / webhook 미수신 대응)
+
+### 우선순위 매트릭스 (블로킹 / 긴급)
+
+| 작업 | 블로킹 | 이유 |
+|---|---|---|
+| Week 0 (security/deps/pagination) | ★★★ | 모든 라우터가 의존 |
+| Week 1 (auth) | ★★★ | 거의 모든 비-Public 엔드포인트가 의존 |
+| Week 4 (order) | ★★★ | 결제·배송·관리자 매출이 모두 Order 의존 |
+| Week 5 (payment) | ★★ | order는 PENDING 상태로 생성 가능, Order 부분 테스트 가능 |
+| Week 2 (catalog) | ★★ | cart/order의 stock 검증이 의존 |
+| Week 3 (cart/wishlist/address) | ★ | order에 필요하나 mock 가능 |
+| Week 6 (admin) | ★ | 운영 단계에서 필요, 사용자 트래픽엔 무영향 |
+| Week 7 (운영) | — | 출시 직전 검증

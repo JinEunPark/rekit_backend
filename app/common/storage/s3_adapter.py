@@ -1,13 +1,19 @@
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import aioboto3
-from botocore.config import Config
+from aiobotocore.config import AioConfig
 from botocore.exceptions import ClientError
 
+from app.common.storage.ports import ObjectMeta
 from app.core.config import Settings
 from app.core.config import settings as default_settings
+
+if TYPE_CHECKING:
+    # 런타임 의존성 없는 타입 전용 import (dev 의존성 types-aioboto3[s3] 에서만 제공)
+    from types_aiobotocore_s3 import S3Client
 
 ALLOWED_IMAGE_TYPES: dict[str, str] = {
     "image/jpeg": "jpg",
@@ -16,17 +22,8 @@ ALLOWED_IMAGE_TYPES: dict[str, str] = {
 }
 
 
-class ObjectMeta:
-    __slots__ = ("size", "content_type", "etag")
-
-    def __init__(self, size: int, content_type: str, etag: str) -> None:
-        self.size = size
-        self.content_type = content_type
-        self.etag = etag
-
-
-class StorageService:
-    """SeaweedFS / S3 호환 스토리지 어댑터.
+class S3StorageAdapter:
+    """SeaweedFS / S3 호환 스토리지 어댑터 (ObjectStorage port 구현체).
 
     presigned PUT URL 발급 + head/delete만 담당. 실제 파일 본문은
     프런트엔드가 SeaweedFS로 직접 업로드 → /uploads/confirm 으로 검증.
@@ -37,14 +34,14 @@ class StorageService:
         self._session = aioboto3.Session()
 
     @asynccontextmanager
-    async def _client(self) -> AsyncIterator:
+    async def _client(self) -> AsyncIterator["S3Client"]:
         async with self._session.client(
             "s3",
             endpoint_url=self.settings.s3_endpoint_url,
             region_name=self.settings.s3_region,
             aws_access_key_id=self.settings.s3_access_key,
             aws_secret_access_key=self.settings.s3_secret_key,
-            config=Config(
+            config=AioConfig(
                 signature_version="s3v4",
                 s3={
                     "addressing_style": "path"
@@ -79,7 +76,8 @@ class StorageService:
                     Bucket=self.settings.s3_bucket, Key=key
                 )
             except ClientError as exc:
-                if exc.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+                code = exc.response.get("Error", {}).get("Code")
+                if code in ("404", "NoSuchKey", "NotFound"):
                     return None
                 raise
             return ObjectMeta(
@@ -98,7 +96,7 @@ class StorageService:
             try:
                 await s3.head_bucket(Bucket=self.settings.s3_bucket)
             except ClientError as exc:
-                code = exc.response["Error"]["Code"]
+                code = exc.response.get("Error", {}).get("Code")
                 if code in ("404", "NoSuchBucket", "NotFound"):
                     await s3.create_bucket(Bucket=self.settings.s3_bucket)
                 else:
@@ -108,4 +106,4 @@ class StorageService:
         return f"{self.settings.s3_public_url_base.rstrip('/')}/{key}"
 
 
-storage_service = StorageService()
+storage_service = S3StorageAdapter()

@@ -1,13 +1,13 @@
 from fastapi import APIRouter, HTTPException, status
 
-from app.core.config import settings
-from app.schemas.upload import (
+from app.common.storage import storage_service
+from app.common.uploads.schemas import (
     ConfirmRequest,
     ConfirmResponse,
     PresignRequest,
     PresignResponse,
 )
-from app.services.storage import storage_service
+from app.core.config import settings
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
 
