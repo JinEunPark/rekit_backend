@@ -46,22 +46,29 @@ class User(Base, TimestampMixin):
         primary_key=True,
         comment="사용자 PK",
     )
+    login_id: Mapped[str] = mapped_column(
+        String(20),
+        unique=True,
+        index=True,
+        nullable=False,
+        comment="로그인 아이디. ^[a-zA-Z0-9_]{4,20}$. 회원가입 시 입력",
+    )
     email: Mapped[str] = mapped_column(
         String(255),
         unique=True,
         index=True,
         nullable=False,
-        comment="로그인 ID 겸 알림 채널. 소문자 정규화는 서비스 레이어에서 처리",
+        comment="이메일. 비번찾기 등 본인확인용. 소문자 정규화는 서비스 레이어에서",
     )
     password_hash: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
         comment="bcrypt 해시값. 평문/SHA 류는 절대 저장 금지",
     )
-    name: Mapped[str] = mapped_column(
+    username: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
-        comment="표시용 이름. 본인인증 후에는 인증 결과로 덮어쓰기 권장",
+        comment="사용자 이름 (표시용). 회원가입 시 입력. 본인인증 후 인증 결과로 갱신 가능",
     )
     phone: Mapped[str | None] = mapped_column(
         String(20),
@@ -81,7 +88,26 @@ class User(Base, TimestampMixin):
         comment="활성 여부. UserStatus(ACTIVE/BANNED/DORMANT) 도입 시 일원화 예정",
     )
 
-    # ── SMS 인증 (회원가입 시 필수) ─────────────────────────────
+    # ── 약관 동의 시각 (전자상거래법 — 동의 시각 보존 의무) ─────
+    # bool 컬럼 대신 timestamp 로 둬서 "언제 동의했는지" 가 자동 보존됨.
+    # 약관 개정 시 이 컬럼들 < 약관.published_at 인 사용자에게 재동의 받는 패턴.
+    agreed_terms_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="이용약관 동의 시각 (필수). 회원가입 시점에 기록",
+    )
+    agreed_privacy_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="개인정보 수집·이용 동의 시각 (필수)",
+    )
+    agreed_marketing_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="마케팅 정보 수신 동의 시각 (선택). 미동의면 NULL",
+    )
+
+    # ── SMS 인증 (회원가입과 분리된 별도 흐름) ──────────────────
     phone_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

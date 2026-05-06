@@ -4,8 +4,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1 import api_v1
 from app.common.storage import storage_service
-from app.common.uploads import router as uploads_router
 from app.core.config import settings
 from app.core.database import engine
 from app.core.exceptions import register_exception_handlers
@@ -44,7 +44,7 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    app.include_router(uploads_router, prefix=settings.api_v1_prefix)
+    app.include_router(api_v1)
 
     return app
 

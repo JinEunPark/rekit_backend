@@ -12,8 +12,11 @@ JPA 비유: Spring 의 @Autowired 가 채워주던 EntityManager / 서비스 빈
 
 from collections.abc import AsyncGenerator
 
+from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.auth_repository import AuthRepository
+from app.auth.auth_service import AuthService
 from app.core.database import async_session_factory
 
 
@@ -25,3 +28,16 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+
+
+# ── 도메인 서비스 팩토리 ─────────────────────────────────
+# router 는 Depends(get_<도메인>_service) 로 service 를 받는다. 테스트에서는
+# app.dependency_overrides[get_auth_service] = lambda: FakeService() 로 교체 가능.
+# 다른 도메인도 같은 패턴으로 여기에 함수 한 개씩 추가.
+
+
+async def get_auth_service(
+    session: AsyncSession = Depends(db_session),
+) -> AuthService:
+    """AuthService 팩토리. session → Repository → Service 로 합성."""
+    return AuthService(AuthRepository(session))
