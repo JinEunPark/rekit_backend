@@ -9,6 +9,7 @@ from app.common.storage import storage_service
 from app.core.config import settings
 from app.core.database import engine
 from app.core.exceptions import register_exception_handlers
+from app.db import registry  # noqa: F401  # 모든 SQLAlchemy 모델 로드 — string ref resolve 용
 
 
 @asynccontextmanager

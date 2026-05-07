@@ -15,7 +15,7 @@ JPA 비유: @Service. 라우터(@RestController) 와 리포지토리(@Repository
 다른 도메인 service 도 이 패턴: Repository 주입 + 도메인 로직만.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.auth.auth_repository import AuthRepository
 from app.core.config import settings
@@ -77,7 +77,7 @@ class AuthService:
         password: str,
         email: str,
         agreed_marketing: bool,
-    ) -> tuple[User, str, str]:
+    ) -> User:
         """회원가입. api.md §3.2.
 
         Args:
@@ -101,7 +101,7 @@ class AuthService:
         if await self.repo.exists_by_email(normalized_email):
             raise EmailTaken()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # role/is_active 는 모델에 default 가 있지만 그건 DB INSERT 시점에만 적용된다.
         # 메모리에서 user.role 을 즉시 사용해야 하므로(토큰 claim) 명시적으로 지정.
         user = User(
@@ -117,8 +117,7 @@ class AuthService:
         )
         user = await self.repo.add(user)
 
-        access, refresh = self._issue_tokens(user, remember=False)
-        return user, access, refresh
+        return user
 
     async def is_login_id_available(self, login_id: str) -> bool:
         """로그인 아이디 사용 가능 여부 — /auth/check-login-id 의 도메인 로직."""
@@ -152,9 +151,7 @@ class AuthService:
             claims={"role": user.role.value},
         )
         refresh_days = (
-            settings.refresh_token_remember_days
-            if remember
-            else settings.refresh_token_expire_days
+            settings.refresh_token_remember_days if remember else settings.refresh_token_expire_days
         )
         refresh = create_refresh_token(
             sub=str(user.id),

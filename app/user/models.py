@@ -151,3 +151,8 @@ class User(Base, TimestampMixin):
     identity_verifications: Mapped[list["IdentityVerification"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+
+    @property
+    def verified(self) -> bool:
+        """본인인증 통과 여부. 응답 DTO 가 `from_attributes` 로 가져간다."""
+        return self.identity_verified_at is not None

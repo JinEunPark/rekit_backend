@@ -21,7 +21,6 @@ from app.auth.auth_schemas import (
     CheckLoginIdRequest,
     SignInRequest,
     SignUpRequest,
-    SignUpResponse,
     TokenResponse,
     UserResponse,
 )
@@ -29,7 +28,6 @@ from app.auth.auth_service import AuthService
 from app.core.config import settings
 from app.core.deps import get_auth_service
 from app.core.exceptions import TokenExpired
-from app.user.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -50,26 +48,10 @@ def _set_refresh_cookie(response: Response, token: str, max_age_days: int) -> No
         key="refresh_token",
         value=token,
         max_age=max_age_days * 24 * 60 * 60,
-        httponly=True,                       # JS 접근 차단 (XSS 시 탈취 방어)
-        secure=settings.is_production,       # dev(HTTP) 에선 False, prod 에선 True
-        samesite="lax",                      # CSRF 완화. Strict 는 외부 링크 진입 시 끊김
-        path=_refresh_cookie_path(),         # 다른 API 에는 쿠키 안 첨부 (노출 면적 축소)
-    )
-
-
-def _to_user_response(user: User) -> UserResponse:
-    """User ORM 객체 → UserResponse DTO 변환.
-
-    verified 는 컬럼이 아니라 identity_verified_at IS NOT NULL 로 계산 (요구사항
-    정의서 §2.4). eco_kg 는 별도 집계 — 지금은 0 fallback.
-    """
-    return UserResponse(
-        id=user.id,
-        login_id=user.login_id,
-        username=user.username,
-        email=user.email,
-        phone=user.phone,
-        verified=user.identity_verified_at is not None,
+        httponly=True,  # JS 접근 차단 (XSS 시 탈취 방어)
+        secure=settings.is_production,  # dev(HTTP) 에선 False, prod 에선 True
+        samesite="lax",  # CSRF 완화. Strict 는 외부 링크 진입 시 끊김
+        path=_refresh_cookie_path(),  # 다른 API 에는 쿠키 안 첨부 (노출 면적 축소)
     )
 
 
@@ -78,7 +60,7 @@ def _to_user_response(user: User) -> UserResponse:
 
 @router.post(
     "/sign-up",
-    response_model=SignUpResponse,
+    response_model=UserResponse,
     response_model_by_alias=True,
     status_code=status.HTTP_201_CREATED,
     summary="회원가입",
@@ -87,7 +69,7 @@ async def sign_up(
     body: SignUpRequest,
     response: Response,
     service: AuthService = Depends(get_auth_service),
-) -> SignUpResponse:
+) -> UserResponse:
     """회원가입. api.md §3.2 + 클라 SignUpView.vue.
 
     응답:
@@ -99,15 +81,14 @@ async def sign_up(
     - EmailTaken (409, EMAIL_TAKEN)
     - 검증 실패 (422, VALIDATION_ERROR)
     """
-    user, access, refresh = await service.sign_up(
+    user = await service.sign_up(
         login_id=body.login_id,
         username=body.username,
         password=body.password,
         email=body.email,
         agreed_marketing=body.agreed_marketing,
     )
-    _set_refresh_cookie(response, refresh, settings.refresh_token_expire_days)
-    return SignUpResponse(user=_to_user_response(user), access_token=access)
+    return UserResponse.model_validate(user)
 
 
 @router.post(

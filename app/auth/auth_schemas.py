@@ -167,10 +167,13 @@ class UserResponse(BaseModel):
 
     GET /users/me 와 회원가입 응답이 재사용한다 (api.md §3.2, §4.1).
 
-    필드 매핑:
-    - User.identity_verified_at IS NOT NULL → verified=True (service 에서 계산해 주입)
-    - eco_kg 는 누적 절약 kg — 별도 집계. 지금은 0 fallback.
+    `from_attributes=True` 로 ORM 객체에서 직접 매핑된다 — 라우터는
+    UserResponse.model_validate(user) 한 줄로 변환한다.
+    `verified` 는 User.verified @property (= identity_verified_at IS NOT NULL) 가
+    그대로 들어온다. eco_kg 는 별도 집계 — 지금은 0 fallback.
     """
+
+    model_config = ConfigDict(from_attributes=True)
 
     id: int = Field(description="사용자 PK")
     login_id: str = Field(serialization_alias="loginId", description="로그인 아이디")
@@ -183,14 +186,3 @@ class UserResponse(BaseModel):
         serialization_alias="ecoKg",
         description="누적 절약 kg (집계 결과)",
     )
-
-
-class SignUpResponse(BaseModel):
-    """회원가입 응답 바디. api.md §3.2.
-
-    user + accessToken 을 함께 반환해 클라가 가입 직후 GET /users/me 추가 호출 없이
-    화면을 그릴 수 있게 한다. refresh 토큰은 sign-in 과 동일하게 Set-Cookie.
-    """
-
-    user: UserResponse
-    access_token: str = Field(serialization_alias="accessToken")

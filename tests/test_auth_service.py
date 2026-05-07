@@ -136,12 +136,12 @@ async def test_sign_in_returns_access_and_refresh_tokens_on_success() -> None:
 # ── sign_up ──────────────────────────────────────────
 
 
-async def test_sign_up_creates_user_and_returns_tokens() -> None:
-    """정상 가입 → repo.add 1회 + (user, access, refresh) 반환."""
+async def test_sign_up_creates_user_and_returns_it() -> None:
+    """정상 가입 → repo.add 1회 + user 반환. 토큰은 별도 sign-in 으로 분리."""
     repo = _FakeAuthRepo()
     service = AuthService(repo)  # type: ignore[arg-type]
 
-    user, access, refresh = await service.sign_up(
+    user = await service.sign_up(
         login_id="newuser",
         username="새사용자",
         password="abc12345",
@@ -156,8 +156,6 @@ async def test_sign_up_creates_user_and_returns_tokens() -> None:
     assert user.agreed_terms_at is not None
     assert user.agreed_privacy_at is not None
     assert user.agreed_marketing_at is None  # 선택 미동의 → NULL
-    decode_token(access, expected_type="access")
-    decode_token(refresh, expected_type="refresh")
 
 
 async def test_sign_up_with_marketing_consent_sets_timestamp() -> None:
@@ -165,7 +163,7 @@ async def test_sign_up_with_marketing_consent_sets_timestamp() -> None:
     repo = _FakeAuthRepo()
     service = AuthService(repo)  # type: ignore[arg-type]
 
-    user, *_ = await service.sign_up(
+    user = await service.sign_up(
         login_id="newuser",
         username="새사용자",
         password="abc12345",
@@ -180,7 +178,7 @@ async def test_sign_up_normalizes_email_to_lowercase() -> None:
     repo = _FakeAuthRepo()
     service = AuthService(repo)  # type: ignore[arg-type]
 
-    user, *_ = await service.sign_up(
+    user = await service.sign_up(
         login_id="newuser",
         username="새사용자",
         password="abc12345",
