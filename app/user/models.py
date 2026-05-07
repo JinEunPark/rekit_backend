@@ -87,6 +87,17 @@ class User(Base, TimestampMixin):
         nullable=False,
         comment="활성 여부. UserStatus(ACTIVE/BANNED/DORMANT) 도입 시 일원화 예정",
     )
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        nullable=False,
+        comment=(
+            "임시 비밀번호로 발급된 상태인지 여부. "
+            "find-password 로 임시 비번 발급 시 True, 사용자가 새 비번 설정 시 False. "
+            "True 동안엔 비번 변경 외 다른 endpoint 가 인증 가드에서 차단된다."
+        ),
+    )
 
     # ── 약관 동의 시각 (전자상거래법 — 동의 시각 보존 의무) ─────
     # bool 컬럼 대신 timestamp 로 둬서 "언제 동의했는지" 가 자동 보존됨.

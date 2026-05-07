@@ -46,6 +46,25 @@ class TokenExpired(BusinessError):
     message = "토큰이 만료되었습니다."
 
 
+class AccountInactive(BusinessError):
+    """비활성화된 계정의 인증된 호출. 토큰은 유효하지만 권한 없음 → 403."""
+
+    code = "ACCOUNT_INACTIVE"
+    http_status = status.HTTP_403_FORBIDDEN
+    message = "계정이 비활성화 상태입니다."
+
+
+class PasswordChangeRequired(BusinessError):
+    """임시 비밀번호로 발급된 상태(must_change_password=True) — 비번 변경 외 차단.
+
+    클라이언트는 이 코드를 받으면 비밀번호 변경 페이지로 강제 redirect 한다.
+    """
+
+    code = "PASSWORD_CHANGE_REQUIRED"
+    http_status = status.HTTP_403_FORBIDDEN
+    message = "임시 비밀번호 사용 중입니다. 새 비밀번호로 변경 후 이용해주세요."
+
+
 class UsernameTaken(BusinessError):
     code = "USERNAME_TAKEN"
     http_status = status.HTTP_409_CONFLICT
@@ -115,18 +134,33 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:
-        # Pydantic 검증 실패 → 표준 포맷으로 변환
+        # Pydantic 검증 실패 → 비즈니스 에러와 동일한 wrapper 로 통일.
+        # fields[name] 는 사용자에게 그대로 보여줄 한국어 메시지 (string).
+        # @field_validator 의 raise ValueError("...") 메시지가 그대로 들어간다.
+        # 빌트인 제약(min_length, pattern 등) 은 Pydantic 기본 영어 메시지가 노출됨 —
+        # 한국어로 보이게 하려면 해당 필드를 @field_validator 로 옮길 것.
         fields: dict[str, str] = {}
         for err in exc.errors():
             loc = ".".join(str(p) for p in err["loc"] if p != "body")
-            fields[loc or "body"] = err["type"].upper()
+            fields[loc or "body"] = _strip_value_error_prefix(err["msg"])
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={
                 "error": {
                     "code": "VALIDATION_ERROR",
-                    "message": "요청 형식이 올바르지 않습니다.",
+                    "message": "입력값을 확인해주세요.",
                     "fields": fields,
                 }
             },
         )
+
+
+# Pydantic v2 는 @field_validator 내부에서 raise 한 ValueError 메시지에
+# "Value error, " 접두어를 자동으로 붙인다. 사용자에게 노출하기 전에 제거.
+_VALUE_ERROR_PREFIX = "Value error, "
+
+
+def _strip_value_error_prefix(msg: str) -> str:
+    if msg.startswith(_VALUE_ERROR_PREFIX):
+        return msg[len(_VALUE_ERROR_PREFIX) :]
+    return msg

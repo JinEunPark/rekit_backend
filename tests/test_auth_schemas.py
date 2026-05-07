@@ -129,7 +129,18 @@ def test_check_login_id_request_accepts_valid_id() -> None:
 def test_token_response_serializes_with_camel_case_alias() -> None:
     resp = TokenResponse(access_token="abc")
     dumped = resp.model_dump(by_alias=True)
-    assert dumped == {"accessToken": "abc", "tokenType": "bearer"}
+    assert dumped == {
+        "accessToken": "abc",
+        "tokenType": "bearer",
+        "mustChangePassword": False,
+    }
+
+
+def test_token_response_serializes_must_change_password_when_true() -> None:
+    """임시 비번 사용 중인 사용자 로그인 시 mustChangePassword=True 직렬화."""
+    resp = TokenResponse(access_token="abc", must_change_password=True)
+    dumped = resp.model_dump(by_alias=True)
+    assert dumped["mustChangePassword"] is True
 
 
 def test_user_response_serializes_login_id_and_eco_kg_as_camel_case() -> None:

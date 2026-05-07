@@ -1,4 +1,4 @@
-"""pytest 공용 부트스트랩.
+"""pytest 공용 부트스트랩 + 팩토리.
 
 여기서 app.db.registry 를 import 해서 모든 SQLAlchemy 모델을 메타데이터에
 등록한다. User.relationship("Address", ...) 같은 string ref 는 mapper configure
@@ -9,4 +9,40 @@
 모든 테스트가 영향을 받는다 — 한 도메인만 테스트해도 전체 모델이 로드된다.
 """
 
+from datetime import UTC, datetime
+
+from app.core.security import hash_password
 from app.db import registry  # noqa: F401
+from app.user.models import User, UserRole
+
+
+def make_user(
+    *,
+    user_id: int = 1,
+    login_id: str = "testuser",
+    username: str = "테스트",
+    email: str = "user@example.com",
+    plain_password: str | None = None,
+    password_hash: str = "$2b$12$dummy",
+    is_active: bool = True,
+    must_change_password: bool = False,
+) -> User:
+    """테스트용 User 인스턴스 팩토리. DB 저장 없이 메모리에서만 사용.
+
+    `plain_password` 가 주어지면 bcrypt 해싱을 수행 (`verify_password` 검증이
+    필요한 케이스). 아니면 더미 hash 그대로 — bcrypt 호출(~100ms) 비용 회피.
+    """
+    now = datetime.now(UTC)
+    user = User(
+        login_id=login_id,
+        username=username,
+        email=email,
+        password_hash=hash_password(plain_password) if plain_password else password_hash,
+        role=UserRole.USER,
+        is_active=is_active,
+        must_change_password=must_change_password,
+        agreed_terms_at=now,
+        agreed_privacy_at=now,
+    )
+    user.id = user_id
+    return user

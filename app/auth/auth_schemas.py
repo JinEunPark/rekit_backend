@@ -30,6 +30,18 @@ USERNAME_MIN_LENGTH = 1
 USERNAME_MAX_LENGTH = 50
 
 
+def validate_password_policy(v: str) -> str:
+    """비밀번호 정책 검증 — 영문 + 숫자 동시 포함.
+
+    SignUp / ChangePassword / ResetPassword 가 공통 사용. 한 곳에 두어 정책 변경 시
+    silently 어긋나는 사고 방지. 클라(SignUpView.vue / ChangePasswordView.vue) 의
+    passwordValid 와 동일 규칙.
+    """
+    if not any(c.isalpha() for c in v) or not any(c.isdigit() for c in v):
+        raise ValueError("비밀번호는 영문과 숫자를 모두 포함해야 합니다.")
+    return v
+
+
 # ── 로그인 ────────────────────────────────────────────
 
 
@@ -107,10 +119,7 @@ class SignUpRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def _password_must_have_letter_and_digit(cls, v: str) -> str:
-        # 클라 SignUpView.vue 의 passwordValid 와 동일 규칙.
-        if not any(c.isalpha() for c in v) or not any(c.isdigit() for c in v):
-            raise ValueError("비밀번호는 영문과 숫자를 모두 포함해야 합니다.")
-        return v
+        return validate_password_policy(v)
 
     @field_validator("agreed_terms", "agreed_privacy")
     @classmethod
@@ -145,6 +154,55 @@ class AvailabilityResponse(BaseModel):
     available: bool = Field(description="사용 가능하면 True, 이미 사용 중이면 False")
 
 
+# ── 아이디 / 비번 찾기 ─────────────────────────────────
+
+
+class FindIdRequest(BaseModel):
+    """POST /auth/find-id 요청 바디. api.md §3.7. Public.
+
+    가입 이메일을 받아 동일 이메일 inbox 로 아이디를 발송한다 — 화면 노출 X.
+    가입 여부와 무관하게 응답이 동일하므로 enumeration 방어 가능.
+    """
+
+    email: EmailStr = Field(description="가입 시 등록한 이메일")
+
+
+class FindPasswordRequest(BaseModel):
+    """POST /auth/find-password 요청 바디. api.md §3.8. Public.
+
+    loginId + email 둘 다 일치해야 임시 비번 발급 — 한 쪽만 알아도 임시 비번을
+    받을 수 없게 해서, 이메일이나 아이디 단편 정보로 계정 탈취되는 시나리오 차단.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    login_id: str = Field(
+        min_length=1,
+        validation_alias="loginId",
+        description="가입 아이디",
+    )
+    email: EmailStr = Field(description="가입 시 등록한 이메일")
+
+
+class SentResponse(BaseModel):
+    """범용 발송-성공 응답. find-id / find-password 등이 사용한다.
+
+    가입 여부에 따라 실제 발송 동작은 분기되지만, 클라가 보는 응답은 항상 동일 —
+    enumeration 정보 누설 방지.
+    `masked_email` 은 클라가 입력한 이메일을 그대로 마스킹한 값이라 서버 결과에
+    의존하지 않는다. (서버가 가입 여부를 확인 후 채우는 게 아님)
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    sent: bool = Field(description="요청 처리됨. 항상 True (실제 발송 여부와 무관)")
+    masked_email: str | None = Field(
+        default=None,
+        serialization_alias="maskedEmail",
+        description="입력 이메일 마스킹 결과. find-password 에서만 채워짐",
+    )
+
+
 # ── 토큰 / 사용자 응답 ────────────────────────────────
 
 
@@ -156,10 +214,19 @@ class TokenResponse(BaseModel):
       TokenResponse(accessToken=...) 이라고 호출해야 함 (Python 관례 위반).
     - serialization_alias 는 출력 시(by_alias=True) 만 적용되므로 init 은
       snake_case 그대로 두면서 JSON 응답만 camelCase 로 직렬화 가능.
+
+    `must_change_password=True` 가 응답에 실리면 클라이언트는 비밀번호 변경
+    페이지로 강제 redirect 해야 한다 — find-password 로 임시 비번을 받은
+    사용자가 로그인했을 때만 True 가 된다 (Phase G/E 가드와 짝).
     """
 
     access_token: str = Field(serialization_alias="accessToken", description="JWT 액세스 토큰")
     token_type: str = Field(default="bearer", serialization_alias="tokenType")
+    must_change_password: bool = Field(
+        default=False,
+        serialization_alias="mustChangePassword",
+        description="True 면 클라가 비밀번호 변경 페이지로 강제 redirect",
+    )
 
 
 class UserResponse(BaseModel):

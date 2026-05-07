@@ -9,11 +9,12 @@ DB 없이 fake repository 로 도메인 로직만 검증.
 - AAA 패턴: Arrange (준비) / Act (실행) / Assert (검증) 구분.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import pytest
 
 from app.auth.auth_service import AuthService
+from app.common.email import ConsoleEmailSender
 from app.core.exceptions import (
     EmailTaken,
     InvalidCredentials,
@@ -24,9 +25,9 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
-    hash_password,
 )
-from app.user.models import User, UserRole
+from app.user.models import User
+from tests.conftest import make_user
 
 # ── 테스트 헬퍼 ────────────────────────────────────────
 
@@ -54,6 +55,19 @@ class _FakeAuthRepo:
     async def exists_by_email(self, email: str) -> bool:
         return self._user is not None and self._user.email == email
 
+    async def get_by_email(self, email: str) -> User | None:
+        if self._user is None:
+            return None
+        return self._user if self._user.email == email else None
+
+    async def get_by_login_id_and_email(
+        self, login_id: str, email: str
+    ) -> User | None:
+        if self._user is None:
+            return None
+        match = self._user.login_id == login_id and self._user.email == email
+        return self._user if match else None
+
     async def add(self, user: User) -> User:
         # 메모리 fake: PK 만 채워주고 보관
         user.id = (self._user.id + 1) if self._user else 1
@@ -61,33 +75,22 @@ class _FakeAuthRepo:
         return user
 
 
-def _make_user(
-    *,
-    id_: int = 1,
-    login_id: str = "eunyoung_kim",
-    username: str = "박은영",
-    email: str = "user@example.com",
-    password: str = "correct-pw",
-    is_active: bool = True,
-) -> User:
-    """테스트용 User 객체. DB 저장 없이 메모리에서만 사용한다.
+def _make_user(*, password: str = "correct-pw", **kwargs: object) -> User:
+    """auth_service 테스트 전용 어댑터 — conftest.make_user 의 password 키워드 alias.
 
-    bcrypt 해시는 매 호출 ~100ms 라 함수마다 호출이 누적되면 느려진다.
-    필요 시 module-scope fixture 로 캐시 가능 (지금은 수가 적어 그대로).
+    `_make_user(password="X", ...)` 호출 패턴을 유지하면서 실제 객체 생성은
+    conftest 헬퍼에 위임. login_id/email 등 kwargs 는 그대로 전달.
     """
-    now = datetime.now(timezone.utc)
-    user = User(
-        login_id=login_id,
-        username=username,
-        email=email,
-        password_hash=hash_password(password),
-        role=UserRole.USER,
-        is_active=is_active,
-        agreed_terms_at=now,
-        agreed_privacy_at=now,
-    )
-    user.id = id_
-    return user
+    return make_user(plain_password=password, **kwargs)  # type: ignore[arg-type]
+
+
+def _make_service(repo: object) -> AuthService:
+    """AuthService 인스턴스화 헬퍼. 시그니처가 바뀌어도 한 곳만 고치면 됨.
+
+    EmailSender 는 ConsoleEmailSender (sent 리스트 보관) 를 기본 주입 — find-id /
+    find-password 등 메일 발송 검증이 필요한 테스트는 이 인스턴스를 직접 넘겨 받는다.
+    """
+    return AuthService(repo, email_sender=ConsoleEmailSender())  # type: ignore[arg-type]
 
 
 # ── sign_in: 실패 케이스 ──────────────────────────────
@@ -95,7 +98,7 @@ def _make_user(
 
 async def test_sign_in_with_unknown_login_id_raises_invalid_credentials() -> None:
     """존재하지 않는 아이디 → InvalidCredentials."""
-    service = AuthService(_FakeAuthRepo())  # type: ignore[arg-type]
+    service = _make_service(_FakeAuthRepo())
     with pytest.raises(InvalidCredentials):
         await service.sign_in(login_id="nobody", password="any")
 
@@ -103,14 +106,14 @@ async def test_sign_in_with_unknown_login_id_raises_invalid_credentials() -> Non
 async def test_sign_in_with_wrong_password_raises_invalid_credentials() -> None:
     """비밀번호 불일치 → InvalidCredentials (아이디 존재 여부 노출 X)."""
     user = _make_user(password="correct-pw")
-    service = AuthService(_FakeAuthRepo(user=user))  # type: ignore[arg-type]
+    service = _make_service(_FakeAuthRepo(user=user))
     with pytest.raises(InvalidCredentials):
         await service.sign_in(login_id=user.login_id, password="wrong-pw")
 
 
 async def test_sign_in_with_inactive_user_raises_invalid_credentials() -> None:
     user = _make_user(is_active=False)
-    service = AuthService(_FakeAuthRepo(user=user))  # type: ignore[arg-type]
+    service = _make_service(_FakeAuthRepo(user=user))
     with pytest.raises(InvalidCredentials):
         await service.sign_in(login_id=user.login_id, password="correct-pw")
 
@@ -120,9 +123,9 @@ async def test_sign_in_with_inactive_user_raises_invalid_credentials() -> None:
 
 async def test_sign_in_returns_access_and_refresh_tokens_on_success() -> None:
     user = _make_user(password="correct-pw")
-    service = AuthService(_FakeAuthRepo(user=user))  # type: ignore[arg-type]
+    service = _make_service(_FakeAuthRepo(user=user))
 
-    access, refresh = await service.sign_in(
+    access, refresh, must_change = await service.sign_in(
         login_id=user.login_id, password="correct-pw"
     )
 
@@ -131,6 +134,23 @@ async def test_sign_in_returns_access_and_refresh_tokens_on_success() -> None:
     assert access_payload["sub"] == "1"
     assert refresh_payload["sub"] == "1"
     assert access_payload["role"] == "USER"
+    assert must_change is False  # 정상 사용자
+
+
+async def test_sign_in_returns_must_change_password_true_for_temp_password_user() -> None:
+    """임시 비번 발급 후 로그인 — must_change_password=True 가 반환된다."""
+    # Arrange
+    user = _make_user(password="temp-pw-1")
+    user.must_change_password = True
+    service = _make_service(_FakeAuthRepo(user=user))
+
+    # Act
+    _, _, must_change = await service.sign_in(
+        login_id=user.login_id, password="temp-pw-1"
+    )
+
+    # Assert
+    assert must_change is True
 
 
 # ── sign_up ──────────────────────────────────────────
@@ -139,7 +159,7 @@ async def test_sign_in_returns_access_and_refresh_tokens_on_success() -> None:
 async def test_sign_up_creates_user_and_returns_it() -> None:
     """정상 가입 → repo.add 1회 + user 반환. 토큰은 별도 sign-in 으로 분리."""
     repo = _FakeAuthRepo()
-    service = AuthService(repo)  # type: ignore[arg-type]
+    service = _make_service(repo)
 
     user = await service.sign_up(
         login_id="newuser",
@@ -161,7 +181,7 @@ async def test_sign_up_creates_user_and_returns_it() -> None:
 async def test_sign_up_with_marketing_consent_sets_timestamp() -> None:
     """marketing=True 면 agreed_marketing_at 도 채워진다."""
     repo = _FakeAuthRepo()
-    service = AuthService(repo)  # type: ignore[arg-type]
+    service = _make_service(repo)
 
     user = await service.sign_up(
         login_id="newuser",
@@ -176,7 +196,7 @@ async def test_sign_up_with_marketing_consent_sets_timestamp() -> None:
 async def test_sign_up_normalizes_email_to_lowercase() -> None:
     """대문자 이메일 입력해도 소문자로 저장."""
     repo = _FakeAuthRepo()
-    service = AuthService(repo)  # type: ignore[arg-type]
+    service = _make_service(repo)
 
     user = await service.sign_up(
         login_id="newuser",
@@ -190,7 +210,7 @@ async def test_sign_up_normalizes_email_to_lowercase() -> None:
 
 async def test_sign_up_rejects_duplicate_login_id() -> None:
     existing = _make_user(login_id="taken")
-    service = AuthService(_FakeAuthRepo(user=existing))  # type: ignore[arg-type]
+    service = _make_service(_FakeAuthRepo(user=existing))
 
     with pytest.raises(UsernameTaken):
         await service.sign_up(
@@ -204,7 +224,7 @@ async def test_sign_up_rejects_duplicate_login_id() -> None:
 
 async def test_sign_up_rejects_duplicate_email() -> None:
     existing = _make_user(login_id="other", email="dup@example.com")
-    service = AuthService(_FakeAuthRepo(user=existing))  # type: ignore[arg-type]
+    service = _make_service(_FakeAuthRepo(user=existing))
 
     with pytest.raises(EmailTaken):
         await service.sign_up(
@@ -220,13 +240,13 @@ async def test_sign_up_rejects_duplicate_email() -> None:
 
 
 async def test_is_login_id_available_returns_true_when_free() -> None:
-    service = AuthService(_FakeAuthRepo())  # type: ignore[arg-type]
+    service = _make_service(_FakeAuthRepo())
     assert await service.is_login_id_available("anything") is True
 
 
 async def test_is_login_id_available_returns_false_when_taken() -> None:
     user = _make_user(login_id="taken")
-    service = AuthService(_FakeAuthRepo(user=user))  # type: ignore[arg-type]
+    service = _make_service(_FakeAuthRepo(user=user))
     assert await service.is_login_id_available("taken") is False
 
 
@@ -235,7 +255,7 @@ async def test_is_login_id_available_returns_false_when_taken() -> None:
 
 async def test_refresh_token_with_expired_token_raises_token_expired() -> None:
     user = _make_user()
-    service = AuthService(_FakeAuthRepo(user=user))  # type: ignore[arg-type]
+    service = _make_service(_FakeAuthRepo(user=user))
     expired = create_refresh_token(sub="1", expires_in=timedelta(seconds=-10))
     with pytest.raises(TokenExpired):
         await service.refresh_token(expired)
@@ -244,14 +264,14 @@ async def test_refresh_token_with_expired_token_raises_token_expired() -> None:
 async def test_refresh_token_rejects_access_token() -> None:
     """access 토큰을 refresh 자리에 넣으면 거부 — type 가드."""
     user = _make_user()
-    service = AuthService(_FakeAuthRepo(user=user))  # type: ignore[arg-type]
+    service = _make_service(_FakeAuthRepo(user=user))
     access = create_access_token(sub="1", claims={})
     with pytest.raises(TokenExpired):
         await service.refresh_token(access)
 
 
 async def test_refresh_token_with_unknown_user_raises_invalid_credentials() -> None:
-    service = AuthService(_FakeAuthRepo())  # type: ignore[arg-type]
+    service = _make_service(_FakeAuthRepo())
     valid = create_refresh_token(sub="999")
     with pytest.raises(InvalidCredentials):
         await service.refresh_token(valid)
@@ -259,7 +279,7 @@ async def test_refresh_token_with_unknown_user_raises_invalid_credentials() -> N
 
 async def test_refresh_token_with_inactive_user_raises_invalid_credentials() -> None:
     user = _make_user(is_active=False)
-    service = AuthService(_FakeAuthRepo(user=user))  # type: ignore[arg-type]
+    service = _make_service(_FakeAuthRepo(user=user))
     valid = create_refresh_token(sub="1")
     with pytest.raises(InvalidCredentials):
         await service.refresh_token(valid)
@@ -267,13 +287,186 @@ async def test_refresh_token_with_inactive_user_raises_invalid_credentials() -> 
 
 async def test_refresh_token_returns_new_access_and_refresh_pair() -> None:
     user = _make_user()
-    service = AuthService(_FakeAuthRepo(user=user))  # type: ignore[arg-type]
+    service = _make_service(_FakeAuthRepo(user=user))
     old_refresh = create_refresh_token(sub="1")
 
-    new_access, new_refresh = await service.refresh_token(old_refresh)
+    new_access, new_refresh, must_change = await service.refresh_token(old_refresh)
 
     access_payload = decode_token(new_access, expected_type="access")
     refresh_payload = decode_token(new_refresh, expected_type="refresh")
     assert access_payload["sub"] == "1"
     assert refresh_payload["sub"] == "1"
     assert access_payload["role"] == "USER"
+    assert must_change is False
+
+
+async def test_refresh_token_carries_must_change_password_for_temp_user() -> None:
+    """임시 비번 사용자는 refresh 사이클에도 must_change_password=True 가 유지된다."""
+    user = _make_user()
+    user.must_change_password = True
+    service = _make_service(_FakeAuthRepo(user=user))
+    old_refresh = create_refresh_token(sub="1")
+
+    _, _, must_change = await service.refresh_token(old_refresh)
+
+    assert must_change is True
+
+
+# ── find_login_id_by_email ──────────────────────────────
+
+
+async def test_find_login_id_sends_email_when_user_exists() -> None:
+    """가입 사용자 — 가입 이메일로 아이디 발송."""
+    # Arrange
+    user = _make_user(login_id="abc123", email="user@example.com")
+    repo = _FakeAuthRepo(user=user)
+    sender = ConsoleEmailSender()
+    service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+
+    # Act
+    await service.find_login_id_by_email("user@example.com")
+
+    # Assert
+    assert len(sender.sent) == 1
+    msg = sender.sent[0]
+    assert msg.to == "user@example.com"
+    assert "abc123" in msg.body
+    assert user.username in msg.body  # 인사말 포함
+
+
+async def test_find_login_id_does_nothing_when_user_not_found() -> None:
+    """미가입 이메일 — 메일 발송 없이 조용히 반환 (enumeration 방어)."""
+    # Arrange
+    repo = _FakeAuthRepo()  # no user
+    sender = ConsoleEmailSender()
+    service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+
+    # Act
+    await service.find_login_id_by_email("nobody@example.com")
+
+    # Assert
+    assert sender.sent == []
+
+
+async def test_find_login_id_normalizes_email_to_lowercase() -> None:
+    """대소문자 섞인 이메일 입력해도 소문자로 매칭."""
+    # Arrange
+    user = _make_user(email="user@example.com")  # 저장은 소문자
+    repo = _FakeAuthRepo(user=user)
+    sender = ConsoleEmailSender()
+    service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+
+    # Act
+    await service.find_login_id_by_email("USER@Example.COM")
+
+    # Assert
+    assert len(sender.sent) == 1
+
+
+# ── issue_temp_password (find-password) ─────────────────
+
+
+async def test_issue_temp_password_generates_16_chars_with_letter_and_digit() -> None:
+    """임시 비번은 16자 영문+숫자 — password 정책 자동 통과."""
+    # Arrange
+    user = _make_user(login_id="abc123", email="user@example.com")
+    repo = _FakeAuthRepo(user=user)
+    sender = ConsoleEmailSender()
+    service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+
+    # Act
+    await service.issue_temp_password(login_id="abc123", email="user@example.com")
+
+    # Assert — 메일 본문에서 "임시 비밀번호: <pw>" 라인을 추출
+    body = sender.sent[0].body
+    assert "임시 비밀번호" in body
+    # 본문에서 비번 문자열 추출 — 한 줄짜리 'XXXXXXXXX' 형태로 노출
+    import re
+
+    matches = re.findall(r"임시 비밀번호:\s*([A-Za-z0-9]+)", body)
+    assert len(matches) == 1
+    pw = matches[0]
+    assert len(pw) == 16
+    assert any(c.isalpha() for c in pw)
+    assert any(c.isdigit() for c in pw)
+
+
+async def test_issue_temp_password_updates_user_state() -> None:
+    """user.password_hash 갱신 + must_change_password=True."""
+    # Arrange
+    user = _make_user(login_id="abc123", email="user@example.com", password="oldpw1234")
+    old_hash = user.password_hash
+    assert user.must_change_password is False  # baseline
+
+    repo = _FakeAuthRepo(user=user)
+    sender = ConsoleEmailSender()
+    service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+
+    # Act
+    await service.issue_temp_password(login_id="abc123", email="user@example.com")
+
+    # Assert
+    assert user.password_hash != old_hash
+    assert user.must_change_password is True
+
+
+async def test_issue_temp_password_sends_email_to_registered_address() -> None:
+    # Arrange
+    user = _make_user(login_id="abc123", email="user@example.com")
+    repo = _FakeAuthRepo(user=user)
+    sender = ConsoleEmailSender()
+    service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+
+    # Act
+    await service.issue_temp_password(login_id="abc123", email="user@example.com")
+
+    # Assert
+    assert len(sender.sent) == 1
+    assert sender.sent[0].to == "user@example.com"
+
+
+async def test_issue_temp_password_does_nothing_when_login_id_mismatch() -> None:
+    """이메일은 맞고 loginId 가 틀리면 — 발송도 상태 변경도 X."""
+    # Arrange
+    user = _make_user(login_id="abc123", email="user@example.com")
+    old_hash = user.password_hash
+    repo = _FakeAuthRepo(user=user)
+    sender = ConsoleEmailSender()
+    service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+
+    # Act
+    await service.issue_temp_password(login_id="wrong_id", email="user@example.com")
+
+    # Assert
+    assert sender.sent == []
+    assert user.password_hash == old_hash
+    assert user.must_change_password is False
+
+
+async def test_issue_temp_password_does_nothing_when_email_mismatch() -> None:
+    """loginId 는 맞고 이메일이 다르면 — 거절 (계정 정보 유출 차단)."""
+    # Arrange
+    user = _make_user(login_id="abc123", email="user@example.com")
+    repo = _FakeAuthRepo(user=user)
+    sender = ConsoleEmailSender()
+    service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+
+    # Act
+    await service.issue_temp_password(login_id="abc123", email="other@example.com")
+
+    # Assert
+    assert sender.sent == []
+
+
+async def test_issue_temp_password_normalizes_email_lowercase() -> None:
+    # Arrange
+    user = _make_user(login_id="abc123", email="user@example.com")
+    repo = _FakeAuthRepo(user=user)
+    sender = ConsoleEmailSender()
+    service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+
+    # Act
+    await service.issue_temp_password(login_id="abc123", email="USER@Example.com")
+
+    # Assert
+    assert len(sender.sent) == 1

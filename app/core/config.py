@@ -37,6 +37,17 @@ class Settings(BaseSettings):
     # CORS (JSON 배열 형식)
     cors_origins: list[str] = Field(default_factory=list)
 
+    # ── 이메일 발송 ───────────────────────────────────────
+    # provider: "console" (dev mock — stdout 출력) / "gmail" (Gmail SMTP)
+    # gmail 선택 시 GMAIL_USER + GMAIL_APP_PASSWORD 필수.
+    email_provider: Literal["console", "gmail"] = "console"
+    gmail_user: str | None = None
+    gmail_app_password: str | None = None
+    # 'Rekit <noreply@rekit.kr>' 형식. None 이면 gmail_user 를 발신자로 사용.
+    email_from: str | None = None
+    # 비밀번호 재설정 링크 등 메일 본문에 박을 프론트 base URL
+    frontend_url: str = "http://localhost:5173"
+
     # S3 호환 오브젝트 스토리지 (dev: SeaweedFS)
     s3_endpoint_url: str
     s3_region: str = "ap-northeast-2"

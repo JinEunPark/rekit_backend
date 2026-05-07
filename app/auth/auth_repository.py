@@ -36,6 +36,26 @@ class AuthRepository:
         """PK 로 단일 사용자 조회. session.get 은 1차 캐시 활용 + WHERE id=? 한 번."""
         return await self.session.get(User, user_id)
 
+    async def get_by_email(self, email: str) -> User | None:
+        """이메일로 단일 사용자 조회. find-id / find-password 에서 사용.
+
+        주의: email 은 호출 전에 lowercase 정규화돼 있어야 함 (service 책임).
+        DB 의 unique 제약이 case-sensitive 라 정규화 안 하면 매칭 실패.
+        """
+        stmt = select(User).where(User.email == email)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_login_id_and_email(self, login_id: str, email: str) -> User | None:
+        """loginId + email 둘 다 일치하는 단일 사용자 조회. find-password 에서 사용.
+
+        한쪽만 알아도 임시 비번 발급되는 걸 막기 위해 둘 다 매칭. email 은 사전에
+        lowercase 정규화돼 있어야 한다.
+        """
+        stmt = select(User).where(User.login_id == login_id, User.email == email)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def exists_by_login_id(self, login_id: str) -> bool:
         """로그인 아이디 중복 검사. 회원가입 / check-login-id 에서 사용.
 
@@ -55,9 +75,11 @@ class AuthRepository:
     async def add(self, user: User) -> User:
         """User INSERT + flush 로 PK 채워서 반환.
 
-        commit 은 호출자(router 의 db_session dependency) 가 담당.
-        flush 만으로 user.id 가 채워지고, service 가 다른 컬럼은 모두 명시적으로
-        지정하므로 refresh() 는 불필요 (추가 SELECT 발생).
+        commit 은 호출자(db_session dependency) 가 응답 직전에 일괄 처리한다 —
+        한 요청 = 한 트랜잭션 정책. flush 가 필요한 이유는 service 가 user.id 를
+        토큰 claim 에 즉시 써야 하기 때문.
+        refresh 는 호출하지 않음 — service 가 모든 컬럼을 명시 set 하고 응답이
+        server_default 컬럼을 쓰지 않아서.
         """
         self.session.add(user)
         await self.session.flush()

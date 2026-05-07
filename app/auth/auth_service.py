@@ -15,9 +15,13 @@ JPA 비유: @Service. 라우터(@RestController) 와 리포지토리(@Repository
 다른 도메인 service 도 이 패턴: Repository 주입 + 도메인 로직만.
 """
 
+import secrets
+import string
 from datetime import UTC, datetime, timedelta
 
 from app.auth.auth_repository import AuthRepository
+from app.auth.auth_schemas import validate_password_policy
+from app.common.email import EmailSender
 from app.core.config import settings
 from app.core.exceptions import (
     EmailTaken,
@@ -35,8 +39,9 @@ from app.user.models import User, UserRole
 
 
 class AuthService:
-    def __init__(self, repo: AuthRepository) -> None:
+    def __init__(self, repo: AuthRepository, email_sender: EmailSender) -> None:
         self.repo = repo
+        self.email_sender = email_sender
 
     # ── 로그인 ────────────────────────────────────────
 
@@ -45,11 +50,13 @@ class AuthService:
         login_id: str,
         password: str,
         remember: bool = False,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, bool]:
         """아이디+비밀번호 로그인.
 
         Returns:
-            (access_token, refresh_token) 튜플.
+            (access_token, refresh_token, must_change_password) 3-tuple.
+            세 번째 값이 True 면 클라이언트는 비밀번호 변경 페이지로 강제 redirect
+            해야 한다 — find-password 로 임시 비번을 받은 사용자.
 
         Raises:
             InvalidCredentials: 다음 3가지 케이스 모두 같은 예외로 통합한다.
@@ -65,7 +72,8 @@ class AuthService:
         if not verify_password(password, user.password_hash):
             raise InvalidCredentials()
 
-        return self._issue_tokens(user, remember=remember)
+        access, refresh = self._issue_tokens(user, remember=remember)
+        return access, refresh, user.must_change_password
 
     # ── 회원가입 ──────────────────────────────────────
 
@@ -123,10 +131,67 @@ class AuthService:
         """로그인 아이디 사용 가능 여부 — /auth/check-login-id 의 도메인 로직."""
         return not await self.repo.exists_by_login_id(login_id)
 
+    # ── 비밀번호 찾기 (임시 비번 발급) ──────────────────
+
+    async def issue_temp_password(self, login_id: str, email: str) -> None:
+        """가입 정보(login_id + email) 일치 시 임시 비번 발급 + 메일 발송. api.md §3.8.
+
+        미가입 / 정보 불일치 시에도 예외/에러 없이 조용히 반환 — router 응답이
+        가입 여부를 추론할 수 없도록 통일되게 (enumeration 방어).
+        """
+        normalized = email.lower()
+        user = await self.repo.get_by_login_id_and_email(login_id, normalized)
+        if user is None:
+            return  # 정보 불일치 — 조용히 무시.
+
+        temp_password = _generate_temp_password()
+        user.password_hash = hash_password(temp_password)
+        user.must_change_password = True
+
+        await self.email_sender.send(
+            to=user.email,
+            subject="[Rekit] 임시 비밀번호 안내",
+            body=(
+                f"{user.username}님, 안녕하세요.\n\n"
+                f"임시 비밀번호: {temp_password}\n\n"
+                "보안을 위해 임시 비밀번호로 로그인 후 즉시 새 비밀번호로 변경해주세요.\n"
+                "임시 비밀번호 사용 중에는 비밀번호 변경 외 다른 기능을 이용할 수 없습니다.\n\n"
+                "본 메일은 발송 전용입니다."
+            ),
+        )
+
+    # ── 아이디 찾기 ─────────────────────────────────────
+
+    async def find_login_id_by_email(self, email: str) -> None:
+        """가입 이메일로 아이디 발송. api.md §3.7.
+
+        미가입 이메일이어도 조용히 반환 — 가입 여부를 응답으로 추론할 수
+        없도록 (enumeration 방어).
+        """
+        normalized = email.lower()
+        user = await self.repo.get_by_email(normalized)
+        if user is None:
+            return  # 미가입자 — 조용히 무시. router 는 동일 응답 반환.
+
+        await self.email_sender.send(
+            to=user.email,
+            subject="[Rekit] 아이디 안내",
+            body=(
+                f"{user.username}님, 안녕하세요.\n\n"
+                f"회원님의 아이디는 {user.login_id} 입니다.\n\n"
+                "본 메일은 발송 전용입니다."
+            ),
+        )
+
     # ── 토큰 갱신 ─────────────────────────────────────
 
-    async def refresh_token(self, refresh_token: str) -> tuple[str, str]:
+    async def refresh_token(self, refresh_token: str) -> tuple[str, str, bool]:
         """refresh JWT 검증 → 새 access + 새 refresh 발급 (rotation).
+
+        Returns:
+            (access, refresh, must_change_password) — sign_in 과 동일 형식.
+            토큰 갱신 사이에 임시 비번 발급이 있었을 수도 있어 매번 user 상태에서
+            읽어 응답에 실어준다 (false 로 굳어버리는 사고 방지).
 
         type='refresh' 가드가 access 를 refresh 자리에 못 쓰게 막는다.
         """
@@ -136,7 +201,8 @@ class AuthService:
         if user is None or not user.is_active:
             raise InvalidCredentials()
 
-        return self._issue_tokens(user, remember=False)
+        access, refresh = self._issue_tokens(user, remember=False)
+        return access, refresh, user.must_change_password
 
     # ── 내부 헬퍼 ─────────────────────────────────────
 
@@ -158,3 +224,27 @@ class AuthService:
             expires_in=timedelta(days=refresh_days),
         )
         return access, refresh
+
+
+# ── 모듈 헬퍼 ────────────────────────────────────────────
+
+
+_TEMP_PASSWORD_LENGTH = 16
+_TEMP_PASSWORD_ALPHABET = string.ascii_letters + string.digits  # 62자 (62^16 ≈ 4.8e28)
+
+
+def _generate_temp_password() -> str:
+    """16자 영문+숫자 임시 비번. password 정책 자동 통과 보장.
+
+    영문/숫자 한 쪽이 모두 빠질 확률은 2 * (36/62)^16 ≈ 4.6e-4 — 그 케이스만
+    재시도. 정책 검증은 `validate_password_policy` 한 곳에서 관리해 SignUp /
+    ChangePassword 와 silently 어긋나지 않도록.
+    """
+    while True:
+        candidate = "".join(
+            secrets.choice(_TEMP_PASSWORD_ALPHABET) for _ in range(_TEMP_PASSWORD_LENGTH)
+        )
+        try:
+            return validate_password_policy(candidate)
+        except ValueError:
+            continue

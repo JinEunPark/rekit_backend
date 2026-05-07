@@ -19,6 +19,9 @@ from fastapi import APIRouter, Cookie, Depends, Response, status
 from app.auth.auth_schemas import (
     AvailabilityResponse,
     CheckLoginIdRequest,
+    FindIdRequest,
+    FindPasswordRequest,
+    SentResponse,
     SignInRequest,
     SignUpRequest,
     TokenResponse,
@@ -110,6 +113,60 @@ async def check_login_id(
 
 
 @router.post(
+    "/find-id",
+    response_model=SentResponse,
+    response_model_by_alias=True,
+    status_code=status.HTTP_200_OK,
+    summary="아이디 찾기 — 가입 이메일로 아이디 발송",
+)
+async def find_id(
+    body: FindIdRequest,
+    service: AuthService = Depends(get_auth_service),
+) -> SentResponse:
+    """아이디 찾기. api.md §3.7. Public.
+
+    가입된 이메일이면 해당 이메일 inbox 로 아이디를 보낸다. 가입자가 아니어도
+    동일 응답을 반환해 가입 여부를 응답으로 추론할 수 없게 한다 (enumeration 방어).
+    """
+    await service.find_login_id_by_email(body.email)
+    return SentResponse(sent=True)
+
+
+@router.post(
+    "/find-password",
+    response_model=SentResponse,
+    response_model_by_alias=True,
+    status_code=status.HTTP_200_OK,
+    summary="비밀번호 찾기 — 임시 비밀번호 메일 발송",
+)
+async def find_password(
+    body: FindPasswordRequest,
+    service: AuthService = Depends(get_auth_service),
+) -> SentResponse:
+    """비밀번호 찾기 (임시 비번 발급). api.md §3.8. Public.
+
+    loginId + email 매칭 시 임시 비번 발급 + 메일 발송. 매칭 실패해도 응답 동일.
+    `maskedEmail` 은 입력값을 그대로 마스킹한 값이라 가입자/미가입자 동일
+    (서버 검증 결과 아님 — enumeration 방어).
+    """
+    await service.issue_temp_password(login_id=body.login_id, email=body.email)
+    return SentResponse(sent=True, masked_email=_mask_email(body.email))
+
+
+def _mask_email(email: str) -> str:
+    """이메일 마스킹 (입력값 그대로 — 서버 검증 결과 아님).
+
+    aaa@example.com → a**@example.com / abcdef@example.com → ab****@example.com
+    local 길이 1 이면 그대로 (1자만 가리는 건 의미 없음).
+    """
+    local, _, domain = email.partition("@")
+    if len(local) <= 1:
+        return f"{local}@{domain}"
+    visible = max(1, len(local) // 3)  # 6자면 2자, 3자면 1자, 9자면 3자 노출
+    return f"{local[:visible]}{'*' * (len(local) - visible)}@{domain}"
+
+
+@router.post(
     "/sign-in",
     response_model=TokenResponse,
     response_model_by_alias=True,
@@ -130,7 +187,7 @@ async def sign_in(
     실패 시 service 가 InvalidCredentials 를 raise → exception_handler 가
     401 + INVALID_CREDENTIALS 표준 포맷으로 자동 변환.
     """
-    access, refresh = await service.sign_in(
+    access, refresh, must_change = await service.sign_in(
         login_id=body.login_id,
         password=body.password,
         remember=body.remember,
@@ -142,7 +199,7 @@ async def sign_in(
         else settings.refresh_token_expire_days
     )
     _set_refresh_cookie(response, refresh, refresh_max_age_days)
-    return TokenResponse(access_token=access)
+    return TokenResponse(access_token=access, must_change_password=must_change)
 
 
 @router.post(
@@ -166,9 +223,9 @@ async def refresh(
     if refresh_token is None:
         raise TokenExpired(message="refresh 쿠키가 없습니다.")
 
-    new_access, new_refresh = await service.refresh_token(refresh_token)
+    new_access, new_refresh, must_change = await service.refresh_token(refresh_token)
     _set_refresh_cookie(response, new_refresh, settings.refresh_token_expire_days)
-    return TokenResponse(access_token=new_access)
+    return TokenResponse(access_token=new_access, must_change_password=must_change)
 
 
 @router.post(

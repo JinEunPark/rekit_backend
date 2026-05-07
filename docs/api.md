@@ -47,11 +47,23 @@ Authorization: Bearer <accessToken>
 {
   "error": {
     "code": "VALIDATION_ERROR",
-    "message": "휴대폰 번호 형식이 올바르지 않습니다",
-    "fields": { "phone": "INVALID_FORMAT" }   // 선택적
+    "message": "입력값을 확인해주세요.",
+    "fields": {
+      "password": "비밀번호는 영문과 숫자를 모두 포함해야 합니다."
+    }
   }
 }
 ```
+
+- `code`: 분기/로깅용 머신 식별자 (`VALIDATION_ERROR`, `INVALID_CREDENTIALS`, `OUT_OF_STOCK` 등).
+- `message`: 사용자에게 그대로 보여줄 수 있는 일반 메시지.
+- `fields` (선택적): `{필드명: 사용자에게 노출할 한국어 메시지}`. 폼 에러 표시 용도.
+  검증 실패 메시지는 `@field_validator` 의 `raise ValueError("...")` 가 그대로 들어간다.
+
+> **빌트인 제약 주의**: `Field(min_length=8)`·`pattern=...` 같은 Pydantic 빌트인 검증은
+> 영어 기본 메시지 (`"String should have at least 8 characters"`) 가 그대로 노출된다.
+> 한국어 메시지를 보이게 하려면 해당 필드를 `@field_validator` 로 옮기고
+> 한국어로 `raise ValueError("...")` 할 것.
 
 ### 1.4 HTTP 상태 코드
 
@@ -74,7 +86,9 @@ Authorization: Bearer <accessToken>
 | Code | HTTP | 의미 |
 |---|---|---|
 | `INVALID_CREDENTIALS` | 401 | 아이디/비밀번호 불일치 |
-| `TOKEN_EXPIRED` | 401 | 액세스 토큰 만료 |
+| `TOKEN_EXPIRED` | 401 | 액세스 토큰 만료 / refresh 토큰 오용 |
+| `ACCOUNT_INACTIVE` | 403 | 비활성 계정 (탈퇴/정지) — 토큰은 유효하지만 권한 없음 |
+| `PASSWORD_CHANGE_REQUIRED` | 403 | 임시 비밀번호 사용 중 — 비번 변경 외 차단. 클라는 비번 변경 페이지로 redirect |
 | `USERNAME_TAKEN` | 409 | 아이디 중복 |
 | `EMAIL_TAKEN` | 409 | 이메일 중복 |
 | `IDENTITY_REQUIRED` | 422 | 본인인증 필요 |
@@ -129,22 +143,22 @@ Authorization: Bearer <accessToken>
 ### 3.1 아이디 중복 확인
 
 ```
-POST /auth/check-username
+POST /auth/check-login-id
 ```
 
 **Public** · 회원가입 화면의 [중복확인] 버튼
 
 **Body**
 ```json
-{ "username": "eunyoung_kim" }
+{ "loginId": "eunyoung_kim" }
 ```
 
 **Response 200**
 ```json
-{ "data": { "available": true } }
+{ "available": true }
 ```
 
-**Errors**: `USERNAME_TAKEN` (409)
+`available=false` → 이미 사용 중. 별도 에러 코드 없이 응답으로 분기.
 
 ### 3.2 회원가입
 
@@ -193,12 +207,24 @@ POST /auth/sign-in
 
 **Body**
 ```json
-{ "username": "eunyoung_kim", "password": "abc12345", "remember": true }
+{ "loginId": "eunyoung_kim", "password": "abc12345", "remember": true }
 ```
 
 `remember`: true면 refresh token 만료 30일, false면 14일
 
-**Response 200**: 회원가입과 동일
+**Response 200**
+```json
+{
+  "accessToken": "eyJ...",
+  "tokenType": "bearer",
+  "mustChangePassword": false
+}
+```
+(Refresh Token 은 Set-Cookie 로 내려감)
+
+`mustChangePassword=true` 면 사용자가 §3.8 로 임시 비번을 받아 로그인한 상태 →
+클라이언트는 즉시 비밀번호 변경 페이지로 redirect 해야 한다. 변경 전까지 다른
+보호 endpoint 호출은 `PASSWORD_CHANGE_REQUIRED` (403) 로 거절.
 
 **Errors**: `INVALID_CREDENTIALS` (401)
 
@@ -224,7 +250,7 @@ POST /auth/refresh
 
 **Response 200**
 ```json
-{ "data": { "accessToken": "eyJ..." } }
+{ "accessToken": "eyJ...", "tokenType": "bearer", "mustChangePassword": false }
 ```
 
 ### 3.6 소셜 로그인 콜백 (예약)
@@ -257,17 +283,14 @@ POST /auth/find-id
 
 **Response 200**
 ```json
-{
-  "data": {
-    "username": "eunyou***kim",   // 마스킹된 형태
-    "joinedAt": "2026-04-10"
-  }
-}
+{ "sent": true }
 ```
 
-이메일에 매칭되는 계정 없으면 보안상 동일 응답 형식으로 빈 결과 (`username: null`) 또는 일부러 동일 메시지 반환 — 응답에서 계정 존재 여부 추론 불가하도록 설계 권장.
+가입된 이메일이면 해당 이메일 inbox 로 아이디를 발송한다 (화면 노출 X).
+미가입 이메일이어도 동일 응답 — 응답으로 가입 여부를 추론할 수 없도록
+의도적으로 통일 (enumeration 방어).
 
-### 3.8 비밀번호 재설정 링크 발송
+### 3.8 비밀번호 찾기 (임시 비번 발급)
 
 ```
 POST /auth/find-password
@@ -277,32 +300,24 @@ POST /auth/find-password
 
 **Body**
 ```json
-{ "username": "eunyoung_kim", "email": "eunyoung@example.com" }
+{ "loginId": "eunyoung_kim", "email": "eunyoung@example.com" }
 ```
 
 **Response 200**
 ```json
-{ "data": { "sent": true, "maskedEmail": "eu***@example.com" } }
+{ "sent": true, "maskedEmail": "eu***@example.com" }
 ```
 
-이메일로 재설정 토큰 (1회용, 30분 만료) 포함된 링크 발송: `https://rekit.kr/auth/reset-password?token=...`
+`loginId + email` 둘 다 일치하는 사용자에게 16자리 임시 비밀번호를 메일로 발송하고,
+서버에선 `password_hash` 갱신 + `must_change_password=True` 설정.
+사용자는 임시 비번으로 로그인 후 §4.3 으로 새 비밀번호를 설정해야 다른 endpoint
+이용 가능 (이전엔 모든 보호 endpoint 가 `PASSWORD_CHANGE_REQUIRED` 로 거절).
 
-### 3.9 비밀번호 재설정
+`maskedEmail` 은 클라가 입력한 이메일을 그대로 마스킹한 값이라 가입 여부와 무관 —
+미가입자에게도 동일 형태 응답.
 
-```
-POST /auth/reset-password
-```
-
-**Public**
-
-**Body**
-```json
-{ "token": "...", "newPassword": "new12345" }
-```
-
-**Response 204**
-
-**Errors**: `OTP_INVALID` (token 만료/사용됨)
+> **별도 reset-password endpoint 는 없음**. 임시 비번 + §4.3 비번 변경 흐름이
+> 토큰 링크 방식을 대체.
 
 ### 3.10 본인인증 OTP 발송
 
