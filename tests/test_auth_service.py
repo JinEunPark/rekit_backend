@@ -12,8 +12,13 @@ DB 없이 fake repository 로 도메인 로직만 검증.
 from datetime import timedelta
 
 import pytest
+from fastapi import BackgroundTasks
 
-from app.auth.auth_service import AuthService
+from app.auth.auth_service import (
+    AuthService,
+    _bg_apply_temp_password,
+    _bg_send_login_id_email,
+)
 from app.common.email import ConsoleEmailSender
 from app.core.exceptions import (
     EmailTaken,
@@ -313,160 +318,177 @@ async def test_refresh_token_carries_must_change_password_for_temp_user() -> Non
 
 
 # ── find_login_id_by_email ──────────────────────────────
+# 실제 메일 발송은 BG task 가 응답 후 처리. service 는 큐잉만 검증.
 
 
-async def test_find_login_id_sends_email_when_user_exists() -> None:
-    """가입 사용자 — 가입 이메일로 아이디 발송."""
+async def test_find_login_id_queues_bg_task_when_user_exists() -> None:
+    """가입 사용자 — BG task 가 큐잉되며 즉시 발송은 안 함."""
     # Arrange
     user = _make_user(login_id="abc123", email="user@example.com")
     repo = _FakeAuthRepo(user=user)
     sender = ConsoleEmailSender()
     service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+    bg = BackgroundTasks()
 
     # Act
-    await service.find_login_id_by_email("user@example.com")
+    await service.find_login_id_by_email("user@example.com", bg)
 
-    # Assert
-    assert len(sender.sent) == 1
-    msg = sender.sent[0]
-    assert msg.to == "user@example.com"
-    assert "abc123" in msg.body
-    assert user.username in msg.body  # 인사말 포함
+    # Assert — service 가 즉시 send 하지 않음
+    assert sender.sent == []
+    # BG task 1개 큐잉됨 (login_id / email 이 kwargs 에 들어감)
+    assert len(bg.tasks) == 1
+    task = bg.tasks[0]
+    assert task.kwargs["to"] == "user@example.com"
+    assert task.kwargs["login_id"] == "abc123"
 
 
-async def test_find_login_id_does_nothing_when_user_not_found() -> None:
-    """미가입 이메일 — 메일 발송 없이 조용히 반환 (enumeration 방어)."""
-    # Arrange
-    repo = _FakeAuthRepo()  # no user
+async def test_find_login_id_does_not_queue_when_user_not_found() -> None:
+    """미가입 이메일 — BG task 큐잉도 안 함 (enumeration 방어 + 비용 절감)."""
+    repo = _FakeAuthRepo()
     sender = ConsoleEmailSender()
     service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+    bg = BackgroundTasks()
 
-    # Act
-    await service.find_login_id_by_email("nobody@example.com")
+    await service.find_login_id_by_email("nobody@example.com", bg)
 
-    # Assert
+    assert bg.tasks == []
     assert sender.sent == []
 
 
 async def test_find_login_id_normalizes_email_to_lowercase() -> None:
     """대소문자 섞인 이메일 입력해도 소문자로 매칭."""
-    # Arrange
-    user = _make_user(email="user@example.com")  # 저장은 소문자
+    user = _make_user(email="user@example.com")
     repo = _FakeAuthRepo(user=user)
     sender = ConsoleEmailSender()
     service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+    bg = BackgroundTasks()
 
-    # Act
-    await service.find_login_id_by_email("USER@Example.COM")
+    await service.find_login_id_by_email("USER@Example.COM", bg)
 
-    # Assert
+    assert len(bg.tasks) == 1
+
+
+# ── BG task 본체 (find-id) ─────────────────────────────
+
+
+async def test_bg_send_login_id_email_dispatches_to_email_sender() -> None:
+    """_bg_send_login_id_email 직접 호출 — sender.sent 에 메시지 누적."""
+    sender = ConsoleEmailSender()
+
+    await _bg_send_login_id_email(
+        to="user@example.com",
+        username="홍길동",
+        login_id="abc123",
+        email_sender=sender,
+    )
+
     assert len(sender.sent) == 1
+    msg = sender.sent[0]
+    assert msg.to == "user@example.com"
+    assert "abc123" in msg.body
+    assert "홍길동" in msg.body
+
+
+async def test_bg_send_login_id_email_swallows_email_failures() -> None:
+    """이메일 발송 실패해도 raise 안 함 — BG task 는 응답 후 실행되니
+    예외가 사용자 경험에 영향 X. 로그만 남김."""
+
+    class _FailingSender:
+        async def send(self, *, to: str, subject: str, body: str) -> None:
+            raise RuntimeError("SMTP down")
+
+    # Should not raise
+    await _bg_send_login_id_email(
+        to="x@y.com", username="u", login_id="lid", email_sender=_FailingSender()  # type: ignore[arg-type]
+    )
 
 
 # ── issue_temp_password (find-password) ─────────────────
+# service 는 BG task 큐잉만. 임시 비번 생성 + DB UPDATE 는 BG task 가 응답 후 처리.
 
 
-async def test_issue_temp_password_generates_16_chars_with_letter_and_digit() -> None:
-    """임시 비번은 16자 영문+숫자 — password 정책 자동 통과."""
-    # Arrange
+async def test_issue_temp_password_queues_bg_task_with_16char_password() -> None:
+    """매칭 사용자 — BG task 큐잉 + kwargs 의 temp_password 가 16자 영문+숫자."""
     user = _make_user(login_id="abc123", email="user@example.com")
     repo = _FakeAuthRepo(user=user)
     sender = ConsoleEmailSender()
     service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+    bg = BackgroundTasks()
 
-    # Act
-    await service.issue_temp_password(login_id="abc123", email="user@example.com")
+    await service.issue_temp_password(
+        login_id="abc123", email="user@example.com", background_tasks=bg
+    )
 
-    # Assert — 메일 본문에서 "임시 비밀번호: <pw>" 라인을 추출
-    body = sender.sent[0].body
-    assert "임시 비밀번호" in body
-    # 본문에서 비번 문자열 추출 — 한 줄짜리 'XXXXXXXXX' 형태로 노출
-    import re
-
-    matches = re.findall(r"임시 비밀번호:\s*([A-Za-z0-9]+)", body)
-    assert len(matches) == 1
-    pw = matches[0]
+    assert len(bg.tasks) == 1
+    task = bg.tasks[0]
+    pw: str = task.kwargs["temp_password"]
     assert len(pw) == 16
     assert any(c.isalpha() for c in pw)
     assert any(c.isdigit() for c in pw)
-
-
-async def test_issue_temp_password_updates_user_state() -> None:
-    """user.password_hash 갱신 + must_change_password=True."""
-    # Arrange
-    user = _make_user(login_id="abc123", email="user@example.com", password="oldpw1234")
-    old_hash = user.password_hash
-    assert user.must_change_password is False  # baseline
-
-    repo = _FakeAuthRepo(user=user)
-    sender = ConsoleEmailSender()
-    service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
-
-    # Act
-    await service.issue_temp_password(login_id="abc123", email="user@example.com")
-
-    # Assert
-    assert user.password_hash != old_hash
-    assert user.must_change_password is True
-
-
-async def test_issue_temp_password_sends_email_to_registered_address() -> None:
-    # Arrange
-    user = _make_user(login_id="abc123", email="user@example.com")
-    repo = _FakeAuthRepo(user=user)
-    sender = ConsoleEmailSender()
-    service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
-
-    # Act
-    await service.issue_temp_password(login_id="abc123", email="user@example.com")
-
-    # Assert
-    assert len(sender.sent) == 1
-    assert sender.sent[0].to == "user@example.com"
-
-
-async def test_issue_temp_password_does_nothing_when_login_id_mismatch() -> None:
-    """이메일은 맞고 loginId 가 틀리면 — 발송도 상태 변경도 X."""
-    # Arrange
-    user = _make_user(login_id="abc123", email="user@example.com")
-    old_hash = user.password_hash
-    repo = _FakeAuthRepo(user=user)
-    sender = ConsoleEmailSender()
-    service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
-
-    # Act
-    await service.issue_temp_password(login_id="wrong_id", email="user@example.com")
-
-    # Assert
-    assert sender.sent == []
-    assert user.password_hash == old_hash
+    # 즉시 DB 변경 X
     assert user.must_change_password is False
 
 
-async def test_issue_temp_password_does_nothing_when_email_mismatch() -> None:
-    """loginId 는 맞고 이메일이 다르면 — 거절 (계정 정보 유출 차단)."""
-    # Arrange
+async def test_issue_temp_password_does_not_queue_on_login_id_mismatch() -> None:
+    """이메일은 맞고 loginId 가 틀리면 큐잉도 안 함."""
     user = _make_user(login_id="abc123", email="user@example.com")
     repo = _FakeAuthRepo(user=user)
-    sender = ConsoleEmailSender()
-    service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+    service = AuthService(repo, email_sender=ConsoleEmailSender())  # type: ignore[arg-type]
+    bg = BackgroundTasks()
 
-    # Act
-    await service.issue_temp_password(login_id="abc123", email="other@example.com")
+    await service.issue_temp_password(
+        login_id="wrong_id", email="user@example.com", background_tasks=bg
+    )
 
-    # Assert
-    assert sender.sent == []
+    assert bg.tasks == []
+    assert user.must_change_password is False
+
+
+async def test_issue_temp_password_does_not_queue_on_email_mismatch() -> None:
+    user = _make_user(login_id="abc123", email="user@example.com")
+    repo = _FakeAuthRepo(user=user)
+    service = AuthService(repo, email_sender=ConsoleEmailSender())  # type: ignore[arg-type]
+    bg = BackgroundTasks()
+
+    await service.issue_temp_password(
+        login_id="abc123", email="other@example.com", background_tasks=bg
+    )
+
+    assert bg.tasks == []
 
 
 async def test_issue_temp_password_normalizes_email_lowercase() -> None:
-    # Arrange
     user = _make_user(login_id="abc123", email="user@example.com")
     repo = _FakeAuthRepo(user=user)
-    sender = ConsoleEmailSender()
-    service = AuthService(repo, email_sender=sender)  # type: ignore[arg-type]
+    service = AuthService(repo, email_sender=ConsoleEmailSender())  # type: ignore[arg-type]
+    bg = BackgroundTasks()
 
-    # Act
-    await service.issue_temp_password(login_id="abc123", email="USER@Example.com")
+    await service.issue_temp_password(
+        login_id="abc123", email="USER@Example.com", background_tasks=bg
+    )
 
-    # Assert
-    assert len(sender.sent) == 1
+    assert len(bg.tasks) == 1
+
+
+# ── BG task 본체 (find-password) ───────────────────────
+
+
+async def test_bg_apply_temp_password_skips_db_when_email_fails() -> None:
+    """이메일 발송 실패 시 DB 업데이트 안 함 — 사용자 비번 그대로 유지.
+
+    DB 접근 자체를 안 해야 함 (요청 트랜잭션 끝난 뒤 BG task 가 자체 세션을
+    여는데, 이메일이 raise 하면 그 코드까지 도달 안 함).
+    """
+
+    class _FailingSender:
+        async def send(self, *, to: str, subject: str, body: str) -> None:
+            raise RuntimeError("SMTP down")
+
+    # Should not raise — user_id=99999 (없는 ID) 라도 DB 손대지 않으니 안전
+    await _bg_apply_temp_password(
+        user_id=99999,
+        username="아무개",
+        email="x@y.com",
+        temp_password="ShouldNotBeApplied99",
+        email_sender=_FailingSender(),  # type: ignore[arg-type]
+    )

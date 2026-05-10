@@ -15,10 +15,13 @@ JPA 비유: @Service. 라우터(@RestController) 와 리포지토리(@Repository
 다른 도메인 service 도 이 패턴: Repository 주입 + 도메인 로직만.
 """
 
+import logging
 import secrets
 import string
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+
+from fastapi import BackgroundTasks
 
 from app.auth.adapters.ports import OAuthProvider
 from app.auth.auth_repository import AuthRepository
@@ -26,6 +29,7 @@ from app.auth.auth_schemas import validate_password_policy
 from app.auth.models import SocialAccount, SocialProvider
 from app.common.email import EmailSender
 from app.core.config import settings
+from app.core.database import async_session_factory
 from app.core.exceptions import (
     EmailTaken,
     InvalidCredentials,
@@ -42,6 +46,8 @@ from app.core.security import (
     verify_password,
 )
 from app.user.models import User, UserRole
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -156,54 +162,60 @@ class AuthService:
 
     # ── 비밀번호 찾기 (임시 비번 발급) ──────────────────
 
-    async def issue_temp_password(self, login_id: str, email: str) -> None:
-        """가입 정보(login_id + email) 일치 시 임시 비번 발급 + 메일 발송. api.md §3.8.
+    async def issue_temp_password(
+        self,
+        login_id: str,
+        email: str,
+        background_tasks: BackgroundTasks,
+    ) -> None:
+        """가입 정보(login_id + email) 일치 시 임시 비번 발급 작업을 BG 로 큐잉. api.md §3.8.
 
-        미가입 / 정보 불일치 시에도 예외/에러 없이 조용히 반환 — router 응답이
-        가입 여부를 추론할 수 없도록 통일되게 (enumeration 방어).
+        실제 메일 발송 + DB 업데이트(password_hash, must_change_password) 는
+        응답 후 BG task 가 자체 세션으로 처리한다 — 요청 트랜잭션이 SMTP 지연에
+        묶이지 않게 (DB connection pool 점유 회피).
+
+        **순서가 핵심**: BG task 는 이메일 발송이 성공한 경우에만 DB UPDATE 한다.
+        이메일 실패 시 사용자의 기존 비번 그대로 — 이메일 없이 계정 잠기는 사고 방지.
+
+        미가입 / 정보 불일치 시에도 예외 없이 조용히 반환 (enumeration 방어).
         """
         normalized = email.lower()
         user = await self.repo.get_by_login_id_and_email(login_id, normalized)
         if user is None:
-            return  # 정보 불일치 — 조용히 무시.
+            return  # 정보 불일치 — 조용히 무시. BG task 큐잉도 안 함.
 
-        temp_password = _generate_temp_password()
-        user.password_hash = hash_password(temp_password)
-        user.must_change_password = True
-
-        await self.email_sender.send(
-            to=user.email,
-            subject="[Rekit] 임시 비밀번호 안내",
-            body=(
-                f"{user.username}님, 안녕하세요.\n\n"
-                f"임시 비밀번호: {temp_password}\n\n"
-                "보안을 위해 임시 비밀번호로 로그인 후 즉시 새 비밀번호로 변경해주세요.\n"
-                "임시 비밀번호 사용 중에는 비밀번호 변경 외 다른 기능을 이용할 수 없습니다.\n\n"
-                "본 메일은 발송 전용입니다."
-            ),
+        background_tasks.add_task(
+            _bg_apply_temp_password,
+            user_id=user.id,
+            username=user.username,
+            email=user.email,
+            temp_password=_generate_temp_password(),
+            email_sender=self.email_sender,
         )
 
     # ── 아이디 찾기 ─────────────────────────────────────
 
-    async def find_login_id_by_email(self, email: str) -> None:
-        """가입 이메일로 아이디 발송. api.md §3.7.
+    async def find_login_id_by_email(
+        self,
+        email: str,
+        background_tasks: BackgroundTasks,
+    ) -> None:
+        """가입 이메일로 아이디 발송 작업을 BG 로 큐잉. api.md §3.7.
 
-        미가입 이메일이어도 조용히 반환 — 가입 여부를 응답으로 추론할 수
-        없도록 (enumeration 방어).
+        Read-only — DB 변경 없음. 이메일이 실패해도 사용자 상태에 영향 X.
+        미가입 이메일이어도 조용히 반환 (enumeration 방어).
         """
         normalized = email.lower()
         user = await self.repo.get_by_email(normalized)
         if user is None:
-            return  # 미가입자 — 조용히 무시. router 는 동일 응답 반환.
+            return
 
-        await self.email_sender.send(
+        background_tasks.add_task(
+            _bg_send_login_id_email,
             to=user.email,
-            subject="[Rekit] 아이디 안내",
-            body=(
-                f"{user.username}님, 안녕하세요.\n\n"
-                f"회원님의 아이디는 {user.login_id} 입니다.\n\n"
-                "본 메일은 발송 전용입니다."
-            ),
+            username=user.username,
+            login_id=user.login_id,
+            email_sender=self.email_sender,
         )
 
     # ── 토큰 갱신 ─────────────────────────────────────
@@ -390,3 +402,81 @@ def _generate_temp_password() -> str:
             return validate_password_policy(candidate)
         except ValueError:
             continue
+
+
+# ── BackgroundTasks 본체 ─────────────────────────────────
+# 응답 후 실행. 자체 DB session 을 열어 요청 트랜잭션과 분리 — SMTP 지연이
+# 요청 connection 을 묶지 않도록. 실패 시 로그만 남기고 정상 종료 (사용자에게
+# 별도 알림 X — find-id/find-password 는 enumeration 방어로 응답 통일).
+
+
+async def _bg_send_login_id_email(
+    *,
+    to: str,
+    username: str,
+    login_id: str,
+    email_sender: EmailSender,
+) -> None:
+    """find-id BG task — read-only. 이메일 실패해도 사용자 상태 영향 X."""
+    try:
+        await email_sender.send(
+            to=to,
+            subject="[Rekit] 아이디 안내",
+            body=(
+                f"{username}님, 안녕하세요.\n\n"
+                f"회원님의 아이디는 {login_id} 입니다.\n\n"
+                "본 메일은 발송 전용입니다."
+            ),
+        )
+    except Exception:
+        _log.exception("find-id email failed (to=%s)", to)
+
+
+async def _bg_apply_temp_password(
+    *,
+    user_id: int,
+    username: str,
+    email: str,
+    temp_password: str,
+    email_sender: EmailSender,
+) -> None:
+    """find-password BG task — 이메일 발송 → 성공 시에만 user.password_hash + must_change UPDATE.
+
+    순서가 핵심: 이메일이 실패하면 DB 손대지 않아 사용자가 기존 비번으로 계속
+    로그인 가능. 사용자는 다시 find-password 를 호출하면 새 임시 비번 발급됨.
+    """
+    try:
+        await email_sender.send(
+            to=email,
+            subject="[Rekit] 임시 비밀번호 안내",
+            body=(
+                f"{username}님, 안녕하세요.\n\n"
+                f"임시 비밀번호: {temp_password}\n\n"
+                "보안을 위해 임시 비밀번호로 로그인 후 즉시 새 비밀번호로 변경해주세요.\n"
+                "임시 비밀번호 사용 중에는 비밀번호 변경 외 다른 기능을 이용할 수 없습니다.\n\n"
+                "본 메일은 발송 전용입니다."
+            ),
+        )
+    except Exception:
+        _log.exception(
+            "temp password email failed (user_id=%s) — DB 미변경", user_id
+        )
+        return
+
+    async with async_session_factory() as session:
+        try:
+            user = await session.get(User, user_id)
+            if user is None:
+                _log.warning(
+                    "temp password BG: user_id=%s 가 사라짐 (탈퇴?). 무시.", user_id
+                )
+                return
+            user.password_hash = hash_password(temp_password)
+            user.must_change_password = True
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            _log.exception(
+                "temp password DB update failed (user_id=%s) — 이메일은 발송됨",
+                user_id,
+            )

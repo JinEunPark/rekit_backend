@@ -14,7 +14,7 @@ JPA 비유: @RestController + @RequestMapping("/auth").
 3) async def 안에서 service 호출 후 응답 객체 반환
 """
 
-from fastapi import APIRouter, Cookie, Depends, Path, Response, status
+from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, Path, Response, status
 
 from app.auth.adapters.ports import OAuthProvider
 from app.auth.auth_schemas import (
@@ -126,14 +126,15 @@ async def check_login_id(
 )
 async def find_id(
     body: FindIdRequest,
+    background_tasks: BackgroundTasks,
     service: AuthService = Depends(get_auth_service),
 ) -> SentResponse:
     """아이디 찾기. api.md §3.7. Public.
 
-    가입된 이메일이면 해당 이메일 inbox 로 아이디를 보낸다. 가입자가 아니어도
-    동일 응답을 반환해 가입 여부를 응답으로 추론할 수 없게 한다 (enumeration 방어).
+    가입된 이메일이면 BG task 로 아이디 메일 발송 — 응답은 즉시 반환되고 SMTP
+    지연이 요청 트랜잭션을 묶지 않음. 가입자가 아니어도 동일 응답 (enumeration 방어).
     """
-    await service.find_login_id_by_email(body.email)
+    await service.find_login_id_by_email(body.email, background_tasks)
     return SentResponse(sent=True)
 
 
@@ -146,15 +147,20 @@ async def find_id(
 )
 async def find_password(
     body: FindPasswordRequest,
+    background_tasks: BackgroundTasks,
     service: AuthService = Depends(get_auth_service),
 ) -> SentResponse:
     """비밀번호 찾기 (임시 비번 발급). api.md §3.8. Public.
 
-    loginId + email 매칭 시 임시 비번 발급 + 메일 발송. 매칭 실패해도 응답 동일.
-    `maskedEmail` 은 입력값을 그대로 마스킹한 값이라 가입자/미가입자 동일
-    (서버 검증 결과 아님 — enumeration 방어).
+    loginId + email 매칭 시 BG task 로 (1) 메일 발송 → (2) 성공 시 user.password_hash
+    + must_change_password 갱신. 메일 실패 시 DB 미변경 — 사용자가 기존 비번
+    그대로 사용 가능. 매칭 실패해도 응답 동일 (enumeration 방어).
+
+    `maskedEmail` 은 입력값을 그대로 마스킹한 값이라 가입자/미가입자 동일.
     """
-    await service.issue_temp_password(login_id=body.login_id, email=body.email)
+    await service.issue_temp_password(
+        login_id=body.login_id, email=body.email, background_tasks=background_tasks
+    )
     return SentResponse(sent=True, masked_email=_mask_email(body.email))
 
 
