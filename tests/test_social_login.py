@@ -10,6 +10,7 @@ DB 없이 fake repo + fake OAuth provider 로 도메인 로직 검증.
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from app.auth.adapters.ports import OAuthProvider, SocialProfile
@@ -20,6 +21,7 @@ from app.core.exceptions import (
     EmailTaken,
     InvalidCredentials,
     SocialEmailRequired,
+    SocialOAuthFailed,
     TokenExpired,
     UsernameTaken,
 )
@@ -173,6 +175,39 @@ async def test_social_login_raises_when_email_missing() -> None:
 
     with pytest.raises(SocialEmailRequired):
         await service.social_login(SocialProvider.KAKAO, oauth, code="c")
+
+
+async def test_social_login_converts_httpx_status_error_to_social_oauth_failed() -> None:
+    """PG token endpoint 4xx 응답 → SocialOAuthFailed (502). 가장 흔한 케이스:
+    code 만료, redirect_uri 콘솔 등록값 불일치, code 재사용."""
+
+    class _FailingOAuth:
+        async def exchange_code(self, code, state=None):
+            req = httpx.Request("POST", "https://pg.example/token")
+            res = httpx.Response(401, request=req, json={"error": "invalid_grant"})
+            raise httpx.HTTPStatusError("401", request=req, response=res)
+
+    repo = _FakeAuthRepo()
+    service = _make_service(repo)
+
+    with pytest.raises(SocialOAuthFailed):
+        await service.social_login(SocialProvider.KAKAO, _FailingOAuth(), code="x")  # type: ignore[arg-type]
+
+
+async def test_social_login_converts_httpx_request_error_to_social_oauth_failed() -> None:
+    """네트워크 레이어 실패 (DNS, timeout) → SocialOAuthFailed (502)."""
+
+    class _NetworkErrorOAuth:
+        async def exchange_code(self, code, state=None):
+            raise httpx.ConnectTimeout("timeout")
+
+    repo = _FakeAuthRepo()
+    service = _make_service(repo)
+
+    with pytest.raises(SocialOAuthFailed):
+        await service.social_login(
+            SocialProvider.GOOGLE, _NetworkErrorOAuth(), code="x"  # type: ignore[arg-type]
+        )
 
 
 async def test_social_login_raises_invalid_credentials_when_linked_user_inactive() -> None:

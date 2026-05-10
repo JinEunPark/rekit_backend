@@ -8,9 +8,13 @@ api.md §1.3 / §1.5 의 응답 포맷:
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+
+_log = logging.getLogger(__name__)
 
 
 class BusinessError(Exception):
@@ -88,6 +92,19 @@ class SocialProviderNotConfigured(BusinessError):
     message = "해당 소셜 로그인이 아직 활성화되지 않았습니다."
 
 
+class SocialOAuthFailed(BusinessError):
+    """소셜 PG 와의 통신/인증이 실패. token exchange 4xx/5xx, 네트워크 오류 등.
+
+    502 (Bad Gateway) — 백엔드 자체 문제가 아니라 외부 PG 응답 이상이라는 의미.
+    가장 흔한 원인: code 만료 (1분 초과 후 재호출) / redirect_uri 콘솔 등록값
+    불일치 / 사용자가 동의 후 도중 취소.
+    """
+
+    code = "SOCIAL_OAUTH_FAILED"
+    http_status = status.HTTP_502_BAD_GATEWAY
+    message = "소셜 로그인 인증에 실패했습니다. 잠시 후 다시 시도해주세요."
+
+
 class UsernameTaken(BusinessError):
     code = "USERNAME_TAKEN"
     http_status = status.HTTP_409_CONFLICT
@@ -154,6 +171,24 @@ def register_exception_handlers(app: FastAPI) -> None:
         if exc.fields:
             body["fields"] = exc.fields
         return JSONResponse(status_code=exc.http_status, content={"error": body})
+
+    @app.exception_handler(Exception)
+    async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
+        # 미처리 예외 — 표준 500 응답으로 변환. 핵심 이유 두 가지:
+        # 1) Starlette 의 ServerErrorMiddleware 가 잡으면 응답이 CORS middleware
+        #    바깥에서 만들어져 Access-Control-Allow-Origin 헤더가 누락 → 브라우저
+        #    가 CORS 에러로 잘못 보고. 우리 핸들러가 잡으면 미들웨어 통과 정상.
+        # 2) traceback 노출 차단 (debug=True 환경에서 raw 응답되는 거 방지).
+        _log.exception("Unhandled exception", exc_info=exc)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "서버 오류가 발생했습니다.",
+                }
+            },
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:

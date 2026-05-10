@@ -93,3 +93,34 @@ def test_validation_missing_field_has_message() -> None:
     assert "password" in fields
     assert isinstance(fields["password"], str)
     assert fields["password"]  # 빈 문자열 아님
+
+
+# ── 글로벌 미처리 예외 ─────────────────────────────────
+
+
+def _build_client_with_failing_route() -> TestClient:
+    """미처리 예외를 던지는 라우트가 등록된 클라이언트 — 글로벌 핸들러 검증용."""
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.get("/boom")
+    async def _boom() -> None:
+        raise RuntimeError("unexpected boom")
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_unhandled_exception_returns_standard_500_envelope() -> None:
+    """미처리 raw Exception 도 표준 wrapper 로 변환되어야 — Starlette 의 raw
+    응답이 아닌 우리 핸들러가 응답 만들어야 CORS middleware 가 헤더 부착 가능."""
+    client = _build_client_with_failing_route()
+
+    res = client.get("/boom")
+
+    assert res.status_code == 500
+    body = res.json()
+    assert body["error"]["code"] == "INTERNAL_ERROR"
+    assert "서버 오류" in body["error"]["message"]
+    # traceback 이 응답에 노출되지 않음
+    assert "RuntimeError" not in res.text
+    assert "unexpected boom" not in res.text

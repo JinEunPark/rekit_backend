@@ -21,6 +21,7 @@ import string
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+import httpx
 from fastapi import BackgroundTasks
 
 from app.auth.adapters.ports import OAuthProvider
@@ -34,6 +35,7 @@ from app.core.exceptions import (
     EmailTaken,
     InvalidCredentials,
     SocialEmailRequired,
+    SocialOAuthFailed,
     UsernameTaken,
 )
 from app.core.security import (
@@ -256,8 +258,24 @@ class AuthService:
         3. (provider, social_id) 로 기존 연결 조회
            - 매칭: 즉시 로그인 (access/refresh 발급)
            - 미매칭: 신규 — temp_token 발급, 클라가 약관 동의 후 social_sign_up 호출
+
+        Raises:
+            SocialOAuthFailed (502): PG 와의 통신/인증 실패 (code 만료, redirect_uri
+                불일치, 네트워크 오류 등). httpx 의 raw 예외를 도메인 예외로 변환해
+                글로벌 핸들러가 표준 응답 + CORS 헤더로 내려보내게.
         """
-        profile = await oauth.exchange_code(code, state)
+        try:
+            profile = await oauth.exchange_code(code, state)
+        except httpx.HTTPStatusError as e:
+            # 카카오/네이버/구글 token endpoint 가 4xx 응답 — 가장 흔한 케이스:
+            # code 만료 (1분 초과), redirect_uri 콘솔 등록값 불일치, code 재사용.
+            raise SocialOAuthFailed(
+                message=f"소셜 로그인 PG 응답 오류 ({e.response.status_code})"
+            ) from e
+        except httpx.RequestError as e:
+            # 타임아웃, DNS, TLS 등 네트워크 레이어 실패.
+            raise SocialOAuthFailed(message=f"소셜 로그인 PG 통신 실패: {e}") from e
+
         if profile.email is None:
             raise SocialEmailRequired()
 
