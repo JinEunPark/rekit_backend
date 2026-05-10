@@ -9,9 +9,13 @@
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 
 from app.auth.adapters.ports import SocialProfile
+
+_log = logging.getLogger(__name__)
 
 _TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 _USER_INFO_URL = "https://kapi.kakao.com/v2/user/me"
@@ -46,7 +50,16 @@ class KakaoOAuthAdapter:
             data["client_secret"] = self.client_secret
 
         res = await client.post(_TOKEN_URL, data=data)
-        res.raise_for_status()
+        if res.is_error:
+            # 카카오는 4xx 시 {error, error_description, error_code} 를 본문으로 보냄.
+            # 사용자에게 노출은 위험하니 로그로만 — 디버깅 결정타가 됨.
+            _log.error(
+                "Kakao token exchange failed: %d — %s (redirect_uri=%s)",
+                res.status_code,
+                res.text,
+                self.redirect_uri,
+            )
+            res.raise_for_status()
         return res.json()["access_token"]
 
     async def _fetch_profile(self, client: httpx.AsyncClient, access_token: str) -> SocialProfile:

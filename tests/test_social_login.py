@@ -70,6 +70,11 @@ class _FakeAuthRepo:
     async def exists_by_email(self, email: str) -> bool:
         return self._user is not None and self._user.email == email
 
+    async def get_by_email(self, email: str) -> User | None:
+        if self._user is None:
+            return None
+        return self._user if self._user.email == email else None
+
     async def get_social_account(
         self, provider: SocialProvider, social_id: str
     ) -> SocialAccount | None:
@@ -163,6 +168,69 @@ async def test_social_login_passes_state_to_oauth_adapter() -> None:
     await service.social_login(SocialProvider.NAVER, oauth, code="c", state="my-state")
 
     assert oauth.calls == [("c", "my-state")]
+
+
+async def test_social_login_auto_links_when_email_matches_existing_user() -> None:
+    """일반 가입(또는 다른 PG 가입) 사용자가 같은 이메일로 소셜 로그인 시 —
+    SocialAccount 자동 추가 + 즉시 로그인. needsSignUp 거치지 않음."""
+    # Arrange — 일반 가입된 사용자 (SocialAccount 없음)
+    user = make_user(user_id=10, login_id="existing_general", email="user@example.com")
+    repo = _FakeAuthRepo(user=user)
+    # 카카오 OAuth 가 같은 이메일을 줬다고 가정
+    oauth = _FakeOAuth(
+        SocialProfile(
+            provider="kakao",
+            social_id="kakao-new-1",
+            email="user@example.com",
+            name="홍길동",
+        )
+    )
+    service = _make_service(repo)
+
+    # Act
+    result = await service.social_login(SocialProvider.KAKAO, oauth, code="abc")
+
+    # Assert — 즉시 로그인 (needsSignUp=False)
+    assert result.needs_sign_up is False
+    assert result.access_token is not None
+    assert result.refresh_token is not None
+    # SocialAccount 가 자동 생성됐는지
+    assert len(repo.added_socials) == 1
+    sa = repo.added_socials[0]
+    assert sa.provider == SocialProvider.KAKAO
+    assert sa.social_id == "kakao-new-1"
+    assert sa.user_id == user.id  # 기존 user 에 연결
+    assert sa.email_at_link == "user@example.com"
+
+
+async def test_social_login_normalizes_email_for_match() -> None:
+    """PG 가 대문자 이메일 보내도 lowercase 로 매칭 (DB 저장은 lowercase)."""
+    user = make_user(user_id=1, email="user@example.com")
+    repo = _FakeAuthRepo(user=user)
+    oauth = _FakeOAuth(
+        SocialProfile(
+            provider="naver", social_id="n1", email="USER@Example.COM", name="이름"
+        )
+    )
+    service = _make_service(repo)
+
+    result = await service.social_login(SocialProvider.NAVER, oauth, code="x", state="s")
+
+    assert result.needs_sign_up is False
+    assert result.access_token is not None
+
+
+async def test_social_login_raises_when_email_match_user_inactive() -> None:
+    """이메일 매칭 user 가 is_active=False 면 — 자동 연결 X, 401 거절."""
+    user = make_user(user_id=1, email="user@example.com", is_active=False)
+    repo = _FakeAuthRepo(user=user)
+    oauth = _FakeOAuth(
+        SocialProfile(provider="google", social_id="g1", email="user@example.com", name=None)
+    )
+    service = _make_service(repo)
+
+    with pytest.raises(InvalidCredentials):
+        await service.social_login(SocialProvider.GOOGLE, oauth, code="x")
 
 
 async def test_social_login_raises_when_email_missing() -> None:

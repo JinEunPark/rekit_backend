@@ -10,9 +10,13 @@
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 
 from app.auth.adapters.ports import SocialProfile
+
+_log = logging.getLogger(__name__)
 
 _TOKEN_URL = "https://nid.naver.com/oauth2.0/token"
 _USER_INFO_URL = "https://openapi.naver.com/v1/nid/me"
@@ -49,7 +53,14 @@ class NaverOAuthAdapter:
             "state": state,
         }
         res = await client.get(_TOKEN_URL, params=params)
-        res.raise_for_status()
+        if res.is_error:
+            _log.error(
+                "Naver token exchange failed: %d — %s (redirect_uri=%s)",
+                res.status_code,
+                res.text,
+                self.redirect_uri,
+            )
+            res.raise_for_status()
         return res.json()["access_token"]
 
     async def _fetch_profile(self, client: httpx.AsyncClient, access_token: str) -> SocialProfile:

@@ -279,22 +279,35 @@ class AuthService:
         if profile.email is None:
             raise SocialEmailRequired()
 
+        # 1) (provider, social_id) 매칭 — 같은 PG 로 이미 연결된 사용자 → 즉시 로그인
         existing = await self.repo.get_social_account(provider, profile.social_id)
         if existing is not None:
             user = await self.repo.get_by_id(existing.user_id)
             if user is None or not user.is_active:
                 raise InvalidCredentials()
-            access, refresh = self._issue_tokens(user, remember=False)
-            return SocialLoginResult(
-                access_token=access,
-                refresh_token=refresh,
-                must_change_password=user.must_change_password,
-                needs_sign_up=False,
-                temp_token=None,
-                email=None,
-                suggested_name=None,
-            )
+            return self._login_existing(user)
 
+        # 2) 이메일로 기존 사용자 매칭 — 일반 가입 또는 다른 PG 로 이미 가입된 사용자.
+        #    SocialAccount 자동 추가 + 즉시 로그인 (사용자 정책: 같은 이메일 = 같은 사람).
+        #    트레이드오프: PG 가 이메일 검증을 보장 안 하면 (카카오/네이버) 임의 이메일로
+        #    카카오 계정을 만든 공격자가 victim 의 일반 가입 계정에 침투 가능. 운영 시
+        #    PG 콘솔에서 "이메일 검증 후 동의" 옵션을 활성화해 위험을 줄일 것.
+        normalized_email = profile.email.lower()
+        user_by_email = await self.repo.get_by_email(normalized_email)
+        if user_by_email is not None:
+            if not user_by_email.is_active:
+                raise InvalidCredentials()
+            await self.repo.add_social_account(
+                SocialAccount(
+                    user_id=user_by_email.id,
+                    provider=provider,
+                    social_id=profile.social_id,
+                    email_at_link=normalized_email,
+                )
+            )
+            return self._login_existing(user_by_email)
+
+        # 3) 완전 신규 — needsSignUp + tempToken
         temp_token = create_social_signup_token(
             provider=profile.provider,
             social_id=profile.social_id,
@@ -309,6 +322,20 @@ class AuthService:
             temp_token=temp_token,
             email=profile.email,
             suggested_name=profile.name,
+        )
+
+    def _login_existing(self, user: User) -> SocialLoginResult:
+        """기존 사용자 로그인 결과 — needs_sign_up=False 분기 두 곳(직접 매칭 / 이메일 자동연결)
+        에서 공통 사용."""
+        access, refresh = self._issue_tokens(user, remember=False)
+        return SocialLoginResult(
+            access_token=access,
+            refresh_token=refresh,
+            must_change_password=user.must_change_password,
+            needs_sign_up=False,
+            temp_token=None,
+            email=None,
+            suggested_name=None,
         )
 
     async def social_sign_up(
@@ -332,8 +359,9 @@ class AuthService:
 
         Raises:
             UsernameTaken (409): login_id 중복.
-            EmailTaken (409): email 중복 — 다른 사용자 이미 사용 중. 정책상 자동
-                연결 안 함 (계정 탈취 위험).
+            EmailTaken (409): email 중복. 정상 흐름에선 social_login 단계에서
+                이메일 매칭으로 자동 연결되니 여기 도달하지 않지만, race condition
+                (tempToken 발급 후 동일 이메일로 다른 가입이 끼어든 경우) 방어용.
             TokenExpired (401): temp_token 만료/위조.
         """
         payload = decode_social_signup_token(temp_token)
@@ -476,18 +504,14 @@ async def _bg_apply_temp_password(
             ),
         )
     except Exception:
-        _log.exception(
-            "temp password email failed (user_id=%s) — DB 미변경", user_id
-        )
+        _log.exception("temp password email failed (user_id=%s) — DB 미변경", user_id)
         return
 
     async with async_session_factory() as session:
         try:
             user = await session.get(User, user_id)
             if user is None:
-                _log.warning(
-                    "temp password BG: user_id=%s 가 사라짐 (탈퇴?). 무시.", user_id
-                )
+                _log.warning("temp password BG: user_id=%s 가 사라짐 (탈퇴?). 무시.", user_id)
                 return
             user.password_hash = hash_password(temp_password)
             user.must_change_password = True

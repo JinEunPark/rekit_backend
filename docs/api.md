@@ -266,9 +266,18 @@ POST /auth/social/{provider}/callback
 `provider`: `kakao` | `naver` | `google`. **Public**.
 
 프론트가 PG 동의 페이지에서 받은 `?code` (네이버는 `+ state`) 를 그대로 전달하면,
-서버가 PG 토큰 교환 + 프로필 조회 후 두 갈래로 응답:
-- 기존 연결 사용자 → 즉시 로그인 (refresh 쿠키 set)
-- 신규 사용자 → `needsSignUp: true` + `tempToken` (15분 만료)
+서버가 PG 토큰 교환 + 프로필 조회 후 다음 순서로 매칭:
+
+1. **(provider, social_id) 매칭** — 같은 PG 로 이미 연결된 사용자 → 즉시 로그인
+2. **이메일 매칭** — `User.email` 이 PG 가 알려준 이메일과 일치하는 사용자가 있으면
+   해당 user 에 SocialAccount 자동 추가 + 즉시 로그인 (일반 가입자가 같은 이메일로
+   소셜 로그인 시도하는 케이스)
+3. **완전 신규** — `needsSignUp: true` + `tempToken` (15분 만료) 발급
+
+> ⚠️ **이메일 자동 연결의 트레이드오프**: 카카오/네이버는 이메일 검증을 명시적
+> 보장하지 않으므로 (구글만 `email_verified` 제공), 공격자가 임의 이메일로 PG
+> 계정을 만들어 자동 연결되는 시나리오 가능. 운영 시 PG 콘솔에서 "이메일 검증
+> 후 동의" 옵션을 활성화해 위험을 줄일 것.
 
 **Body**
 ```json
