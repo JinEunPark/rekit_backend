@@ -3,20 +3,40 @@
 JPA 비유: @RestController + @RequestMapping("/users").
 
 api.md §4 와 1:1 매핑:
-- POST /users/me/password : 비밀번호 변경 (본인) — 본 Phase 에서 구현
-- GET /users/me           : 프로필 조회 — 후속
+- GET  /users/me          : 프로필 조회 ✓
+- POST /users/me/password : 비밀번호 변경 (본인) ✓
 - PATCH /users/me         : 프로필 수정 — 후속
 - DELETE /users/me        : 회원탈퇴 — 후속
 """
 
 from fastapi import APIRouter, Depends, status
 
-from app.core.deps import get_current_user, get_user_service
+from app.auth.auth_schemas import UserResponse
+from app.core.deps import get_active_user, get_current_user, get_user_service
 from app.user.models import User
 from app.user.user_schemas import ChangePasswordRequest
 from app.user.user_service import UserService
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+@router.get(
+    "/me",
+    response_model=UserResponse,
+    response_model_by_alias=True,
+    status_code=status.HTTP_200_OK,
+    summary="내 프로필 조회",
+)
+async def get_me(
+    user: User = Depends(get_active_user),
+) -> UserResponse:
+    """로그인된 사용자 본인 프로필. api.md §4.1.
+
+    Auth required (Bearer access token). 임시 비밀번호 사용 중인 사용자는
+    PASSWORD_CHANGE_REQUIRED (403) 로 차단 — 정상 사용자만 자기 정보 조회.
+    `from_attributes=True` 라 ORM User → DTO 자동 매핑.
+    """
+    return UserResponse.model_validate(user)
 
 
 @router.post(
