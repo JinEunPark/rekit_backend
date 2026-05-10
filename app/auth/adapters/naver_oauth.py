@@ -14,6 +14,7 @@ import logging
 
 import httpx
 
+from app.auth.adapters._oauth_helpers import translate_oauth_error
 from app.auth.adapters.ports import SocialProfile
 
 _log = logging.getLogger(__name__)
@@ -38,9 +39,12 @@ class NaverOAuthAdapter:
         if not state:
             raise ValueError("Naver OAuth 는 token exchange 시 state 가 필수입니다.")
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            access_token = await self._fetch_access_token(client, code, state)
-            return await self._fetch_profile(client, access_token)
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                access_token = await self._fetch_access_token(client, code, state)
+                return await self._fetch_profile(client, access_token)
+        except httpx.HTTPError as e:
+            raise translate_oauth_error(e, provider="naver") from e
 
     async def _fetch_access_token(
         self, client: httpx.AsyncClient, code: str, state: str

@@ -245,37 +245,35 @@ async def test_social_login_raises_when_email_missing() -> None:
         await service.social_login(SocialProvider.KAKAO, oauth, code="c")
 
 
-async def test_social_login_converts_httpx_status_error_to_social_oauth_failed() -> None:
-    """PG token endpoint 4xx 응답 → SocialOAuthFailed (502). 가장 흔한 케이스:
-    code 만료, redirect_uri 콘솔 등록값 불일치, code 재사용."""
-
-    class _FailingOAuth:
-        async def exchange_code(self, code, state=None):
-            req = httpx.Request("POST", "https://pg.example/token")
-            res = httpx.Response(401, request=req, json={"error": "invalid_grant"})
-            raise httpx.HTTPStatusError("401", request=req, response=res)
-
-    repo = _FakeAuthRepo()
-    service = _make_service(repo)
-
-    with pytest.raises(SocialOAuthFailed):
-        await service.social_login(SocialProvider.KAKAO, _FailingOAuth(), code="x")  # type: ignore[arg-type]
+# httpx 에러 → SocialOAuthFailed 변환 책임은 어댑터 측 (translate_oauth_error 헬퍼)
+# 으로 이동. 따라서 service 단위가 아니라 helper 단위로 검증한다.
 
 
-async def test_social_login_converts_httpx_request_error_to_social_oauth_failed() -> None:
-    """네트워크 레이어 실패 (DNS, timeout) → SocialOAuthFailed (502)."""
+def test_translate_oauth_status_error_maps_to_social_oauth_failed() -> None:
+    """PG token endpoint 4xx 응답 → SocialOAuthFailed (status code 메시지 포함)."""
+    from app.auth.adapters._oauth_helpers import translate_oauth_error
 
-    class _NetworkErrorOAuth:
-        async def exchange_code(self, code, state=None):
-            raise httpx.ConnectTimeout("timeout")
+    req = httpx.Request("POST", "https://pg.example/token")
+    res = httpx.Response(401, request=req, json={"error": "invalid_grant"})
+    err = httpx.HTTPStatusError("401", request=req, response=res)
 
-    repo = _FakeAuthRepo()
-    service = _make_service(repo)
+    out = translate_oauth_error(err, provider="kakao")
 
-    with pytest.raises(SocialOAuthFailed):
-        await service.social_login(
-            SocialProvider.GOOGLE, _NetworkErrorOAuth(), code="x"  # type: ignore[arg-type]
-        )
+    assert isinstance(out, SocialOAuthFailed)
+    assert "401" in out.message
+    assert "kakao" in out.message
+
+
+def test_translate_oauth_network_error_maps_to_social_oauth_failed() -> None:
+    """네트워크 레이어 실패 (DNS, timeout) → SocialOAuthFailed."""
+    from app.auth.adapters._oauth_helpers import translate_oauth_error
+
+    err = httpx.ConnectTimeout("timeout")
+
+    out = translate_oauth_error(err, provider="google")
+
+    assert isinstance(out, SocialOAuthFailed)
+    assert "google" in out.message
 
 
 async def test_social_login_raises_invalid_credentials_when_linked_user_inactive() -> None:

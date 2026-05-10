@@ -296,8 +296,13 @@ async def social_callback(
             suggested_name=result.suggested_name,
         )
 
-    # 기존 사용자 로그인 — refresh 쿠키 set
-    assert result.refresh_token is not None  # needs_sign_up=False 때만
+    # 기존 사용자 로그인 — refresh 쿠키 set.
+    # SocialLoginResult invariant: needs_sign_up=False 분기는 항상 refresh_token 채움.
+    # assert 는 -O 최적화 시 제거되므로 명시 raise 로 prod 에서도 안전.
+    if result.refresh_token is None:
+        raise RuntimeError(
+            "social_login invariant: needs_sign_up=False 인데 refresh_token 이 없음"
+        )
     _set_refresh_cookie(response, result.refresh_token, settings.refresh_token_expire_days)
     return SocialCallbackResponse(
         needs_sign_up=False,

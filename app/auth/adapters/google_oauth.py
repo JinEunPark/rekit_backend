@@ -16,6 +16,7 @@ import logging
 
 import httpx
 
+from app.auth.adapters._oauth_helpers import translate_oauth_error
 from app.auth.adapters.ports import SocialProfile
 
 _log = logging.getLogger(__name__)
@@ -37,9 +38,12 @@ class GoogleOAuthAdapter:
         self.redirect_uri = redirect_uri
 
     async def exchange_code(self, code: str, state: str | None = None) -> SocialProfile:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            access_token = await self._fetch_access_token(client, code)
-            return await self._fetch_profile(client, access_token)
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                access_token = await self._fetch_access_token(client, code)
+                return await self._fetch_profile(client, access_token)
+        except httpx.HTTPError as e:
+            raise translate_oauth_error(e, provider="google") from e
 
     async def _fetch_access_token(self, client: httpx.AsyncClient, code: str) -> str:
         data = {

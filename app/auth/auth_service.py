@@ -21,7 +21,6 @@ import string
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-import httpx
 from fastapi import BackgroundTasks
 
 from app.auth.adapters.ports import OAuthProvider
@@ -35,7 +34,6 @@ from app.core.exceptions import (
     EmailTaken,
     InvalidCredentials,
     SocialEmailRequired,
-    SocialOAuthFailed,
     UsernameTaken,
 )
 from app.core.security import (
@@ -252,34 +250,26 @@ class AuthService:
     ) -> SocialLoginResult:
         """OAuth code 교환 후 SocialAccount 매칭 → 로그인 OR needsSignUp 분기.
 
-        흐름:
-        1. oauth.exchange_code(code) — PG 로 토큰 교환 + 프로필 조회
-        2. 프로필에 email 누락 시 SocialEmailRequired (422) raise
-        3. (provider, social_id) 로 기존 연결 조회
-           - 매칭: 즉시 로그인 (access/refresh 발급)
-           - 미매칭: 신규 — temp_token 발급, 클라가 약관 동의 후 social_sign_up 호출
+        매칭 순서:
+        1) (provider, social_id) 매칭 → 즉시 로그인
+        2) 이메일로 기존 사용자 매칭 → SocialAccount 자동 추가 + 즉시 로그인
+        3) 완전 신규 → needsSignUp + tempToken
+
+        트레이드오프(2번 분기): 카카오/네이버는 이메일 검증을 명시적 보장하지 않아,
+        임의 이메일로 PG 계정을 만든 공격자가 victim 의 일반 가입 계정에 자동 연결될
+        위험. 운영 시 PG 콘솔에서 "이메일 검증 후 동의" 옵션 활성화로 완화.
 
         Raises:
-            SocialOAuthFailed (502): PG 와의 통신/인증 실패 (code 만료, redirect_uri
-                불일치, 네트워크 오류 등). httpx 의 raw 예외를 도메인 예외로 변환해
-                글로벌 핸들러가 표준 응답 + CORS 헤더로 내려보내게.
+            SocialOAuthFailed (502): PG 통신/응답 실패. 어댑터가 httpx 의 raw
+                예외를 도메인 예외로 변환해서 던져준다.
+            SocialEmailRequired (422): 프로필에 이메일 없음 (사용자가 PG 에서 동의 거부).
+            InvalidCredentials (401): 매칭된 사용자가 is_active=False.
         """
-        try:
-            profile = await oauth.exchange_code(code, state)
-        except httpx.HTTPStatusError as e:
-            # 카카오/네이버/구글 token endpoint 가 4xx 응답 — 가장 흔한 케이스:
-            # code 만료 (1분 초과), redirect_uri 콘솔 등록값 불일치, code 재사용.
-            raise SocialOAuthFailed(
-                message=f"소셜 로그인 PG 응답 오류 ({e.response.status_code})"
-            ) from e
-        except httpx.RequestError as e:
-            # 타임아웃, DNS, TLS 등 네트워크 레이어 실패.
-            raise SocialOAuthFailed(message=f"소셜 로그인 PG 통신 실패: {e}") from e
+        profile = await oauth.exchange_code(code, state)
 
         if profile.email is None:
             raise SocialEmailRequired()
 
-        # 1) (provider, social_id) 매칭 — 같은 PG 로 이미 연결된 사용자 → 즉시 로그인
         existing = await self.repo.get_social_account(provider, profile.social_id)
         if existing is not None:
             user = await self.repo.get_by_id(existing.user_id)
@@ -287,11 +277,6 @@ class AuthService:
                 raise InvalidCredentials()
             return self._login_existing(user)
 
-        # 2) 이메일로 기존 사용자 매칭 — 일반 가입 또는 다른 PG 로 이미 가입된 사용자.
-        #    SocialAccount 자동 추가 + 즉시 로그인 (사용자 정책: 같은 이메일 = 같은 사람).
-        #    트레이드오프: PG 가 이메일 검증을 보장 안 하면 (카카오/네이버) 임의 이메일로
-        #    카카오 계정을 만든 공격자가 victim 의 일반 가입 계정에 침투 가능. 운영 시
-        #    PG 콘솔에서 "이메일 검증 후 동의" 옵션을 활성화해 위험을 줄일 것.
         normalized_email = profile.email.lower()
         user_by_email = await self.repo.get_by_email(normalized_email)
         if user_by_email is not None:
@@ -307,7 +292,6 @@ class AuthService:
             )
             return self._login_existing(user_by_email)
 
-        # 3) 완전 신규 — needsSignUp + tempToken
         temp_token = create_social_signup_token(
             provider=profile.provider,
             social_id=profile.social_id,
