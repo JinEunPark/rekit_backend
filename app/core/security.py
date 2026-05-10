@@ -68,3 +68,41 @@ def decode_token(token: str, expected_type: str = "access") -> dict:
     if payload.get("type") != expected_type:    # refresh 토큰을 access 자리에 못 씀
         raise TokenExpired(message=f"토큰 종류 불일치: {payload.get('type')}")
     return payload
+
+
+# ── 소셜 신규가입 임시 토큰 ─────────────────────────────────
+# OAuth 콜백에서 신규 사용자가 감지되면 발급. 사용자가 약관 동의 후 sign-up 호출 시
+# 이 토큰을 검증하면 (provider, social_id, email) 가 OAuth PG 로 검증된 값임을 보장.
+# 단명 (15분), 1회용은 아님 — 단명 + JWT_SECRET 서명으로 충분.
+
+_SOCIAL_SIGNUP_TOKEN_TYPE = "social-signup"
+
+
+def create_social_signup_token(
+    *,
+    provider: str,
+    social_id: str,
+    email: str | None,
+    name: str | None,
+    expires_in: timedelta | None = None,
+) -> str:
+    now = datetime.now(timezone.utc)
+    exp = now + (
+        expires_in
+        or timedelta(minutes=settings.social_signup_token_expire_minutes)
+    )
+    payload = {
+        "provider": provider,
+        "social_id": social_id,
+        "email": email,
+        "name": name,
+        "iat": now,
+        "exp": exp,
+        "type": _SOCIAL_SIGNUP_TOKEN_TYPE,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def decode_social_signup_token(token: str) -> dict:
+    """create_social_signup_token 으로 발급한 토큰 검증 + payload 반환."""
+    return decode_token(token, expected_type=_SOCIAL_SIGNUP_TOKEN_TYPE)

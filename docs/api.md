@@ -89,6 +89,8 @@ Authorization: Bearer <accessToken>
 | `TOKEN_EXPIRED` | 401 | 액세스 토큰 만료 / refresh 토큰 오용 |
 | `ACCOUNT_INACTIVE` | 403 | 비활성 계정 (탈퇴/정지) — 토큰은 유효하지만 권한 없음 |
 | `PASSWORD_CHANGE_REQUIRED` | 403 | 임시 비밀번호 사용 중 — 비번 변경 외 차단. 클라는 비번 변경 페이지로 redirect |
+| `SOCIAL_EMAIL_REQUIRED` | 422 | 소셜 OAuth 콜백에 이메일 동의 누락 — PG 측에서 동의 후 재시도 |
+| `SOCIAL_PROVIDER_NOT_CONFIGURED` | 503 | 해당 소셜 PG 의 .env 설정 누락 (운영 측 채워야 함) |
 | `USERNAME_TAKEN` | 409 | 아이디 중복 |
 | `EMAIL_TAKEN` | 409 | 이메일 중복 |
 | `IDENTITY_REQUIRED` | 422 | 본인인증 필요 |
@@ -253,20 +255,91 @@ POST /auth/refresh
 { "accessToken": "eyJ...", "tokenType": "bearer", "mustChangePassword": false }
 ```
 
-### 3.6 소셜 로그인 콜백 (예약)
+### 3.6 소셜 로그인
+
+#### 3.6.1 콜백 (code 교환)
 
 ```
 POST /auth/social/{provider}/callback
 ```
 
-`provider`: `kakao` | `naver`
+`provider`: `kakao` | `naver` | `google`. **Public**.
+
+프론트가 PG 동의 페이지에서 받은 `?code` (네이버는 `+ state`) 를 그대로 전달하면,
+서버가 PG 토큰 교환 + 프로필 조회 후 두 갈래로 응답:
+- 기존 연결 사용자 → 즉시 로그인 (refresh 쿠키 set)
+- 신규 사용자 → `needsSignUp: true` + `tempToken` (15분 만료)
 
 **Body**
 ```json
 { "code": "...", "state": "..." }
 ```
+`state` 는 네이버 token exchange 에 필수, 카카오/구글은 옵션. 프론트가 CSRF 방어를 위해
+state 를 자체 발급/검증한 뒤 그대로 전달.
 
-**Response 200**: 로그인과 동일 + 가입이 필요하면 `needsSignUp: true` 와 `tempToken` 반환
+**Response 200 — 기존 사용자 (로그인)**
+```json
+{
+  "needsSignUp": false,
+  "accessToken": "eyJ...",
+  "tokenType": "bearer",
+  "mustChangePassword": false
+}
+```
+(Refresh Token 은 Set-Cookie 로 내려감)
+
+**Response 200 — 신규 사용자 (needsSignUp)**
+```json
+{
+  "needsSignUp": true,
+  "tempToken": "eyJ...",
+  "email": "newuser@example.com",
+  "suggestedName": "홍길동"
+}
+```
+클라는 이 응답을 받으면 약관 동의 화면 표시 후 §3.6.2 로 가입 마무리.
+
+**Errors**:
+- `SOCIAL_EMAIL_REQUIRED` (422): 이메일 동의 누락 — PG 측에서 다시 동의 후 재시도
+- `SOCIAL_PROVIDER_NOT_CONFIGURED` (503): 해당 PG 의 .env 설정 누락
+- `INVALID_CREDENTIALS` (401): 연결된 사용자가 비활성
+
+#### 3.6.2 신규가입 완료 (tempToken + 약관 동의)
+
+```
+POST /auth/social/sign-up
+```
+
+**Public**. §3.6.1 의 `tempToken` 을 받아 약관 동의 + login_id 결정 후 신규 가입.
+
+**Body**
+```json
+{
+  "tempToken": "eyJ...",
+  "loginId": "newuser01",
+  "username": "홍길동",
+  "agreedTerms": true,
+  "agreedPrivacy": true,
+  "agreedMarketing": false
+}
+```
+
+`tempToken` 의 `(provider, social_id, email)` 은 OAuth PG 가 검증한 값이라 신뢰 가능 —
+사용자는 login_id / 표시이름 / 약관만 추가 입력. password_hash 는 추측 불가한 32자
+랜덤으로 자동 생성 (소셜 로그인만 가능. ID/PW 로그인 원하면 §3.8 로 임시 비번 발급).
+
+**Response 201**: §3.3 sign-in 과 동일 (accessToken / mustChangePassword + refresh 쿠키)
+
+**Errors**:
+- `USERNAME_TAKEN` (409): loginId 중복
+- `EMAIL_TAKEN` (409): tempToken 의 email 이 이미 다른 사용자가 사용 중
+- `TOKEN_EXPIRED` (401): tempToken 만료/위조
+- 검증 실패 (422): loginId 패턴, 약관 미동의 등
+
+> **Provider 별 콘솔 등록 redirect_uri** (예시 — 운영 환경에선 도메인 교체):
+> - Kakao : `https://rekit.kr/auth/callback/kakao`
+> - Naver : `https://rekit.kr/auth/callback/naver`
+> - Google: `https://rekit.kr/auth/callback/google`
 
 ### 3.7 아이디 찾기
 

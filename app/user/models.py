@@ -9,7 +9,7 @@ from app.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from app.address.models import Address
-    from app.auth.models import IdentityVerification
+    from app.auth.models import IdentityVerification, SocialAccount
     from app.cart.models import CartItem
     from app.order.models import Order
 
@@ -160,6 +160,9 @@ class User(Base, TimestampMixin):
     )
     orders: Mapped[list["Order"]] = relationship(back_populates="user")
     identity_verifications: Mapped[list["IdentityVerification"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    social_accounts: Mapped[list["SocialAccount"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 

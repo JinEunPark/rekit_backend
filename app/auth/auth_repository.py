@@ -14,6 +14,7 @@ service 만 의존시킨다. 모듈 간 cross-import 가 필요하면 string ref
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.models import SocialAccount, SocialProvider
 from app.user.models import User
 
 
@@ -84,3 +85,25 @@ class AuthRepository:
         self.session.add(user)
         await self.session.flush()
         return user
+
+    # ── 소셜 로그인 연결 ───────────────────────────────────
+
+    async def get_social_account(
+        self, provider: SocialProvider, social_id: str
+    ) -> SocialAccount | None:
+        """(provider, social_id) 매칭으로 연결된 SocialAccount 조회.
+
+        매칭되는 row 가 있으면 — 이미 연결된 사용자. service 는 user 만 꺼내 로그인.
+        """
+        stmt = select(SocialAccount).where(
+            SocialAccount.provider == provider,
+            SocialAccount.social_id == social_id,
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def add_social_account(self, account: SocialAccount) -> SocialAccount:
+        """SocialAccount INSERT + flush. user_id 가 이미 set 돼있어야 함."""
+        self.session.add(account)
+        await self.session.flush()
+        return account

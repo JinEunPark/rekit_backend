@@ -7,7 +7,7 @@ Alembic autogenerate 와 앱 부팅 양쪽에서 이 모듈만 import 하면
 """
 
 from app.address.models import Address  # noqa: F401
-from app.auth.models import IdentityVerification  # noqa: F401
+from app.auth.models import IdentityVerification, SocialAccount  # noqa: F401
 from app.cart.models import CartItem  # noqa: F401
 from app.catalog.models import Product, ProductImage  # noqa: F401
 from app.db.base import Base

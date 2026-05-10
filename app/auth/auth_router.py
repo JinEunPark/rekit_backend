@@ -14,8 +14,9 @@ JPA 비유: @RestController + @RequestMapping("/auth").
 3) async def 안에서 service 호출 후 응답 객체 반환
 """
 
-from fastapi import APIRouter, Cookie, Depends, Response, status
+from fastapi import APIRouter, Cookie, Depends, Path, Response, status
 
+from app.auth.adapters.ports import OAuthProvider
 from app.auth.auth_schemas import (
     AvailabilityResponse,
     CheckLoginIdRequest,
@@ -24,12 +25,16 @@ from app.auth.auth_schemas import (
     SentResponse,
     SignInRequest,
     SignUpRequest,
+    SocialCallbackRequest,
+    SocialCallbackResponse,
+    SocialSignUpRequest,
     TokenResponse,
     UserResponse,
 )
 from app.auth.auth_service import AuthService
+from app.auth.models import SocialProvider
 from app.core.config import settings
-from app.core.deps import get_auth_service
+from app.core.deps import get_auth_service, get_oauth_provider
 from app.core.exceptions import TokenExpired
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -243,3 +248,89 @@ async def sign_out(response: Response) -> None:
     비로그인 상태에서 호출돼도 멱등 (이미 없는 쿠키 지우기 = no-op).
     """
     response.delete_cookie(key="refresh_token", path=_refresh_cookie_path())
+
+
+# ── 소셜 로그인 ────────────────────────────────────────
+
+
+@router.post(
+    "/social/{provider}/callback",
+    response_model=SocialCallbackResponse,
+    response_model_by_alias=True,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_200_OK,
+    summary="소셜 로그인 콜백 — code 교환 후 로그인 또는 신규가입 분기",
+)
+async def social_callback(
+    body: SocialCallbackRequest,
+    response: Response,
+    provider: SocialProvider = Path(description="kakao | naver | google"),
+    oauth: OAuthProvider = Depends(get_oauth_provider),
+    service: AuthService = Depends(get_auth_service),
+) -> SocialCallbackResponse:
+    """카카오/네이버/구글 OAuth 콜백. api.md §3.6. Public.
+
+    프론트가 PG 동의 화면에서 받은 ?code (네이버는 + state) 를 그대로 전달하면,
+    서버가 PG 토큰 교환 + 프로필 조회 후:
+    - 기존 연결 사용자: accessToken/mustChangePassword 응답 + refresh 쿠키 set
+    - 신규: needsSignUp=true + tempToken/email/suggestedName
+
+    Errors → exception_handler:
+    - SocialEmailRequired (422): 이메일 동의 누락 — PG 측에서 다시 동의 후 재시도.
+    - SocialProviderNotConfigured (503): 해당 provider 의 .env 설정 누락.
+    - InvalidCredentials (401): 비활성 사용자.
+    """
+    result = await service.social_login(provider, oauth, body.code, body.state)
+
+    if result.needs_sign_up:
+        return SocialCallbackResponse(
+            needs_sign_up=True,
+            temp_token=result.temp_token,
+            email=result.email,
+            suggested_name=result.suggested_name,
+        )
+
+    # 기존 사용자 로그인 — refresh 쿠키 set
+    assert result.refresh_token is not None  # needs_sign_up=False 때만
+    _set_refresh_cookie(response, result.refresh_token, settings.refresh_token_expire_days)
+    return SocialCallbackResponse(
+        needs_sign_up=False,
+        access_token=result.access_token,
+        token_type="bearer",
+        must_change_password=result.must_change_password,
+    )
+
+
+@router.post(
+    "/social/sign-up",
+    response_model=TokenResponse,
+    response_model_by_alias=True,
+    status_code=status.HTTP_201_CREATED,
+    summary="소셜 신규가입 완료 (tempToken + 약관 동의 + login_id)",
+)
+async def social_sign_up(
+    body: SocialSignUpRequest,
+    response: Response,
+    service: AuthService = Depends(get_auth_service),
+) -> TokenResponse:
+    """소셜 콜백에서 받은 tempToken 으로 신규 가입 마무리. api.md §3.6 후속.
+
+    tempToken 안의 (provider, social_id, email) 은 PG 가 검증한 값이라 신뢰
+    가능. 사용자는 login_id / 표시이름 / 약관만 입력. 가입 후 즉시 로그인 토큰 응답.
+
+    Errors:
+    - UsernameTaken (409) / EmailTaken (409): 입력 login_id 또는 tempToken 의
+      email 이 이미 사용 중.
+    - TokenExpired (401): tempToken 만료/위조.
+    - 검증 실패 (422): login_id 형식, 약관 미동의.
+    """
+    user, access, refresh = await service.social_sign_up(
+        temp_token=body.temp_token,
+        login_id=body.login_id,
+        username=body.username,
+        agreed_marketing=body.agreed_marketing,
+    )
+    del user  # router 응답엔 토큰만 (UserResponse 가 필요하면 별도 반환 가능)
+
+    _set_refresh_cookie(response, refresh, settings.refresh_token_expire_days)
+    return TokenResponse(access_token=access, must_change_password=False)

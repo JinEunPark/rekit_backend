@@ -48,6 +48,23 @@ class Settings(BaseSettings):
     # 비밀번호 재설정 링크 등 메일 본문에 박을 프론트 base URL
     frontend_url: str = "http://localhost:5173"
 
+    # ── 소셜 로그인 OAuth ───────────────────────────────────
+    # 카카오: developers.kakao.com → 내 애플리케이션 → REST API 키 + Client Secret
+    # 네이버: developers.naver.com → 애플리케이션 → Client ID + Secret
+    # 구글: console.cloud.google.com → APIs & Services → OAuth 2.0 Client IDs
+    # redirect_uri 는 각 PG 콘솔 설정과 정확히 일치해야 함 (스키마/포트/경로 모두)
+    kakao_client_id: str | None = None
+    kakao_client_secret: str | None = None
+    kakao_redirect_uri: str | None = None
+    naver_client_id: str | None = None
+    naver_client_secret: str | None = None
+    naver_redirect_uri: str | None = None
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    google_redirect_uri: str | None = None
+    # 소셜 신규가입용 임시 토큰 만료 (분). JWT 로 단명 발급.
+    social_signup_token_expire_minutes: int = 15
+
     # S3 호환 오브젝트 스토리지 (dev: SeaweedFS)
     s3_endpoint_url: str
     s3_region: str = "ap-northeast-2"

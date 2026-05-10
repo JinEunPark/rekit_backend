@@ -65,6 +65,29 @@ class PasswordChangeRequired(BusinessError):
     message = "임시 비밀번호 사용 중입니다. 새 비밀번호로 변경 후 이용해주세요."
 
 
+class SocialEmailRequired(BusinessError):
+    """소셜 OAuth 콜백에서 이메일 동의가 빠진 경우.
+
+    카카오 등은 사용자가 이메일 동의를 거부할 수 있는데 — 이메일이 없으면
+    rekit 계정과 매핑할 수 없어 거절. 사용자는 PG 측에서 다시 이메일 동의 후 재시도.
+    """
+
+    code = "SOCIAL_EMAIL_REQUIRED"
+    http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+    message = "소셜 로그인에 이메일 동의가 필요합니다. 동의 후 다시 시도해주세요."
+
+
+class SocialProviderNotConfigured(BusinessError):
+    """해당 소셜 PG 의 client_id / secret / redirect_uri 가 .env 에 없는 상태.
+
+    503 으로 응답해 운영 측에서 .env 채우면 즉시 복구되는 일시 상태임을 명시.
+    """
+
+    code = "SOCIAL_PROVIDER_NOT_CONFIGURED"
+    http_status = status.HTTP_503_SERVICE_UNAVAILABLE
+    message = "해당 소셜 로그인이 아직 활성화되지 않았습니다."
+
+
 class UsernameTaken(BusinessError):
     code = "USERNAME_TAKEN"
     http_status = status.HTTP_409_CONFLICT

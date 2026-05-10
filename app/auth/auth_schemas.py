@@ -184,6 +184,79 @@ class FindPasswordRequest(BaseModel):
     email: EmailStr = Field(description="가입 시 등록한 이메일")
 
 
+# ── 소셜 로그인 ────────────────────────────────────────
+
+
+class SocialCallbackRequest(BaseModel):
+    """POST /auth/social/{provider}/callback 요청 바디. api.md §3.6.
+
+    프론트에서 PG 동의 화면 redirect 후 ?code=...&state=... 를 받아 그대로 전달.
+    state 검증은 프론트 책임이지만 네이버 token exchange 에 필수라 그대로 통과.
+    """
+
+    code: str = Field(min_length=1, description="OAuth authorization code")
+    state: str | None = Field(
+        default=None, description="OAuth state — 네이버는 필수, 카카오/구글은 옵션"
+    )
+
+
+class SocialCallbackResponse(BaseModel):
+    """소셜 콜백 응답 — login OR needsSignUp 두 갈래.
+
+    `needsSignUp=false`: 기존 사용자 — accessToken/tokenType/mustChangePassword 채움.
+    `needsSignUp=true`: 신규 — tempToken/email/suggestedName 채움. 클라는 약관
+    동의 화면 표시 후 POST /auth/social/sign-up 호출.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    needs_sign_up: bool = Field(serialization_alias="needsSignUp")
+
+    # 기존 사용자 로그인 시 채워짐
+    access_token: str | None = Field(default=None, serialization_alias="accessToken")
+    token_type: str | None = Field(default=None, serialization_alias="tokenType")
+    must_change_password: bool | None = Field(
+        default=None, serialization_alias="mustChangePassword"
+    )
+
+    # 신규 사용자 (needsSignUp=true) 시 채워짐
+    temp_token: str | None = Field(default=None, serialization_alias="tempToken")
+    email: str | None = Field(default=None)
+    suggested_name: str | None = Field(default=None, serialization_alias="suggestedName")
+
+
+class SocialSignUpRequest(BaseModel):
+    """POST /auth/social/sign-up — 소셜 신규가입 완료 (약관 동의 + login_id 결정).
+
+    `tempToken` 안에 (provider, social_id, email) 가 들어있어 OAuth PG 가 검증한
+    값임이 보장된다. 사용자는 login_id / 표시 이름 / 약관 동의만 추가 입력.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    temp_token: str = Field(min_length=10, validation_alias="tempToken")
+    login_id: str = Field(
+        pattern=LOGIN_ID_PATTERN,
+        validation_alias="loginId",
+        description="로그인 아이디 (영문·숫자·_ 4~20자)",
+    )
+    username: str = Field(
+        min_length=USERNAME_MIN_LENGTH,
+        max_length=USERNAME_MAX_LENGTH,
+        description="표시 이름",
+    )
+    agreed_terms: bool = Field(validation_alias="agreedTerms")
+    agreed_privacy: bool = Field(validation_alias="agreedPrivacy")
+    agreed_marketing: bool = Field(default=False, validation_alias="agreedMarketing")
+
+    @field_validator("agreed_terms", "agreed_privacy")
+    @classmethod
+    def _must_be_true(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("필수 약관에 동의해야 합니다.")
+        return v
+
+
 class SentResponse(BaseModel):
     """범용 발송-성공 응답. find-id / find-password 등이 사용한다.
 

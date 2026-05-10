@@ -17,25 +17,48 @@ JPA 비유: @Service. 라우터(@RestController) 와 리포지토리(@Repository
 
 import secrets
 import string
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from app.auth.adapters.ports import OAuthProvider
 from app.auth.auth_repository import AuthRepository
 from app.auth.auth_schemas import validate_password_policy
+from app.auth.models import SocialAccount, SocialProvider
 from app.common.email import EmailSender
 from app.core.config import settings
 from app.core.exceptions import (
     EmailTaken,
     InvalidCredentials,
+    SocialEmailRequired,
     UsernameTaken,
 )
 from app.core.security import (
     create_access_token,
     create_refresh_token,
+    create_social_signup_token,
+    decode_social_signup_token,
     decode_token,
     hash_password,
     verify_password,
 )
 from app.user.models import User, UserRole
+
+
+@dataclass(frozen=True)
+class SocialLoginResult:
+    """social_login 의 두 갈래 결과 — login OR needsSignUp.
+
+    `temp_token` 가 None 이면 기존 사용자 로그인 (access/refresh 사용).
+    None 이 아니면 신규 — 클라이언트는 약관 동의 후 `social_sign_up` 호출.
+    """
+
+    access_token: str | None
+    refresh_token: str | None
+    must_change_password: bool
+    needs_sign_up: bool
+    temp_token: str | None
+    email: str | None
+    suggested_name: str | None
 
 
 class AuthService:
@@ -203,6 +226,125 @@ class AuthService:
 
         access, refresh = self._issue_tokens(user, remember=False)
         return access, refresh, user.must_change_password
+
+    # ── 소셜 로그인 ───────────────────────────────────
+
+    async def social_login(
+        self,
+        provider: SocialProvider,
+        oauth: OAuthProvider,
+        code: str,
+        state: str | None = None,
+    ) -> SocialLoginResult:
+        """OAuth code 교환 후 SocialAccount 매칭 → 로그인 OR needsSignUp 분기.
+
+        흐름:
+        1. oauth.exchange_code(code) — PG 로 토큰 교환 + 프로필 조회
+        2. 프로필에 email 누락 시 SocialEmailRequired (422) raise
+        3. (provider, social_id) 로 기존 연결 조회
+           - 매칭: 즉시 로그인 (access/refresh 발급)
+           - 미매칭: 신규 — temp_token 발급, 클라가 약관 동의 후 social_sign_up 호출
+        """
+        profile = await oauth.exchange_code(code, state)
+        if profile.email is None:
+            raise SocialEmailRequired()
+
+        existing = await self.repo.get_social_account(provider, profile.social_id)
+        if existing is not None:
+            user = await self.repo.get_by_id(existing.user_id)
+            if user is None or not user.is_active:
+                raise InvalidCredentials()
+            access, refresh = self._issue_tokens(user, remember=False)
+            return SocialLoginResult(
+                access_token=access,
+                refresh_token=refresh,
+                must_change_password=user.must_change_password,
+                needs_sign_up=False,
+                temp_token=None,
+                email=None,
+                suggested_name=None,
+            )
+
+        temp_token = create_social_signup_token(
+            provider=profile.provider,
+            social_id=profile.social_id,
+            email=profile.email,
+            name=profile.name,
+        )
+        return SocialLoginResult(
+            access_token=None,
+            refresh_token=None,
+            must_change_password=False,
+            needs_sign_up=True,
+            temp_token=temp_token,
+            email=profile.email,
+            suggested_name=profile.name,
+        )
+
+    async def social_sign_up(
+        self,
+        *,
+        temp_token: str,
+        login_id: str,
+        username: str,
+        agreed_marketing: bool,
+    ) -> tuple[User, str, str]:
+        """social_login 의 needsSignUp 응답을 받아 약관 동의 후 신규 가입.
+
+        temp_token 의 (provider, social_id, email) 은 OAuth PG 가 검증한 값이라
+        신뢰 가능. login_id / username / agreed_* 는 클라가 사용자에게 받아 전달.
+
+        password_hash 는 더미 — 소셜 로그인만 가능하게 (랜덤 32자 bcrypt). 추후
+        find-password 로 임시비번 발급 받으면 ID/PW 로그인도 가능.
+
+        Returns:
+            (user, access_token, refresh_token).
+
+        Raises:
+            UsernameTaken (409): login_id 중복.
+            EmailTaken (409): email 중복 — 다른 사용자 이미 사용 중. 정책상 자동
+                연결 안 함 (계정 탈취 위험).
+            TokenExpired (401): temp_token 만료/위조.
+        """
+        payload = decode_social_signup_token(temp_token)
+        provider_value: str = payload["provider"]
+        social_id: str = payload["social_id"]
+        email: str = payload["email"]
+
+        if await self.repo.exists_by_login_id(login_id):
+            raise UsernameTaken()
+        if await self.repo.exists_by_email(email):
+            raise EmailTaken()
+
+        now = datetime.now(UTC)
+        # password_hash 는 항상 hash 형태여야 NOT NULL 제약 통과. 사용자가 추측 불가한
+        # 32자 랜덤을 hash — 소셜 로그인만 가능, ID/PW 로그인은 find-password 로 비번
+        # 재발급 받으면 됨.
+        random_password = secrets.token_urlsafe(24)
+        user = User(
+            login_id=login_id,
+            username=username,
+            email=email,
+            password_hash=hash_password(random_password),
+            role=UserRole.USER,
+            is_active=True,
+            must_change_password=False,
+            agreed_terms_at=now,
+            agreed_privacy_at=now,
+            agreed_marketing_at=now if agreed_marketing else None,
+        )
+        user = await self.repo.add(user)
+
+        social_account = SocialAccount(
+            user_id=user.id,
+            provider=SocialProvider(provider_value),
+            social_id=social_id,
+            email_at_link=email,
+        )
+        await self.repo.add_social_account(social_account)
+
+        access, refresh = self._issue_tokens(user, remember=False)
+        return user, access, refresh
 
     # ── 내부 헬퍼 ─────────────────────────────────────
 

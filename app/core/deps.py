@@ -19,8 +19,11 @@ from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.adapters.oauth_factory import build_oauth_provider
+from app.auth.adapters.ports import OAuthProvider
 from app.auth.auth_repository import AuthRepository
 from app.auth.auth_service import AuthService
+from app.auth.models import SocialProvider
 from app.common.email import ConsoleEmailSender, EmailSender, GmailSmtpEmailSender
 from app.core.config import Settings, settings
 from app.core.database import async_session_factory
@@ -79,6 +82,16 @@ def _cached_email_sender() -> EmailSender:
 def get_email_sender() -> EmailSender:
     """FastAPI Depends() 진입점. router 는 `Depends(get_email_sender)` 로 받는다."""
     return _cached_email_sender()
+
+
+def get_oauth_provider(provider: SocialProvider) -> OAuthProvider:
+    """소셜 로그인 어댑터 팩토리 — router 가 path param 의 provider 를 풀어서 호출.
+
+    Depends 로 직접 쓰지 않고 router 가 인자로 받아 직접 호출하는 방식
+    (path param 에 의존하기 때문). 매 요청마다 새 인스턴스 — httpx 클라이언트는
+    `async with` 로 어댑터 내부에서 관리됨.
+    """
+    return build_oauth_provider(provider, settings)
 
 
 # ── 도메인 서비스 팩토리 ─────────────────────────────────
