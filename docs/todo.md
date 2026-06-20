@@ -1,8 +1,11 @@
 # Rekle Backend TODO — 디자인 시스템 기반 구현 계획
 
 > **분석 기준**: `/Volumes/A/web_projects/rekle` 프론트 디자인 (Vue 3 mockup, `_design/buyer/*`, `_design/admin/*`)
-> **현 백엔드 상태**: SQLAlchemy 모델 9종 정의 완료, Alembic init 마이그레이션 1개, API는 `uploads`(presign/confirm)만 구현됨.
-> **작성일**: 2026-05-01
+> **현 백엔드 상태** (2026-06-20 기준):
+> - **구현 완료**: auth 전체 (회원가입/로그인/로그아웃/토큰갱신/아이디중복확인/아이디찾기/임시비밀번호/소셜로그인 3종/소셜회원가입), GET /users/me, POST /users/me/password, uploads(presign/confirm)
+> - **모델만 있음**: catalog, cart, address, order, payment
+> - **테스트**: 단위 131개 통과 (DB·Redis 없이 fake repo + fake OAuth)
+> **작성일**: 2026-05-01 / **최종 업데이트**: 2026-06-20
 
 ---
 
@@ -38,18 +41,22 @@
 
 ### 1.1 인증 / 회원 (`/api/v1/auth`, `/api/v1/users`)
 
-- [ ] `POST /auth/register` — 이메일+비밀번호+이름+휴대폰 회원가입
-- [ ] `POST /auth/login` — 이메일/비번 로그인 (JWT access+refresh)
-- [ ] `POST /auth/refresh` — 토큰 갱신
-- [ ] `POST /auth/logout`
+- [x] `POST /auth/sign-up` — 이메일+비밀번호+이름 회원가입 (`login_id` 기반, `UsernameTaken`/`EmailTaken` 처리)
+- [x] `POST /auth/sign-in` — 아이디/비번 로그인 (JWT access body + refresh HttpOnly 쿠키, `remember` 분기)
+- [x] `POST /auth/refresh` — 토큰 갱신 (refresh 쿠키 rotation)
+- [x] `POST /auth/sign-out` — refresh 쿠키 폐기
+- [x] `POST /auth/check-login-id` — 아이디 중복 확인
+- [x] `POST /auth/find-id` — 이메일로 아이디 발송 (BackgroundTasks + enumeration 방어)
+- [x] `POST /auth/find-password` — 임시 비밀번호 발급 후 메일 발송 (BackgroundTasks)
+- [x] `POST /auth/social/{provider}/callback` — 카카오/네이버/구글 OAuth (이메일 자동 연결 포함)
+- [x] `POST /auth/social/sign-up` — tempToken으로 소셜 신규가입 마무리
+- [x] `GET /users/me` — 내 정보 (프로필 + 소셜 연결 현황)
+- [x] `POST /users/me/password` — 비밀번호 변경 (`must_change_password` 해제)
 - [ ] `POST /auth/sms/send` — SMS 인증번호 발송 (Redis에 코드 캐시, rate-limit)
 - [ ] `POST /auth/sms/verify` — SMS 인증번호 검증 → `phone_verified_at` 기록
-- [ ] `POST /auth/social/kakao/callback` — 카카오 OAuth
-- [ ] `POST /auth/social/naver/callback` — 네이버 OAuth
-- [ ] `POST /auth/password/reset/request`, `POST /auth/password/reset/confirm`
-- [ ] `GET /users/me` — 내 정보(프로필+인증상태+누적 절약 kg+주문 카운트)
 - [ ] `PATCH /users/me` — 이름/연락처 수정
 - [ ] `DELETE /users/me` — 회원탈퇴 (CI/DI 즉시 파기, 거래정보 5년 보존)
+- [ ] `POST /users/me/social/connect` — 기가입 사용자 소셜 계정 추가 연결
 
 ### 1.2 본인인증 (`/api/v1/verifications`)
 
@@ -152,7 +159,7 @@
 - [ ] `GET /admin/sales/top-products?from=&to=&limit=5`
 - [ ] `GET /admin/sales/export.csv`
 
-### 1.15 업로드 (이미 구현)
+### 1.15 업로드 ✅ 구현 완료
 
 - [x] `POST /uploads/presign`
 - [x] `POST /uploads/confirm`
@@ -162,9 +169,15 @@
 
 ## 2. 인프라 / 공통 작업
 
-- [ ] **JWT 인증 의존성** (`Depends(get_current_user)`, `Depends(get_current_admin)`) — `app/core/security.py` 추가
-- [ ] **CRUD 레이어** (`app/crud/{user,product,order,...}.py`) — 현재 비어있음
-- [ ] **Pydantic 스키마** 전 도메인 (`app/schemas/{auth,user,product,order,...}.py`)
+- [x] **JWT 인증 의존성** (`Depends(get_current_user)`, `Depends(get_current_active_user)`) — `app/core/security.py` + `app/core/deps.py` 완료
+- [x] **에러 응답 표준화** — `{code, message}` 포맷 + 글로벌 Exception 핸들러 (500도 CORS 헤더 부착)
+- [x] **CORS** — `settings.cors_origins` 설정 완료, 글로벌 에러도 CORS 헤더 부착
+- [x] **Pydantic 스키마** — auth/user 도메인 완료 (`app/auth/auth_schemas.py`, `app/user/user_schemas.py`)
+- [x] **BackgroundTasks** — 이메일 발송 분리 (SMTP 지연이 요청 트랜잭션 묶지 않음)
+- [x] **이메일 어댑터** — `ConsoleEmailSender` (개발) + `GmailSmtpEmailSender` (운영) Protocol 기반
+- [x] **OAuth 어댑터** — 카카오/네이버/구글 `httpx` 기반 + `translate_oauth_error` 헬퍼 (Ports & Adapters)
+- [x] **테스트** — 단위 131개 (DB 없이 fake repo + fake OAuth), `tests/conftest.py` 기반
+- [ ] **CRUD 레이어** (`app/catalog,cart,order,payment` 도메인) — 아직 미구현
 - [ ] **`order_number` 생성기** — `RK-YYMMDD####` 포맷, 시퀀스 또는 advisory lock
 - [ ] **CI/DI 암호화 유틸** — KMS or Fernet, `services/crypto.py`
 - [ ] **외부 연동 서비스 모듈**
@@ -172,14 +185,11 @@
   - [ ] `services/toss_payments.py` — 결제 confirm/cancel/webhook 검증
   - [ ] `services/toss_identity.py` 또는 `services/nice_identity.py`
   - [ ] `services/sweet_tracker.py` — 배송 추적 (Redis 캐시 5분)
-  - [ ] `services/social_oauth.py` — 카카오/네이버
-- [ ] **Redis 통합** — `core/redis.py` (SMS 코드, 비로그인 장바구니, 배송 캐시, rate limit)
-- [ ] **Rate Limit** — slowapi, SMS 발송/로그인/회원가입에 적용
-- [ ] **Celery / BackgroundTasks** — 결제 후 알림 발송, 배송 폴링
-- [ ] **에러 응답 표준화** — `{code, message}` 포맷 (uploads에서 이미 사용 중)
-- [ ] **CORS** — `settings.cors_origins` 운영값 확정
+- [x] ~~`services/social_oauth.py`~~ — 어댑터 패턴으로 `app/auth/adapters/` 에 구현 완료
+- [ ] **Redis 통합** — `core/redis.py` (SMS 코드, 비로그인 장바구니, 배송 캐시, rate limit) — 의존성 있음, 미구현
+- [ ] **Rate Limit** — `slowapi` 의존성 있음, 미적용 (auth류 1분 10회, 일반 60회)
 - [ ] **관리자 보안** — IP 화이트리스트 또는 2FA, OpenAPI 문서 prod 비공개 (이미 적용됨)
-- [ ] **테스트** — pytest + httpx async, 멱등성 테스트(결제 confirm 중복 호출), 본인인증 콜백 멱등성
+- [ ] **통합 테스트** — testcontainers + pytest-asyncio (DB 쿼리 정확성·트랜잭션·인증 가드 검증)
 
 ---
 
@@ -195,14 +205,14 @@
 
 ### Phase 1 (최소 동작)
 
-1. JWT/Depends 정비 + auth(register/login/refresh/sms)
-2. 본인인증 (start/callback/me)
-3. 상품 CRUD (admin) + 조회 (buyer)
+1. ✅ JWT/Depends 정비 + auth (sign-up/sign-in/refresh/sign-out/find-id/find-password/소셜 3종)
+2. ✅ GET /users/me, POST /users/me/password
+3. 상품 조회 (buyer) — `GET /products`, `GET /products/{id}`, `GET /products/featured`, `GET /categories`
 4. 주소록 CRUD
 5. 장바구니 CRUD
-6. 주문 생성 + 토스 결제 confirm/webhook (멱등)
-7. 관리자 송장 입력 → SHIPPING 전환
-8. 단순 송장 링크 노출
+6. 본인인증 (start/callback/me) — Order 진입 가드
+7. 주문 생성 + 토스 결제 confirm/webhook (멱등)
+8. 관리자 상품 CRUD + 송장 입력 → SHIPPING 전환
 
 ### Phase 2 (안정화)
 
@@ -553,34 +563,40 @@ class Promotion(Base, TimestampMixin):
 
 > **아키텍처**: Modular Monolith + Layered (기본) + Ports & Adapters (외부 통합 모듈만)
 > **모듈 위치**: `app/{auth,user,catalog,cart,address,order,payment,common}/` — `docs/memory.md` 참고
-> **현재 상태 (2026-05-02)**: 모델 9종 + Alembic 4 마이그레이션 + uploads(presign/confirm) 완료. 모듈 구조로 재배치됨.
+> **현재 상태 (2026-06-20)**: Week 0 + Week 1 완료. auth 14 API + 단위 테스트 131개. catalog/cart/address/order/payment 모델만 있음.
 
 각 주차 끝에 마이그레이션 1개씩 추가하고, 모든 새 엔드포인트는 통합 테스트(pytest + httpx) 1개씩 동반.
 
-### Week 0 — 인프라 / 공통 기반 (반나절)
+### Week 0 — 인프라 / 공통 기반 ✅ 완료
 
-- [ ] `app/core/security.py` — JWT 발급/검증 (`python-jose`), 비번 해시 (`bcrypt` 또는 `argon2`)
-- [ ] `app/core/deps.py` 확장 — `get_current_user`, `get_current_admin` (Bearer 토큰 파싱)
-- [ ] `app/core/pagination.py` — `PageParams`, `CursorParams`, 응답 `meta` 헬퍼
-- [ ] `app/core/middleware.py` — 보안 헤더(HSTS/X-Content-Type-Options), 요청 로깅(structlog)
+- [x] `app/core/security.py` — JWT 발급/검증 (`python-jose`), 비번 해시 (`bcrypt`), social signup token
+- [x] `app/core/deps.py` — `get_current_user`, `get_current_active_user`, `get_auth_service`, `get_oauth_provider`, `get_email_sender`
+- [x] `app/core/pagination.py` — `PageParams`, `CursorParams`, 응답 `meta` 헬퍼
+- [x] `app/core/exceptions.py` — `BusinessError` 계층 + 글로벌 Exception 핸들러 (CORS 헤더 포함)
+- [x] `tests/conftest.py` — async test client, `make_user` 헬퍼, fake repo 패턴
+- [x] `pyproject.toml dev extras` — ruff/mypy/pytest-asyncio 설정 완료
+- [ ] `app/core/middleware.py` — 보안 헤더(HSTS/X-Content-Type-Options), structlog JSON 로깅
 - [ ] `app/core/redis.py` — `redis-py` async 클라이언트 + `Depends(get_redis)`
-- [ ] `app/core/rate_limit.py` — Redis 기반 (auth류 1분 10회, 일반 60회)
-- [ ] `tests/conftest.py` — async test client, 테스트 DB fixture, 인증 토큰 헬퍼
-- [ ] `pyproject.toml dev extras` 설치 (`uv pip install -e ".[dev]"`) + ruff/mypy CI
+- [ ] `app/core/rate_limit.py` — slowapi 기반 (auth류 1분 10회, 일반 60회)
 
-### Week 1 — Auth + User 모듈 (1.1, 1.2)
+### Week 1 — Auth + User 모듈 ✅ 완료 (일부 잔여)
 
-- [ ] `app/auth/{router,service,repository,schemas}.py` 골격
-- [ ] `POST /auth/register` — 이메일/비번/이름/휴대폰, `UsernameTaken`/`EmailTaken` 처리
-- [ ] `POST /auth/login` — JWT access(헤더) + refresh(HttpOnly 쿠키), `remember`로 만료 분기
-- [ ] `POST /auth/refresh` — refresh 쿠키만으로 새 access 발급
-- [ ] `POST /auth/logout` — refresh 무효화 + 빈 쿠키
-- [ ] `POST /auth/sms/send`, `POST /auth/sms/verify` — Redis 코드 캐시(만료 3분), `OtpRateLimited`
-- [ ] `POST /auth/password/reset/{request,confirm}` — 1회용 토큰 30분 만료
-- [ ] `POST /auth/social/{kakao,naver}/callback` — `SocialOAuthProvider` adapter 1개씩
-- [ ] `app/user/{router,service,repository,schemas}.py`
-- [ ] `GET /users/me`, `PATCH /users/me`, `DELETE /users/me`
-- [ ] CI/DI 컬럼 `AttributeConverter` 또는 SQLAlchemy `TypeDecorator`로 양방향 암호화(AES-GCM)
+- [x] `app/auth/{router,service,repository,schemas}.py`
+- [x] `POST /auth/sign-up` — `login_id`/비번/이름/이메일, `UsernameTaken`/`EmailTaken` 처리
+- [x] `POST /auth/sign-in` — JWT access(body) + refresh(HttpOnly 쿠키), `remember` 분기
+- [x] `POST /auth/refresh` — refresh 쿠키로 새 access 발급 (rotation)
+- [x] `POST /auth/sign-out` — refresh 쿠키 폐기
+- [x] `POST /auth/check-login-id` — 아이디 중복 확인
+- [x] `POST /auth/find-id` — 이메일로 아이디 발송 (BackgroundTasks, enumeration 방어)
+- [x] `POST /auth/find-password` — 임시 비밀번호 발급 메일 발송 (BackgroundTasks)
+- [x] `POST /auth/social/{kakao,naver,google}/callback` — OAuth 어댑터 3종 + 이메일 자동 연결
+- [x] `POST /auth/social/sign-up` — tempToken 소셜 신규가입
+- [x] `app/user/{router,service,repository,schemas}.py`
+- [x] `GET /users/me` — 프로필 + 소셜 연결 현황
+- [x] `POST /users/me/password` — 비밀번호 변경 (`must_change_password` 해제)
+- [ ] `POST /auth/sms/send`, `POST /auth/sms/verify` — Redis 코드 캐시 (미구현, Redis 필요)
+- [ ] `PATCH /users/me`, `DELETE /users/me` — 미구현
+- [ ] CI/DI 컬럼 양방향 암호화 (AES-GCM) — 미구현
 
 ### Week 2 — Catalog (상품) 모듈 (1.4, 1.10 일부)
 

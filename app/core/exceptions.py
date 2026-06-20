@@ -123,6 +123,12 @@ class IdentityRequired(BusinessError):
     message = "본인인증이 필요합니다."
 
 
+class ProductNotFound(BusinessError):
+    code = "PRODUCT_NOT_FOUND"
+    http_status = status.HTTP_404_NOT_FOUND
+    message = "상품을 찾을 수 없습니다."
+
+
 class OutOfStock(BusinessError):
     code = "OUT_OF_STOCK"
     http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
@@ -157,6 +163,48 @@ class RateLimited(BusinessError):
     code = "RATE_LIMITED"
     http_status = status.HTTP_429_TOO_MANY_REQUESTS
     message = "요청 한도를 초과했습니다."
+
+
+class AddressNotFound(BusinessError):
+    code = "ADDRESS_NOT_FOUND"
+    http_status = status.HTTP_404_NOT_FOUND
+    message = "배송지를 찾을 수 없습니다."
+
+
+class AddressLimitExceeded(BusinessError):
+    code = "ADDRESS_LIMIT_EXCEEDED"
+    http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+    message = "배송지는 최대 10개까지 등록할 수 있습니다."
+
+
+class CartItemNotFound(BusinessError):
+    code = "CART_ITEM_NOT_FOUND"
+    http_status = status.HTTP_404_NOT_FOUND
+    message = "장바구니 항목을 찾을 수 없습니다."
+
+
+class FavoriteNotFound(BusinessError):
+    code = "FAVORITE_NOT_FOUND"
+    http_status = status.HTTP_404_NOT_FOUND
+    message = "관심상품을 찾을 수 없습니다."
+
+
+class OrderNotFound(BusinessError):
+    code = "ORDER_NOT_FOUND"
+    http_status = status.HTTP_404_NOT_FOUND
+    message = "주문을 찾을 수 없습니다."
+
+
+class OrderCancelForbidden(BusinessError):
+    code = "ORDER_CANCEL_FORBIDDEN"
+    http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+    message = "현재 상태에서는 주문을 취소할 수 없습니다."
+
+
+class PermissionDenied(BusinessError):
+    code = "PERMISSION_DENIED"
+    http_status = status.HTTP_403_FORBIDDEN
+    message = "권한이 없습니다."
 
 
 # ── handler 등록 ──────────────────────────────────────────────

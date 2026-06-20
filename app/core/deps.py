@@ -19,17 +19,30 @@ from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.address.address_repository import AddressRepository
+from app.address.address_service import AddressService
 from app.auth.adapters.oauth_factory import build_oauth_provider
 from app.auth.adapters.ports import OAuthProvider
 from app.auth.auth_repository import AuthRepository
 from app.auth.auth_service import AuthService
 from app.auth.models import SocialProvider
+from app.cart.cart_repository import CartRepository
+from app.cart.cart_service import CartService
+from app.catalog.admin_catalog_service import AdminCatalogService
+from app.catalog.catalog_repository import CatalogRepository
+from app.catalog.catalog_service import CatalogService
 from app.common.email import ConsoleEmailSender, EmailSender, GmailSmtpEmailSender
 from app.core.config import Settings, settings
 from app.core.database import async_session_factory
-from app.core.exceptions import AccountInactive, PasswordChangeRequired, TokenExpired
+from app.core.exceptions import AccountInactive, PasswordChangeRequired, PermissionDenied, TokenExpired
 from app.core.security import decode_token
-from app.user.models import User
+from app.favorites.favorites_repository import FavoritesRepository
+from app.favorites.favorites_service import FavoritesService
+from app.order.order_repository import OrderRepository
+from app.order.order_service import OrderService
+from app.payment.payment_repository import PaymentRepository
+from app.payment.payment_service import PaymentService
+from app.user.models import User, UserRole
 from app.user.user_service import UserService
 
 
@@ -119,6 +132,20 @@ async def get_user_service() -> UserService:
     return UserService()
 
 
+async def get_address_service(
+    session: AsyncSession = Depends(db_session),
+) -> AddressService:
+    """AddressService 팩토리. session → AddressRepository → AddressService."""
+    return AddressService(AddressRepository(session))
+
+
+async def get_catalog_service(
+    session: AsyncSession = Depends(db_session),
+) -> CatalogService:
+    """CatalogService 팩토리. session → CatalogRepository → CatalogService."""
+    return CatalogService(CatalogRepository(session))
+
+
 # ── 인증 dependency ─────────────────────────────────────
 # 보호 endpoint 는 `Depends(get_current_user)` 또는 `Depends(get_active_user)` 로
 # User 객체를 받는다. JPA 비유: Spring Security 의 `@AuthenticationPrincipal User user`.
@@ -163,3 +190,44 @@ async def get_active_user(
     if user.must_change_password:
         raise PasswordChangeRequired()
     return user
+
+
+async def get_admin_user(
+    user: User = Depends(get_active_user),
+) -> User:
+    """ADMIN 역할 전용 엔드포인트 가드. 관리자가 아니면 403 PermissionDenied."""
+    if user.role != UserRole.ADMIN:
+        raise PermissionDenied()
+    return user
+
+
+async def get_cart_service(
+    session: AsyncSession = Depends(db_session),
+) -> CartService:
+    return CartService(CartRepository(session))
+
+
+async def get_favorites_service(
+    session: AsyncSession = Depends(db_session),
+) -> FavoritesService:
+    return FavoritesService(FavoritesRepository(session))
+
+
+async def get_order_service(
+    session: AsyncSession = Depends(db_session),
+) -> OrderService:
+    return OrderService(OrderRepository(session))
+
+
+async def get_payment_service(
+    session: AsyncSession = Depends(db_session),
+) -> PaymentService:
+    from app.payment.adapters.toss import TossPaymentGateway
+
+    return PaymentService(PaymentRepository(session), TossPaymentGateway())
+
+
+async def get_admin_catalog_service(
+    session: AsyncSession = Depends(db_session),
+) -> AdminCatalogService:
+    return AdminCatalogService(CatalogRepository(session))

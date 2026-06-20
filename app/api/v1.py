@@ -19,9 +19,16 @@
 
 from fastapi import APIRouter
 
+from app.address.address_router import router as address_router
 from app.auth.auth_router import router as auth_router
+from app.cart.cart_router import router as cart_router
+from app.catalog.admin_catalog_router import router as admin_catalog_router
+from app.catalog.catalog_router import router as catalog_router
 from app.common.uploads import router as uploads_router
 from app.core.config import settings
+from app.favorites.favorites_router import router as favorites_router
+from app.order.order_router import router as order_router
+from app.payment.payment_router import router as payment_router
 from app.user.user_router import router as user_router
 
 api_v1 = APIRouter(prefix=settings.api_v1_prefix)
@@ -29,3 +36,10 @@ api_v1 = APIRouter(prefix=settings.api_v1_prefix)
 api_v1.include_router(uploads_router)
 api_v1.include_router(auth_router)
 api_v1.include_router(user_router)
+api_v1.include_router(address_router)
+api_v1.include_router(catalog_router)
+api_v1.include_router(admin_catalog_router)
+api_v1.include_router(cart_router)
+api_v1.include_router(favorites_router)
+api_v1.include_router(order_router)
+api_v1.include_router(payment_router)
