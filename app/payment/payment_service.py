@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from app.core.exceptions import OrderNotFound, PaymentFailed
 from app.order.models import OrderStatus
+
+_EVENT_PAYMENT_STATUS_CHANGED = "PAYMENT_STATUS_CHANGED"
+_TOSS_DONE = "DONE"
+_TOSS_CANCELED = "CANCELED"
+_TOSS_PARTIAL_CANCELED = "PARTIAL_CANCELED"
+_TOSS_ABORTED = "ABORTED"
 from app.payment.adapters.ports import PaymentGateway, TossConfirmResult
 from app.payment.models import Payment, PaymentStatus, PgProvider
 from app.payment.payment_repository import PaymentRepository
@@ -111,13 +117,17 @@ class PaymentService:
             installment_months=ready_payment.installment_months,
         )
 
+    def verify_webhook(self, body: bytes, signature: str) -> bool:
+        """웹훅 HMAC 서명 검증. router 가 _gateway 에 직접 접근하지 않도록 위임."""
+        return self._gateway.verify_webhook_signature(body, signature)
+
     async def handle_webhook(self, payload: TossWebhookPayload) -> None:
         """PG 웹훅 처리. 멱등성 보장 — 이미 PAID 면 skip.
 
         eventType "PAYMENT_STATUS_CHANGED" 만 처리.
         data.status 에 따라 PAID/CANCELLED/FAILED 전환.
         """
-        if payload.eventType != "PAYMENT_STATUS_CHANGED":
+        if payload.eventType != _EVENT_PAYMENT_STATUS_CHANGED:
             return
 
         data = payload.data
@@ -134,10 +144,10 @@ class PaymentService:
             return
 
         pg_status: str = data.get("status", "")
-        if pg_status == "DONE":
+        if pg_status == _TOSS_DONE:
             payment.status = PaymentStatus.PAID
-        elif pg_status in ("CANCELED", "PARTIAL_CANCELED"):
+        elif pg_status in (_TOSS_CANCELED, _TOSS_PARTIAL_CANCELED):
             payment.status = PaymentStatus.CANCELLED
-        elif pg_status == "ABORTED":
+        elif pg_status == _TOSS_ABORTED:
             payment.status = PaymentStatus.FAILED
             payment.fail_reason = data.get("failure", {}).get("message")

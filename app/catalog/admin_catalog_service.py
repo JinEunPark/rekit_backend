@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from math import ceil
-
 from app.catalog.admin_catalog_schemas import (
     AdminProductCreate,
     AdminProductDetailResponse,
@@ -13,9 +11,10 @@ from app.catalog.admin_catalog_schemas import (
     AdminProductUpdate,
 )
 from app.catalog.catalog_repository import CatalogRepository
+from app.catalog.catalog_utils import discount_pct as _discount_pct
 from app.catalog.models import Product, ProductImage, ProductStatus
 from app.core.exceptions import ProductNotFound
-from app.core.pagination import PageMeta
+from app.core.pagination import build_page_meta
 
 
 class AdminCatalogService:
@@ -26,15 +25,9 @@ class AdminCatalogService:
         self, params: AdminProductListParams
     ) -> AdminProductListResponse:
         products, total = await self._repo.admin_get_list(params)
-        meta = PageMeta(
-            page=params.page,
-            size=params.size,
-            total=total,
-            total_pages=ceil(total / params.size) if total else 0,
-        )
         return AdminProductListResponse(
             items=[_to_detail(p) for p in products],
-            meta=meta,
+            meta=build_page_meta(total, params.page, params.size),
         )
 
     async def create_product(
@@ -84,12 +77,6 @@ class AdminCatalogService:
         if product is None:
             raise ProductNotFound()
         product.status = ProductStatus.INACTIVE
-
-
-def _discount_pct(product: Product) -> int | None:
-    if not product.original_price or product.original_price <= 0:
-        return None
-    return round((1 - product.price / product.original_price) * 100)
 
 
 def _to_image(img: ProductImage) -> AdminProductImageResponse:

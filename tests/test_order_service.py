@@ -135,9 +135,16 @@ class FakeOrderRepository:
     async def get_by_order_number(self, order_number: str) -> Order | None:
         return next((o for o in self._orders if o.order_number == order_number), None)
 
-    async def get_product_with_lock(self, product_id: int) -> Product | None:
-        """Fake: lock 없이 단순 조회."""
+    async def get_product(self, product_id: int) -> Product | None:
         return self._products.get(product_id)
+
+    async def get_product_with_lock(self, product_id: int) -> Product | None:
+        return self._products.get(product_id)
+
+    async def get_products_with_lock(
+        self, product_ids: list[int]
+    ) -> dict[int, Product]:
+        return {pid: self._products[pid] for pid in product_ids if pid in self._products}
 
     async def get_address_by_user(self, user_id: int, address_id: int) -> Address | None:
         return next(

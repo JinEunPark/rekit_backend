@@ -86,7 +86,7 @@ async def toss_webhook(
     raw_body = await request.body()
     signature = request.headers.get("TossPayments-Signature", "")
 
-    if not service._gateway.verify_webhook_signature(raw_body, signature):
+    if not service.verify_webhook(raw_body, signature):
         raise PaymentFailed("웹훅 서명 검증 실패")
 
     await service.handle_webhook(body)

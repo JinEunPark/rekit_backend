@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from math import ceil
 
 from app.catalog.models import ProductStatus
 from app.core.exceptions import (
@@ -21,7 +20,7 @@ from app.core.exceptions import (
     OrderNotFound,
     OutOfStock,
 )
-from app.core.pagination import PageMeta
+from app.core.pagination import build_page_meta
 from app.core.shipping import calc_shipping, is_direct_delivery_available
 from app.order.models import Order, OrderItem, OrderStatus
 from app.order.order_number import build_order_number
@@ -63,7 +62,7 @@ class OrderService:
 
         items_total = 0
         for item_req in req.items:
-            product = await self._repo.get_product_with_lock(item_req.product_id)
+            product = await self._repo.get_product(item_req.product_id)
             if product is None or product.status != ProductStatus.ACTIVE:
                 raise OutOfStock()
             items_total += product.price * item_req.quantity
@@ -88,31 +87,26 @@ class OrderService:
         identity_verified: bool,
     ) -> OrderResponse:
         """주문을 생성하고 재고를 차감한 뒤 OrderResponse 를 반환한다."""
-        # 1. 본인인증 확인
         if not identity_verified:
             raise IdentityRequired()
 
-        # 2. 배송지 확인 + 소유권
         address = await self._repo.get_address_by_user(user_id, req.address_id)
         if address is None:
             raise AddressNotFound()
 
-        # 3. DIRECT 배송 가능 지역 확인
         if req.shipping_method == ShipmentMethod.DIRECT:
             if not is_direct_delivery_available(address.zipcode):
                 raise OrderCancelForbidden("직배송 불가 지역입니다.")
 
-        # 4. 상품 확인 + 재고 확인 (FOR UPDATE 락)
-        product_map = {}
+        product_ids = [i.product_id for i in req.items]
+        product_map = await self._repo.get_products_with_lock(product_ids)
         for item_req in req.items:
-            product = await self._repo.get_product_with_lock(item_req.product_id)
+            product = product_map.get(item_req.product_id)
             if product is None or product.status != ProductStatus.ACTIVE:
                 raise OutOfStock()
             if product.stock < item_req.quantity:
                 raise OutOfStock()
-            product_map[item_req.product_id] = product
 
-        # 5. 배송비 계산
         shipping_fee, discount_amount = calc_shipping(req.shipping_method)
 
         items_total = sum(
@@ -120,7 +114,7 @@ class OrderService:
         )
         total_amount = items_total + shipping_fee - discount_amount
 
-        # 6. Order 생성 (order_number 임시값 — flush 후 PK 기반으로 교체)
+        # order_number 임시값 — flush 후 PK 기반으로 교체
         order = Order(
             order_number="RK-PENDING",
             user_id=user_id,
@@ -137,34 +131,24 @@ class OrderService:
             memo=req.memo,
         )
 
-        # 7. OrderItem 생성 (스냅샷)
-        order_items: list[OrderItem] = []
-        for item_req in req.items:
-            product = product_map[item_req.product_id]
-            image_url = product.images[0].url if product.images else None
-            order_items.append(
-                OrderItem(
-                    product_id=product.id,
-                    product_title_snapshot=product.title,
-                    product_image_url_snapshot=image_url,
-                    price_snapshot=product.price,
-                    quantity=item_req.quantity,
-                )
+        order.items = [
+            OrderItem(
+                product_id=(p := product_map[i.product_id]).id,
+                product_title_snapshot=p.title,
+                product_image_url_snapshot=p.images[0].url if p.images else None,
+                price_snapshot=p.price,
+                quantity=i.quantity,
             )
-        order.items = order_items
+            for i in req.items
+        ]
 
-        # 8. flush → order.id 확보
         await self._repo.save(order)
 
-        # 9. PK 기반 order_number 생성 후 교체
-        order_number = build_order_number(order.id)
-        await self._repo.update_order_number(order, order_number)
+        await self._repo.update_order_number(order, build_order_number(order.id))
 
-        # 10. 재고 차감
         for item_req in req.items:
             await self._repo.decrement_stock(item_req.product_id, item_req.quantity)
 
-        # 11. 응답 반환
         return _to_order_response(order)
 
     # ── 목록 ────────────────────────────────────────────────────────
@@ -174,10 +158,9 @@ class OrderService:
     ) -> OrderListResponse:
         """사용자 주문 목록 (최신순, 페이지네이션)."""
         orders, total = await self._repo.get_list_by_user(user_id, page, size)
-        total_pages = ceil(total / size) if total else 0
         return OrderListResponse(
             items=[_to_order_response(o) for o in orders],
-            meta=PageMeta(page=page, size=size, total=total, total_pages=total_pages),
+            meta=build_page_meta(total, page, size),
         )
 
     # ── 단건 조회 ────────────────────────────────────────────────────

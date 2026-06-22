@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from app.catalog.models import Product
+from app.catalog.catalog_utils import discount_pct as _discount_pct
+from app.catalog.catalog_utils import thumbnail_url as _thumbnail_url
 from app.core.exceptions import FavoriteNotFound
 from app.favorites.favorites_repository import FavoritesRepository
 from app.favorites.favorites_schemas import FavoriteProductItem, FavoriteToggleResponse
@@ -32,16 +33,6 @@ class FavoritesService:
             raise FavoriteNotFound()
         await self._repo.delete(fav)
         return FavoriteToggleResponse(product_id=product_id, is_favorite=False)
-
-
-def _discount_pct(product: Product) -> int | None:
-    if not product.original_price or product.original_price <= 0:
-        return None
-    return round((1 - product.price / product.original_price) * 100)
-
-
-def _thumbnail_url(product: Product) -> str | None:
-    return product.images[0].url if product.images else None
 
 
 def _to_item(fav: Favorite) -> FavoriteProductItem:

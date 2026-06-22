@@ -48,12 +48,18 @@ class OrderRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_product_with_lock(self, product_id: int) -> Product | None:
-        """SELECT … FOR UPDATE 로 상품 조회 (재고 갱신 직전 락).
+    async def get_product(self, product_id: int) -> Product | None:
+        """락 없는 단건 상품 조회. get_quote 같은 read-only 경로용."""
+        stmt = (
+            select(Product)
+            .where(Product.id == product_id)
+            .options(selectinload(Product.images))
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
 
-        동시에 같은 상품을 주문하는 경쟁 조건을 방지한다.
-        이미지도 함께 로드해 스냅샷 URL 추출에 사용한다.
-        """
+    async def get_product_with_lock(self, product_id: int) -> Product | None:
+        """SELECT … FOR UPDATE 로 상품 단건 조회 (재고 갱신 직전 락)."""
         stmt = (
             select(Product)
             .where(Product.id == product_id)
@@ -62,6 +68,23 @@ class OrderRepository:
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_products_with_lock(
+        self, product_ids: list[int]
+    ) -> dict[int, Product]:
+        """N개 상품을 WHERE id IN (...) FOR UPDATE 한 번에 조회.
+
+        create_order 에서 순차 락 대신 사용 — 쿼리 수 O(N)→O(1).
+        반환: {product_id: Product} — 없는 id 는 포함되지 않음.
+        """
+        stmt = (
+            select(Product)
+            .where(Product.id.in_(product_ids))
+            .with_for_update()
+            .options(selectinload(Product.images))
+        )
+        result = await self._session.execute(stmt)
+        return {p.id: p for p in result.scalars()}
 
     async def get_address_by_user(self, user_id: int, address_id: int) -> Address | None:
         """user_id + address_id 로 배송지 조회. 소유권 확인 포함."""

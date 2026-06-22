@@ -24,3 +24,13 @@ def page_meta(total: int, params: PageParams) -> PageMeta:
         total=total,
         total_pages=ceil(total / params.size) if total else 0,
     )
+
+
+def build_page_meta(total: int, page: int, size: int) -> PageMeta:
+    """page/size 를 직접 받는 변형 — PageParams 를 상속하지 않는 쿼리 파라미터용."""
+    return PageMeta(
+        page=page,
+        size=size,
+        total=total,
+        total_pages=ceil(total / size) if total else 0,
+    )

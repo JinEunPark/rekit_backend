@@ -7,8 +7,6 @@
 
 from __future__ import annotations
 
-from math import ceil
-
 from app.catalog.catalog_repository import CatalogRepository
 from app.catalog.catalog_schemas import (
     CATEGORY_META,
@@ -19,9 +17,11 @@ from app.catalog.catalog_schemas import (
     ProductListResponse,
     ProductResponse,
 )
+from app.catalog.catalog_utils import discount_pct as _discount_pct
+from app.catalog.catalog_utils import thumbnail_url as _thumbnail_url
 from app.catalog.models import Product, ProductImage
 from app.core.exceptions import ProductNotFound
-from app.core.pagination import PageMeta
+from app.core.pagination import build_page_meta
 
 
 class CatalogService:
@@ -30,15 +30,9 @@ class CatalogService:
 
     async def list_products(self, params: ProductListParams) -> ProductListResponse:
         products, total = await self.repo.get_list(params)
-        meta = PageMeta(
-            page=params.page,
-            size=params.size,
-            total=total,
-            total_pages=ceil(total / params.size) if total else 0,
-        )
         return ProductListResponse(
             items=[_to_response(p) for p in products],
-            meta=meta,
+            meta=build_page_meta(total, params.page, params.size),
         )
 
     async def get_product(self, product_id: int) -> ProductDetailResponse:
@@ -56,16 +50,6 @@ class CatalogService:
 
 
 # ── 내부 매핑 헬퍼 ───────────────────────────────────────────
-
-
-def _thumbnail_url(product: Product) -> str | None:
-    return product.images[0].url if product.images else None
-
-
-def _discount_pct(product: Product) -> int | None:
-    if not product.original_price or product.original_price <= 0:
-        return None
-    return round((1 - product.price / product.original_price) * 100)
 
 
 def _to_image(image: ProductImage) -> ProductImageResponse:

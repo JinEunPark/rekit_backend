@@ -19,9 +19,6 @@ from app.catalog.models import Product, ProductStatus
 if TYPE_CHECKING:
     from app.catalog.admin_catalog_schemas import AdminProductListParams
 
-if TYPE_CHECKING:
-    from app.catalog.admin_catalog_schemas import AdminProductListParams
-
 
 class CatalogRepository:
     def __init__(self, session: AsyncSession) -> None:
