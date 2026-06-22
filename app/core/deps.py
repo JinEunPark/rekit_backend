@@ -28,6 +28,8 @@ from app.auth.auth_service import AuthService
 from app.auth.models import SocialProvider
 from app.cart.cart_repository import CartRepository
 from app.cart.cart_service import CartService
+from app.admin.dashboard_service import DashboardService
+from app.admin.sales_service import SalesService
 from app.catalog.admin_catalog_service import AdminCatalogService
 from app.catalog.catalog_repository import CatalogRepository
 from app.catalog.catalog_service import CatalogService
@@ -38,10 +40,14 @@ from app.core.exceptions import AccountInactive, PasswordChangeRequired, Permiss
 from app.core.security import decode_token
 from app.favorites.favorites_repository import FavoritesRepository
 from app.favorites.favorites_service import FavoritesService
+from app.order.admin_order_repository import AdminOrderRepository
+from app.order.admin_order_service import AdminOrderService
 from app.order.order_repository import OrderRepository
 from app.order.order_service import OrderService
 from app.payment.payment_repository import PaymentRepository
 from app.payment.payment_service import PaymentService
+from app.user.admin_members_repository import AdminMembersRepository
+from app.user.admin_members_service import AdminMembersService
 from app.user.models import User, UserRole
 from app.user.user_service import UserService
 
@@ -231,3 +237,27 @@ async def get_admin_catalog_service(
     session: AsyncSession = Depends(db_session),
 ) -> AdminCatalogService:
     return AdminCatalogService(CatalogRepository(session))
+
+
+async def get_admin_members_service(
+    session: AsyncSession = Depends(db_session),
+) -> AdminMembersService:
+    return AdminMembersService(AdminMembersRepository(session))
+
+
+async def get_admin_order_service(
+    session: AsyncSession = Depends(db_session),
+) -> AdminOrderService:
+    return AdminOrderService(AdminOrderRepository(session))
+
+
+async def get_dashboard_service(
+    session: AsyncSession = Depends(db_session),
+) -> DashboardService:
+    return DashboardService(session)
+
+
+async def get_sales_service(
+    session: AsyncSession = Depends(db_session),
+) -> SalesService:
+    return SalesService(session)

@@ -201,6 +201,18 @@ class OrderCancelForbidden(BusinessError):
     message = "현재 상태에서는 주문을 취소할 수 없습니다."
 
 
+class UserNotFound(BusinessError):
+    code = "USER_NOT_FOUND"
+    http_status = status.HTTP_404_NOT_FOUND
+    message = "사용자를 찾을 수 없습니다."
+
+
+class InvalidOrderStatus(BusinessError):
+    code = "INVALID_ORDER_STATUS"
+    http_status = status.HTTP_409_CONFLICT
+    message = "현재 상태에서는 해당 작업을 수행할 수 없습니다."
+
+
 class PermissionDenied(BusinessError):
     code = "PERMISSION_DENIED"
     http_status = status.HTTP_403_FORBIDDEN

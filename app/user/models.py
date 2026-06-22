@@ -21,6 +21,14 @@ class UserRole(str, enum.Enum):
     ADMIN = "ADMIN"
 
 
+class UserStatus(str, enum.Enum):
+    """계정 상태. BANNED 는 로그인 차단, DORMANT 는 1년 무접속 휴면."""
+
+    ACTIVE = "ACTIVE"
+    BANNED = "BANNED"
+    DORMANT = "DORMANT"
+
+
 class Gender(str, enum.Enum):
     """본인인증 결과로만 채워지는 성별. 회원가입 단계에서는 받지 않음."""
 
@@ -81,11 +89,18 @@ class User(Base, TimestampMixin):
         nullable=False,
         comment="권한 등급 (USER/ADMIN). 관리자 API 가드의 기준",
     )
+    status: Mapped[UserStatus] = mapped_column(
+        Enum(UserStatus, native_enum=False, length=20),
+        default=UserStatus.ACTIVE,
+        server_default="ACTIVE",
+        nullable=False,
+        comment="계정 상태. BANNED → 로그인 차단. is_active 와 동기화 유지",
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
         nullable=False,
-        comment="활성 여부. UserStatus(ACTIVE/BANNED/DORMANT) 도입 시 일원화 예정",
+        comment="활성 여부. status=ACTIVE ↔ is_active=True 로 동기화",
     )
     must_change_password: Mapped[bool] = mapped_column(
         Boolean,
