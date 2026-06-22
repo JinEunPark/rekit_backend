@@ -52,10 +52,12 @@ class AdminProductUpdate(BaseModel):
 
 
 class AdminImageItem(BaseModel):
-    """이미지 교체 요청의 개별 항목."""
+    """이미지 교체 요청의 개별 항목.
+
+    sort_order 는 배열 인덱스에서 자동 부여 — 원하는 순서대로 나열하면 된다.
+    """
 
     url: str = Field(min_length=1, max_length=500)
-    sort_order: int = Field(ge=0)
     label: str | None = None
 
 

@@ -17,7 +17,7 @@ from app.catalog.catalog_schemas import ProductListParams, ProductSort
 from app.catalog.models import Product, ProductImage, ProductStatus
 
 if TYPE_CHECKING:
-    from app.catalog.admin_catalog_schemas import AdminImageItem, AdminProductListParams
+    from app.catalog.admin_catalog_schemas import AdminProductListParams
 
 
 class CatalogRepository:
@@ -116,24 +116,16 @@ class CatalogRepository:
         return product
 
     async def replace_images(
-        self, product: Product, images: list[AdminImageItem]
+        self, product: Product, images: list[ProductImage]
     ) -> Product:
         """기존 이미지 전부 삭제 후 새 목록으로 원자적 교체.
 
-        sort_order 는 요청값 그대로 사용 — 호출자가 0-based 연속 정수를 보장해야 함.
+        images 는 서비스가 미리 product_id·sort_order 를 채운 ProductImage 목록.
         """
         await self.session.execute(
             delete(ProductImage).where(ProductImage.product_id == product.id)
         )
-        for item in images:
-            self.session.add(
-                ProductImage(
-                    product_id=product.id,
-                    url=item.url,
-                    sort_order=item.sort_order,
-                    label=item.label,
-                )
-            )
+        self.session.add_all(images)
         await self.session.flush()
         await self.session.refresh(product, attribute_names=["images"])
         return product

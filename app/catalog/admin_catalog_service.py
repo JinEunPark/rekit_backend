@@ -79,7 +79,11 @@ class AdminCatalogService:
         product = await self._repo.get_by_id(product_id)
         if product is None:
             raise ProductNotFound()
-        await self._repo.replace_images(product, data.images)
+        images = [
+            ProductImage(product_id=product.id, url=item.url, sort_order=i, label=item.label)
+            for i, item in enumerate(data.images)
+        ]
+        await self._repo.replace_images(product, images)
         return _to_detail(product)
 
     async def delete_product(self, product_id: int) -> None:

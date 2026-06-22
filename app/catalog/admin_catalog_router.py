@@ -94,7 +94,7 @@ async def replace_images(
 
     - 이미지 추가: 기존 URL + 새 URL 을 모두 포함해 전송
     - 이미지 삭제: 유지할 URL 만 포함해 전송
-    - 순서 변경: sort_order 값으로 제어
+    - 순서 변경: 배열 순서 = 표시 순서 (첫 번째 항목 → sort_order 0)
 
     Errors:
     - PRODUCT_NOT_FOUND (404): 상품 없음

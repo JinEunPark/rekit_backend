@@ -13,8 +13,6 @@ DB 없이 fake repo + in-memory Product 객체로 도메인 로직 검증.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
-
 import pytest
 
 from app.catalog.admin_catalog_schemas import (
@@ -124,15 +122,10 @@ class _FakeAdminCatalogRepo:
         return items[start : start + params.size], total
 
     async def replace_images(
-        self, product: Product, images: list[Any]
+        self, product: Product, images: list[ProductImage]
     ) -> Product:
         product.images.clear()
-        for item in images:
-            img = ProductImage(
-                url=item.url,
-                sort_order=item.sort_order,
-                label=item.label,
-            )
+        for img in images:
             img.id = self._next_image_id
             self._next_image_id += 1
             product.images.append(img)
@@ -354,8 +347,8 @@ async def test_replace_images_adds_new_images() -> None:
 
     data = AdminProductImagesReplace(
         images=[
-            AdminImageItem(url="https://cdn.example.com/front.jpg", sort_order=0, label="FRONT"),
-            AdminImageItem(url="https://cdn.example.com/side.jpg", sort_order=1, label="SIDE"),
+            AdminImageItem(url="https://cdn.example.com/front.jpg", label="FRONT"),
+            AdminImageItem(url="https://cdn.example.com/side.jpg", label="SIDE"),
         ]
     )
 
@@ -363,7 +356,7 @@ async def test_replace_images_adds_new_images() -> None:
 
     assert len(result.images) == 2
     assert result.images[0].url == "https://cdn.example.com/front.jpg"
-    assert result.images[0].sort_order == 0
+    assert result.images[0].sort_order == 0  # 배열 인덱스에서 자동 부여
     assert result.images[0].label == "FRONT"
     assert result.images[1].url == "https://cdn.example.com/side.jpg"
     assert result.images[1].sort_order == 1
@@ -382,7 +375,7 @@ async def test_replace_images_replaces_existing() -> None:
 
     data = AdminProductImagesReplace(
         images=[
-            AdminImageItem(url="https://cdn.example.com/new.jpg", sort_order=0),
+            AdminImageItem(url="https://cdn.example.com/new.jpg"),
         ]
     )
 
@@ -403,11 +396,11 @@ async def test_replace_images_reorders() -> None:
     )
     service, _ = _make_service([product])
 
-    # a↔b 순서 바꾸기
+    # a↔b 순서 바꾸기 — 배열 순서 = sort_order
     data = AdminProductImagesReplace(
         images=[
-            AdminImageItem(url="https://cdn.example.com/b.jpg", sort_order=0),
-            AdminImageItem(url="https://cdn.example.com/a.jpg", sort_order=1),
+            AdminImageItem(url="https://cdn.example.com/b.jpg"),
+            AdminImageItem(url="https://cdn.example.com/a.jpg"),
         ]
     )
 
