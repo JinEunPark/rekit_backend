@@ -18,7 +18,9 @@ from typing import Any
 import pytest
 
 from app.catalog.admin_catalog_schemas import (
+    AdminImageItem,
     AdminProductCreate,
+    AdminProductImagesReplace,
     AdminProductListParams,
     AdminProductUpdate,
 )
@@ -120,6 +122,21 @@ class _FakeAdminCatalogRepo:
 
         start = (params.page - 1) * params.size
         return items[start : start + params.size], total
+
+    async def replace_images(
+        self, product: Product, images: list[Any]
+    ) -> Product:
+        product.images.clear()
+        for item in images:
+            img = ProductImage(
+                url=item.url,
+                sort_order=item.sort_order,
+                label=item.label,
+            )
+            img.id = self._next_image_id
+            self._next_image_id += 1
+            product.images.append(img)
+        return product
 
     async def save(self, product: Product) -> Product:
         """신규 저장 또는 이미 등록된 상품 갱신."""
@@ -325,3 +342,99 @@ async def test_delete_product_not_found() -> None:
 
     with pytest.raises(ProductNotFound):
         await service.delete_product(999)
+
+
+# ── replace_images ────────────────────────────────────────────
+
+
+async def test_replace_images_adds_new_images() -> None:
+    """이미지가 없는 상품에 2개 추가 → 응답에 2개 이미지 포함."""
+    product = make_product(product_id=1)
+    service, _ = _make_service([product])
+
+    data = AdminProductImagesReplace(
+        images=[
+            AdminImageItem(url="https://cdn.example.com/front.jpg", sort_order=0, label="FRONT"),
+            AdminImageItem(url="https://cdn.example.com/side.jpg", sort_order=1, label="SIDE"),
+        ]
+    )
+
+    result = await service.replace_images(1, data)
+
+    assert len(result.images) == 2
+    assert result.images[0].url == "https://cdn.example.com/front.jpg"
+    assert result.images[0].sort_order == 0
+    assert result.images[0].label == "FRONT"
+    assert result.images[1].url == "https://cdn.example.com/side.jpg"
+    assert result.images[1].sort_order == 1
+
+
+async def test_replace_images_replaces_existing() -> None:
+    """기존 이미지 2개 → 새 이미지 1개로 교체 시 기존 이미지 사라짐."""
+    product = make_product(
+        product_id=1,
+        images=[
+            make_image(image_id=1, url="https://cdn.example.com/old1.jpg", sort_order=0),
+            make_image(image_id=2, url="https://cdn.example.com/old2.jpg", sort_order=1),
+        ],
+    )
+    service, _ = _make_service([product])
+
+    data = AdminProductImagesReplace(
+        images=[
+            AdminImageItem(url="https://cdn.example.com/new.jpg", sort_order=0),
+        ]
+    )
+
+    result = await service.replace_images(1, data)
+
+    assert len(result.images) == 1
+    assert result.images[0].url == "https://cdn.example.com/new.jpg"
+
+
+async def test_replace_images_reorders() -> None:
+    """sort_order 값 변경으로 순서 재정렬 확인."""
+    product = make_product(
+        product_id=1,
+        images=[
+            make_image(image_id=1, url="https://cdn.example.com/a.jpg", sort_order=0),
+            make_image(image_id=2, url="https://cdn.example.com/b.jpg", sort_order=1),
+        ],
+    )
+    service, _ = _make_service([product])
+
+    # a↔b 순서 바꾸기
+    data = AdminProductImagesReplace(
+        images=[
+            AdminImageItem(url="https://cdn.example.com/b.jpg", sort_order=0),
+            AdminImageItem(url="https://cdn.example.com/a.jpg", sort_order=1),
+        ]
+    )
+
+    result = await service.replace_images(1, data)
+
+    assert result.images[0].url == "https://cdn.example.com/b.jpg"
+    assert result.images[0].sort_order == 0
+    assert result.images[1].url == "https://cdn.example.com/a.jpg"
+    assert result.images[1].sort_order == 1
+
+
+async def test_replace_images_empty_clears_all() -> None:
+    """빈 리스트 전송 → 모든 이미지 삭제."""
+    product = make_product(
+        product_id=1,
+        images=[make_image(image_id=1, url="https://cdn.example.com/img.jpg")],
+    )
+    service, _ = _make_service([product])
+
+    result = await service.replace_images(1, AdminProductImagesReplace(images=[]))
+
+    assert result.images == []
+
+
+async def test_replace_images_product_not_found() -> None:
+    """존재하지 않는 상품 ID → ProductNotFound 예외."""
+    service, _ = _make_service([])
+
+    with pytest.raises(ProductNotFound):
+        await service.replace_images(999, AdminProductImagesReplace(images=[]))

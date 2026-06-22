@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Path, status
 from app.catalog.admin_catalog_schemas import (
     AdminProductCreate,
     AdminProductDetailResponse,
+    AdminProductImagesReplace,
     AdminProductListParams,
     AdminProductListResponse,
     AdminProductUpdate,
@@ -75,6 +76,30 @@ async def update_product(
     service: AdminCatalogService = Depends(get_admin_catalog_service),
 ) -> AdminProductDetailResponse:
     return await service.update_product(product_id, body)
+
+
+@router.put(
+    "/{product_id}/images",
+    response_model=AdminProductDetailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="상품 이미지 전체 교체",
+)
+async def replace_images(
+    body: AdminProductImagesReplace,
+    product_id: int = Path(description="상품 PK"),
+    _: User = Depends(get_admin_user),
+    service: AdminCatalogService = Depends(get_admin_catalog_service),
+) -> AdminProductDetailResponse:
+    """기존 이미지를 전부 삭제하고 요청 목록으로 원자적 교체.
+
+    - 이미지 추가: 기존 URL + 새 URL 을 모두 포함해 전송
+    - 이미지 삭제: 유지할 URL 만 포함해 전송
+    - 순서 변경: sort_order 값으로 제어
+
+    Errors:
+    - PRODUCT_NOT_FOUND (404): 상품 없음
+    """
+    return await service.replace_images(product_id, body)
 
 
 @router.delete(

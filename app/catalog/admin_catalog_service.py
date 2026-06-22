@@ -6,6 +6,7 @@ from app.catalog.admin_catalog_schemas import (
     AdminProductCreate,
     AdminProductDetailResponse,
     AdminProductImageResponse,
+    AdminProductImagesReplace,
     AdminProductListParams,
     AdminProductListResponse,
     AdminProductUpdate,
@@ -70,6 +71,15 @@ class AdminCatalogService:
             raise ProductNotFound()
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(product, key, value)
+        return _to_detail(product)
+
+    async def replace_images(
+        self, product_id: int, data: AdminProductImagesReplace
+    ) -> AdminProductDetailResponse:
+        product = await self._repo.get_by_id(product_id)
+        if product is None:
+            raise ProductNotFound()
+        await self._repo.replace_images(product, data.images)
         return _to_detail(product)
 
     async def delete_product(self, product_id: int) -> None:

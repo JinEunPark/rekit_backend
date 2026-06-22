@@ -51,6 +51,24 @@ class AdminProductUpdate(BaseModel):
     status: ProductStatus | None = None
 
 
+class AdminImageItem(BaseModel):
+    """이미지 교체 요청의 개별 항목."""
+
+    url: str = Field(min_length=1, max_length=500)
+    sort_order: int = Field(ge=0)
+    label: str | None = None
+
+
+class AdminProductImagesReplace(BaseModel):
+    """PUT /admin/products/{id}/images 요청 본문.
+
+    기존 이미지를 전부 지우고 여기 담긴 목록으로 원자적으로 교체한다.
+    빈 리스트를 보내면 모든 이미지가 삭제된다.
+    """
+
+    images: list[AdminImageItem] = Field(default_factory=list, max_length=10)
+
+
 class AdminProductListParams(BaseModel):
     status: ProductStatus | None = None
     q: str | None = None

@@ -9,15 +9,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.catalog.catalog_schemas import ProductListParams, ProductSort
-from app.catalog.models import Product, ProductStatus
+from app.catalog.models import Product, ProductImage, ProductStatus
 
 if TYPE_CHECKING:
-    from app.catalog.admin_catalog_schemas import AdminProductListParams
+    from app.catalog.admin_catalog_schemas import AdminImageItem, AdminProductListParams
 
 
 class CatalogRepository:
@@ -111,6 +111,29 @@ class CatalogRepository:
     async def save(self, product: Product) -> Product:
         """신규/기존 상품 저장 후 flush (PK 필요 시). images 즉시 로드."""
         self.session.add(product)
+        await self.session.flush()
+        await self.session.refresh(product, attribute_names=["images"])
+        return product
+
+    async def replace_images(
+        self, product: Product, images: list[AdminImageItem]
+    ) -> Product:
+        """기존 이미지 전부 삭제 후 새 목록으로 원자적 교체.
+
+        sort_order 는 요청값 그대로 사용 — 호출자가 0-based 연속 정수를 보장해야 함.
+        """
+        await self.session.execute(
+            delete(ProductImage).where(ProductImage.product_id == product.id)
+        )
+        for item in images:
+            self.session.add(
+                ProductImage(
+                    product_id=product.id,
+                    url=item.url,
+                    sort_order=item.sort_order,
+                    label=item.label,
+                )
+            )
         await self.session.flush()
         await self.session.refresh(product, attribute_names=["images"])
         return product

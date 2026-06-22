@@ -131,7 +131,7 @@
 - [x] `GET /admin/products/{id}`
 - [x] `PATCH /admin/products/{id}` — 가격/재고/상태/스펙 수정 (partial update)
 - [x] `DELETE /admin/products/{id}` — soft delete (`status = INACTIVE`)
-- [ ] `POST /admin/products/{id}/images` — 이미지 추가/순서 변경 (미구현)
+- [x] `PUT /admin/products/{id}/images` — 이미지 전체 교체 (추가·삭제·순서 일괄 반영)
 - [ ] `POST /admin/products/import-csv` — Phase 우선순위 낮음
 
 ### 1.12 관리자 — 주문 (`/api/v1/admin/orders`)
