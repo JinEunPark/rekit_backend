@@ -1,11 +1,11 @@
 # Rekle Backend TODO — 디자인 시스템 기반 구현 계획
 
 > **분석 기준**: `/Volumes/A/web_projects/rekle` 프론트 디자인 (Vue 3 mockup, `_design/buyer/*`, `_design/admin/*`)
-> **현 백엔드 상태** (2026-06-20 기준):
-> - **구현 완료**: auth 전체 (회원가입/로그인/로그아웃/토큰갱신/아이디중복확인/아이디찾기/임시비밀번호/소셜로그인 3종/소셜회원가입), GET /users/me, POST /users/me/password, uploads(presign/confirm)
-> - **모델만 있음**: catalog, cart, address, order, payment
-> - **테스트**: 단위 131개 통과 (DB·Redis 없이 fake repo + fake OAuth)
-> **작성일**: 2026-05-01 / **최종 업데이트**: 2026-06-20
+> **현 백엔드 상태** (2026-06-22 기준):
+> - **구현 완료**: auth 전체 / users / catalog / admin catalog CRUD / cart / favorites / address / order / payment (init·confirm·webhook) / uploads
+> - **미구현**: SMS 인증 / 본인인증 PG 연동 / shipment 추적 / 알림·공지 / admin dashboard·orders·members·sales / 환불
+> - **테스트**: 273개 통과 (단위 + 통합, DB·Redis 없이 fake repo + fake OAuth)
+> **작성일**: 2026-05-01 / **최종 업데이트**: 2026-06-22
 
 ---
 
@@ -64,45 +64,45 @@
 - [ ] `POST /verifications/callback` — PG 콜백 (멱등성 보장 — request_id 유니크)
 - [ ] `GET /verifications/me/status` — 현재 사용자 인증 상태
 
-### 1.3 주소록 (`/api/v1/addresses`)
+### 1.3 주소록 (`/api/v1/addresses`) ✅ 구현 완료
 
-- [ ] `GET /addresses` — 내 배송지 목록
-- [ ] `POST /addresses` — 추가
-- [ ] `PATCH /addresses/{id}` — 수정 (기본 배송지 토글 포함)
-- [ ] `DELETE /addresses/{id}`
+- [x] `GET /addresses` — 내 배송지 목록
+- [x] `POST /addresses` — 추가
+- [x] `PATCH /addresses/{id}` — 수정 (기본 배송지 토글 포함)
+- [x] `DELETE /addresses/{id}`
 
-### 1.4 상품 — 구매자 (`/api/v1/products`)
+### 1.4 상품 — 구매자 (`/api/v1/products`) ✅ 구현 완료
 
-- [ ] `GET /products` — 목록 (query: `category`, `q`(검색), `grade`, `min_price`, `max_price`, `warranty`, `sort`(latest/price_asc/price_desc), `cursor`/`page`)
-- [ ] `GET /products/{id}` — 상세 (이미지 다중, 스펙, 등급 안내, 배송정보)
-- [ ] `GET /products/featured` — 홈 "오늘 입고된 상품" 4건 (`order by created_at desc, status=ACTIVE`)
-- [ ] `GET /categories` — 카테고리 메타(아이콘/라벨 — 정적 응답이라 옵션)
+- [x] `GET /products` — 목록 (query: `category`, `q`(검색), `grade`, `min_price`, `max_price`, `warranty`, `sort`(latest/price_asc/price_desc), `page`)
+- [x] `GET /products/{id}` — 상세 (이미지 다중, 스펙, 등급 안내, 배송정보)
+- [x] `GET /products/featured` — 홈 "오늘 입고된 상품" 4건 (`order by created_at desc, status=ACTIVE`)
+- [x] `GET /categories` — 카테고리 메타(아이콘/라벨 — 정적 응답)
 
-### 1.5 관심상품 / 찜 (`/api/v1/favorites`) **[모델 신규]**
+### 1.5 관심상품 / 찜 (`/api/v1/favorites`) ✅ 구현 완료
 
-- [ ] `GET /favorites` — 내 관심상품 목록 (My의 "관심상품 12")
-- [ ] `POST /favorites/{product_id}` — 추가 (멱등)
-- [ ] `DELETE /favorites/{product_id}` — 제거
+- [x] `GET /favorites` — 내 관심상품 목록 (My의 "관심상품 12")
+- [x] `POST /favorites/{product_id}` — 추가 (멱등)
+- [x] `DELETE /favorites/{product_id}` — 제거
 
-### 1.6 장바구니 (`/api/v1/cart`)
+### 1.6 장바구니 (`/api/v1/cart`) ✅ 구현 완료
 
-- [ ] `GET /cart` — 항목 + 합계 + 배송비 견적
-- [ ] `POST /cart/items` — 추가 (있으면 수량 증가)
-- [ ] `PATCH /cart/items/{id}` — 수량 변경
-- [ ] `DELETE /cart/items/{id}`
-- [ ] `POST /cart/items/bulk-delete` — 선택 삭제
+- [x] `GET /cart` — 항목 + 합계 + 배송비 견적
+- [x] `POST /cart/items` — 추가 (있으면 수량 합산 upsert)
+- [x] `PATCH /cart/items/{id}` — 수량 변경
+- [x] `DELETE /cart/items/{id}`
+- [x] `POST /cart/items/bulk-delete` — 선택 삭제
 
-### 1.7 주문 / 결제 (`/api/v1/orders`, `/api/v1/payments`)
+### 1.7 주문 / 결제 (`/api/v1/orders`, `/api/v1/payments`) ✅ 대부분 구현 완료
 
-- [ ] `POST /orders/quote` — 견적 (배송방식별 배송비/할인 계산, 본인인증 필요여부 반환)
-- [ ] `POST /orders` — 주문 생성 (PENDING 상태, `order_number` 생성, 재고 차감 예약)
-- [ ] `GET /orders` — 내 주문 목록 (필터: status)
-- [ ] `GET /orders/{order_number}` — 상세 (주문아이템, 결제, 배송, 주소 스냅샷)
-- [ ] `POST /orders/{order_number}/cancel` — 결제완료~준비중 단계만 가능
-- [ ] `POST /payments/init` — 결제 초기화 (토스 결제창 띄울 정보)
-- [ ] `POST /payments/confirm` — 토스 confirm (멱등성 키, PG tid 저장, Order PAID 전환)
-- [ ] `POST /payments/webhooks/toss` — 결제 상태 웹훅 (멱등)
-- [ ] `POST /orders/{id}/refund/request` — 환불 요청 (사유)
+- [x] `POST /orders/quote` — 배송방식별 배송비/할인 계산 (FREIGHT 60K / DIRECT 40K, zip 검증)
+- [x] `POST /orders` — 주문 생성 (본인인증 가드, 배치 FOR UPDATE 락, order_number `RK-YYMMDD####`)
+- [x] `GET /orders` — 내 주문 목록 (최신순, 페이지네이션)
+- [x] `GET /orders/{order_number}` — 상세 (주문아이템 스냅샷, 주소 스냅샷)
+- [x] `POST /orders/{order_number}/cancel` — PENDING/PAID/PREPARING 상태만 취소
+- [x] `POST /payments/init` — Payment(READY) 생성 + 토스 결제창 정보 반환
+- [x] `POST /payments/confirm` — 토스 서버confirm + 금액 검증 + Order PAID 전환
+- [x] `POST /payments/webhooks/toss` — HMAC 서명 검증 + 멱등 상태 전환
+- [ ] `POST /orders/{id}/refund/request` — 환불 요청 (미구현)
 
 ### 1.8 배송 (`/api/v1/shipments`)
 
@@ -124,14 +124,14 @@
 - [ ] `GET /admin/dashboard/popular-categories` — 카테고리별 판매건수/비율
 - [ ] `GET /admin/dashboard/stock-alerts` — 재고 0/임박, 문의 카운트(있다면)
 
-### 1.11 관리자 — 상품 (`/api/v1/admin/products`)
+### 1.11 관리자 — 상품 (`/api/v1/admin/products`) ✅ CRUD 구현 완료
 
-- [ ] `GET /admin/products` — 표 (필터: `status_chip` 전체/판매중/품절/비공개, `q`)
-- [ ] `POST /admin/products` — 등록 (이미지 키 다중, 라벨 포함)
-- [ ] `GET /admin/products/{id}`
-- [ ] `PATCH /admin/products/{id}` — 가격/재고/상태/스펙 수정
-- [ ] `DELETE /admin/products/{id}` — soft delete or `INACTIVE`
-- [ ] `POST /admin/products/{id}/images` — 이미지 추가/순서 변경
+- [x] `GET /admin/products` — 표 (필터: `status`, `q`, 페이지네이션, ADMIN role guard)
+- [x] `POST /admin/products` — 등록 (이미지 URL 다중 포함)
+- [x] `GET /admin/products/{id}`
+- [x] `PATCH /admin/products/{id}` — 가격/재고/상태/스펙 수정 (partial update)
+- [x] `DELETE /admin/products/{id}` — soft delete (`status = INACTIVE`)
+- [ ] `POST /admin/products/{id}/images` — 이미지 추가/순서 변경 (미구현)
 - [ ] `POST /admin/products/import-csv` — Phase 우선순위 낮음
 
 ### 1.12 관리자 — 주문 (`/api/v1/admin/orders`)
@@ -177,12 +177,12 @@
 - [x] **이메일 어댑터** — `ConsoleEmailSender` (개발) + `GmailSmtpEmailSender` (운영) Protocol 기반
 - [x] **OAuth 어댑터** — 카카오/네이버/구글 `httpx` 기반 + `translate_oauth_error` 헬퍼 (Ports & Adapters)
 - [x] **테스트** — 단위 131개 (DB 없이 fake repo + fake OAuth), `tests/conftest.py` 기반
-- [ ] **CRUD 레이어** (`app/catalog,cart,order,payment` 도메인) — 아직 미구현
-- [ ] **`order_number` 생성기** — `RK-YYMMDD####` 포맷, 시퀀스 또는 advisory lock
+- [x] **CRUD 레이어** — catalog/cart/address/order/payment/favorites/admin_catalog 완료
+- [x] **`order_number` 생성기** — `RK-YYMMDD{id:04d}` 포맷, `app/order/order_number.py`
 - [ ] **CI/DI 암호화 유틸** — KMS or Fernet, `services/crypto.py`
 - [ ] **외부 연동 서비스 모듈**
   - [ ] `services/sms.py` — NHN Cloud / 알리고
-  - [ ] `services/toss_payments.py` — 결제 confirm/cancel/webhook 검증
+  - [x] `app/payment/adapters/toss.py` — 결제 confirm/webhook 검증 (TossPaymentGateway)
   - [ ] `services/toss_identity.py` 또는 `services/nice_identity.py`
   - [ ] `services/sweet_tracker.py` — 배송 추적 (Redis 캐시 5분)
 - [x] ~~`services/social_oauth.py`~~ — 어댑터 패턴으로 `app/auth/adapters/` 에 구현 완료
@@ -195,9 +195,10 @@
 
 ## 3. 데이터/시드
 
-- [ ] 카테고리 메타 응답 (정적): `[{id:'fridge', label:'냉장고', icon:'box'}, ...]` — DB 모델 없이 enum + 라벨 매핑 함수로 충분
-- [ ] 관리자 계정 부트스트랩 스크립트
-- [ ] 더미 상품 시드 (개발 편의)
+- [x] 카테고리 메타 응답 (정적): `GET /categories` — `app/catalog/catalog_schemas.py`의 `CATEGORY_META`
+- [x] 관리자 계정 부트스트랩 스크립트 — `scripts/seed.py` (재실행 안전, admin01/hong001/kim001)
+- [x] 더미 상품 시드 (개발 편의) — `scripts/seed.py` 6개 상품 포함
+- [x] E2E 스모크 테스트 스크립트 — `scripts/test_api.sh` 33케이스 (멱등)
 
 ---
 
@@ -207,12 +208,12 @@
 
 1. ✅ JWT/Depends 정비 + auth (sign-up/sign-in/refresh/sign-out/find-id/find-password/소셜 3종)
 2. ✅ GET /users/me, POST /users/me/password
-3. 상품 조회 (buyer) — `GET /products`, `GET /products/{id}`, `GET /products/featured`, `GET /categories`
-4. 주소록 CRUD
-5. 장바구니 CRUD
-6. 본인인증 (start/callback/me) — Order 진입 가드
-7. 주문 생성 + 토스 결제 confirm/webhook (멱등)
-8. 관리자 상품 CRUD + 송장 입력 → SHIPPING 전환
+3. ✅ 상품 조회 (buyer) — `GET /products`, `GET /products/{id}`, `GET /products/featured`, `GET /categories`
+4. ✅ 주소록 CRUD
+5. ✅ 장바구니 CRUD + 관심상품 CRUD
+6. 본인인증 PG 연동 (start/callback/me) — Order 진입 가드 **(DB 직접 설정으로 우회 중)**
+7. ✅ 주문 생성 + 토스 결제 confirm/webhook (멱등)
+8. ✅ 관리자 상품 CRUD / 미완: 송장 입력 → SHIPPING 전환
 
 ### Phase 2 (안정화)
 
@@ -495,43 +496,20 @@ class Promotion(Base, TimestampMixin):
 - [ ] **환불 정책 7일** ([screens-buyer-1.jsx:371](/tmp/rekle-design/extracted2/rekle/project/screens-buyer-1.jsx)): "배송 후 7일 이내 동작 불량은 환불 가능, 단순 변심 반품 불가"
   - `POST /orders/{id}/refund/request`에서 `delivered_at + 7일` 윈도우 검증
   - 사유를 `MALFUNCTION` / `CHANGE_OF_MIND` 구분 — 후자는 자동 거절
-- [ ] **직접배송 가능 지역**: 주문서에서 `address.zipcode`가 서울/경기일 때만 `DIRECT` 옵션 노출
-  - 1차: 정적 zipcode prefix 화이트리스트 (`/Volumes/A/web_projects/rekle_backend/app/core/regions.py`)
-  - 2차: `ProductDirectRegion` 모델로 상품별 가능 지역 다르게 (Phase 3)
-- [ ] **본인인증 우회 방지**: `POST /orders` 호출 시 `user.identity_verified_at IS NOT NULL` 검증, 실패 시 `IDENTITY_VERIFICATION_REQUIRED` 에러 반환
+- [x] **직접배송 가능 지역**: 주문서에서 `address.zipcode`가 서울/경기일 때만 `DIRECT` 옵션 노출
+  - [x] 1차: 정적 zipcode prefix 화이트리스트 `app/core/shipping.py`의 `is_direct_delivery_available()`
+  - [ ] 2차: `ProductDirectRegion` 모델로 상품별 가능 지역 다르게 (Phase 3)
+- [x] **본인인증 우회 방지**: `POST /orders` 호출 시 `user.identity_verified_at IS NOT NULL` 검증, `IDENTITY_REQUIRED` 에러 반환
 - [ ] **재고 차감 타이밍**: 주문 생성(PENDING) 시 예약 → 결제 confirm 시 확정 / 취소 시 복구 (요구사항 정의서와 동일)
 
 ### 7.4 정적 데이터 / 상수
 
-- [ ] `app/core/categories.py` — 카테고리 메타 dict (id, label_ko, icon_key, sort_order)
+- [x] `app/catalog/catalog_schemas.py`의 `CATEGORY_META` — 카테고리 메타 dict (id, label_ko, icon_key, sort_order)
+- [x] `app/core/shipping.py` — 배송비 상수 + `is_direct_delivery_available()` (zipcode prefix 검증)
   ```python
-  CATEGORY_META = {
-      ProductCategory.REFRIGERATOR: {"label": "냉장고", "icon": "fridge", "order": 1},
-      ProductCategory.WASHING_MACHINE: {"label": "세탁기", "icon": "washer", "order": 2},
-      ProductCategory.TV: {"label": "TV", "icon": "tv", "order": 3},
-      ProductCategory.AIR_CONDITIONER: {"label": "에어컨", "icon": "aircon", "order": 4},
-      ProductCategory.KITCHEN: {"label": "주방가전", "icon": "microwave", "order": 5},
-      ProductCategory.VACUUM: {"label": "청소기", "icon": "vacuum", "order": 6},
-      ProductCategory.SMALL_APPLIANCE: {"label": "소형가전", "icon": "small", "order": 7},
-      ProductCategory.ETC: {"label": "기타", "icon": "menu", "order": 99},
-  }
-  ```
-- [ ] `app/core/regions.py` — 직접배송 가능 zipcode prefix
-  ```python
-  DIRECT_DELIVERY_PREFIXES = (
-      # 서울 (01~09) / 경기 (10~18 일부)
-      "01", "02", "03", "04", "05", "06", "07", "08",  # 서울
-      "10", "11", "12", "13", "14", "15", "16", "17", "18",  # 경기 일부
-  )
-  ```
-  - 정확한 prefix는 행정안전부 우편번호 자료로 검증 후 확정.
-- [ ] `app/core/shipping.py` — 배송비 상수
-  ```python
-  PARCEL_FEE = 5_000          # 일반택배 (참고)
   FREIGHT_FEE = 60_000        # 화물택배
   DIRECT_FEE = 40_000         # 직접배송
-  DIRECT_DISCOUNT = 20_000    # 직배송 할인 (장바구니 기준 표기)
-  REFUND_WINDOW_DAYS = 7
+  DIRECT_DISCOUNT = 20_000    # 직배송 할인 (FREIGHT 기준 절감액)
   ```
 
 ### 7.5 운영 / 시드
@@ -563,7 +541,7 @@ class Promotion(Base, TimestampMixin):
 
 > **아키텍처**: Modular Monolith + Layered (기본) + Ports & Adapters (외부 통합 모듈만)
 > **모듈 위치**: `app/{auth,user,catalog,cart,address,order,payment,common}/` — `docs/memory.md` 참고
-> **현재 상태 (2026-06-20)**: Week 0 + Week 1 완료. auth 14 API + 단위 테스트 131개. catalog/cart/address/order/payment 모델만 있음.
+> **현재 상태 (2026-06-22)**: Week 0~5 대부분 완료. 테스트 273개. 미완: SMS/본인인증 PG/환불/shipment추적/admin 고급 기능.
 
 각 주차 끝에 마이그레이션 1개씩 추가하고, 모든 새 엔드포인트는 통합 테스트(pytest + httpx) 1개씩 동반.
 
@@ -598,52 +576,53 @@ class Promotion(Base, TimestampMixin):
 - [ ] `PATCH /users/me`, `DELETE /users/me` — 미구현
 - [ ] CI/DI 컬럼 양방향 암호화 (AES-GCM) — 미구현
 
-### Week 2 — Catalog (상품) 모듈 (1.4, 1.10 일부)
+### Week 2 — Catalog (상품) 모듈 ✅ 완료 (일부 잔여)
 
-- [ ] `app/catalog/{router,service,repository,schemas}.py`
-- [ ] `GET /products` — 필터(category/q/grade/min_price/max_price/warranty) + 정렬 + 페이지네이션
-- [ ] `GET /products/{id}` — 이미지·스펙·등급 안내·배송정보 통합 응답
-- [ ] `GET /products/featured` — 홈 "오늘 입고된 상품" 4건
-- [ ] `GET /categories` — 카테고리 메타 (캐시 10분)
-- [ ] `GET /products/popular-keywords` — 검색 페이지 (Redis 1시간 집계 캐시)
-- [ ] **시드 데이터**: 디자인 mockup의 8개 상품 Alembic seed 마이그레이션
-- [ ] (Admin) `POST/PATCH/DELETE /admin/products/*` — 상품 CRUD + 이미지 추가/삭제 (uploads/confirm 키 검증)
+- [x] `app/catalog/{router,service,repository,schemas}.py` + `catalog_utils.py`
+- [x] `GET /products` — 필터(category/q/grade/min_price/max_price/warranty) + 정렬 + 페이지네이션
+- [x] `GET /products/{id}` — 이미지·스펙·등급 안내·배송정보 통합 응답
+- [x] `GET /products/featured` — 홈 "오늘 입고된 상품" 4건
+- [x] `GET /categories` — 카테고리 메타 (정적 dict)
+- [ ] `GET /products/popular-keywords` — 검색 페이지 (Redis 집계 캐시, 미구현)
+- [x] **시드 데이터**: `scripts/seed.py` 6개 상품
+- [x] (Admin) `GET/POST/GET/{id}/PATCH/DELETE /admin/products` — CRUD + ADMIN role guard
+- [ ] (Admin) `POST /admin/products/{id}/images` — 이미지 추가/순서 변경 (미구현)
 
-### Week 3 — Cart + Wishlist + Address 모듈 (1.3, 1.5, 1.6)
+### Week 3 — Cart + Favorites + Address 모듈 ✅ 완료 (일부 잔여)
 
-- [ ] `app/wishlist/` 모델 + 마이그레이션 — `WishlistItem(user_id, product_id, added_at)` UNIQUE
-- [ ] `GET /favorites`, `POST/DELETE /favorites/{product_id}` (멱등)
-- [ ] `app/cart/{router,service,repository,schemas}.py`
-- [ ] `GET /cart` — items + summary(itemsTotal/shippingFee/estimatedTotal)
-- [ ] `POST /cart/items` — 동일 상품 시 수량 합산, 재고 검증
-- [ ] `PATCH /cart/items/{id}`, `DELETE /cart/items/{id}`, `POST /cart/items/bulk-delete`
-- [ ] `POST /cart/sync` — 비로그인→로그인 머지
-- [ ] `app/address/{router,service,repository,schemas}.py`
-- [ ] `GET/POST/PATCH/DELETE /addresses/*` + `POST /addresses/{id}/default`
-- [ ] 직배송 가능 zip 화이트리스트 검증 (서울/경기 prefix)
+- [x] `app/favorites/` 모듈 + 마이그레이션 — `Favorite(user_id, product_id)` composite PK
+- [x] `GET /favorites`, `POST/DELETE /favorites/{product_id}` (멱등)
+- [x] `app/cart/{router,service,repository,schemas}.py`
+- [x] `GET /cart` — items + summary(itemsTotal/shippingFeeEstimate/total)
+- [x] `POST /cart/items` — 동일 상품 시 수량 합산 (upsert), 재고 검증
+- [x] `PATCH /cart/items/{id}`, `DELETE /cart/items/{id}`, `POST /cart/items/bulk-delete`
+- [ ] `POST /cart/sync` — 비로그인→로그인 머지 (미구현)
+- [x] `app/address/{router,service,repository,schemas}.py`
+- [x] `GET/POST/PATCH/DELETE /addresses` + 기본 배송지 토글
+- [x] 직배송 가능 zip 화이트리스트 검증 (`app/core/shipping.py`)
 
-### Week 4 — Order 모듈 (가장 어려움) (1.7 일부)
+### Week 4 — Order 모듈 ✅ 완료 (일부 잔여)
 
-- [ ] `app/order/{router,service,repository,schemas}.py`
-- [ ] `app/order/order_number.py` — RK-YYMMDD#### 시퀀스 (Postgres `nextval`)
-- [ ] `POST /orders/quote` — 배송방식별 견적, `IDENTITY_REQUIRED` 사전 응답
-- [ ] `POST /orders` — **트랜잭션 안에서**: 본인인증 → 재고 락(`with_for_update`) → 가격 재검증(`PriceChanged`) → 주문 생성 → cart에서 라인 제거
-- [ ] `GET /orders`, `GET /orders/{order_number}` — 본인 주문만, 타임라인 포함
-- [ ] `POST /orders/{order_number}/cancel` — 결제완료/준비중만, `cancelled_at` 기록
-- [ ] `POST /orders/{id}/refund/request` — 첨부 이미지 키 검증, status → `환불요청`
-- [ ] 주문 생성 동시성 테스트 — 동일 상품 동시 주문 시 1건만 성공해야 함
+- [x] `app/order/{router,service,repository,schemas}.py`
+- [x] `app/order/order_number.py` — `RK-YYMMDD{id:04d}` 포맷
+- [x] `POST /orders/quote` — 배송방식별 견적 (락 없는 read-only), `IDENTITY_REQUIRED` 가드
+- [x] `POST /orders` — 본인인증 → 배치 `WHERE id IN (...) FOR UPDATE` → 주문 생성 → 재고 차감
+- [x] `GET /orders`, `GET /orders/{order_number}` — 본인 주문만
+- [x] `POST /orders/{order_number}/cancel` — PENDING/PAID/PREPARING만, `cancelled_at` 기록
+- [ ] `POST /orders/{id}/refund/request` — 첨부 이미지 키 검증, status → 환불요청 (미구현)
+- [ ] 주문 생성 동시성 통합 테스트 — 동일 상품 동시 주문 1건만 성공 검증 (미구현)
 
-### Week 5 — Payment 모듈 (PG 어댑터) (1.7 결제부)
+### Week 5 — Payment 모듈 ✅ 완료 (일부 잔여)
 
-- [ ] `app/payment/adapters/tosspayments.py` — `PaymentGateway` Protocol 구현
-- [ ] `app/core/deps.py`에 `get_payment_gateway()` 와이어링 (Toss 단일 → 추후 PortOne 추가 가능)
-- [ ] `POST /payments/init` — 주문 검증(소유자 + PENDING) + Toss `paymentKey` 발급
-- [ ] `POST /payments/confirm` — Toss confirm + 금액 검증(`PaymentFailed`) + Order PAID 전환
-- [ ] `POST /payments/webhooks/toss` — **멱등성 필수**: `webhook_logs(provider, event_id) UNIQUE` + `INSERT ... ON CONFLICT DO NOTHING`
-- [ ] X-PG-Signature 검증 (`PaymentGateway.verify_webhook_signature`)
-- [ ] `POST /payments/{id}/cancel`, `POST /payments/{id}/refund`
-- [ ] **본인인증 PG**: `app/auth/adapters/toss_identity.py` — `IdentityVerifier` 구현
-- [ ] `POST /verifications/{start,callback}` — 콜백 멱등성 (`request_id` UNIQUE)
+- [x] `app/payment/adapters/toss.py` — `PaymentGateway` Protocol 구현 (TossPaymentGateway)
+- [x] `app/core/deps.py`에 `get_payment_service()` — TossPaymentGateway 와이어링
+- [x] `POST /payments/init` — 주문 검증(소유자 + PENDING) + Payment(READY) 생성
+- [x] `POST /payments/confirm` — Toss confirm + 금액 검증 + Order PAID 전환
+- [x] `POST /payments/webhooks/toss` — HMAC 서명 검증 + 멱등 상태 전환
+- [x] `PaymentService.verify_webhook()` — router가 _gateway에 직접 접근 안 함
+- [ ] `POST /payments/{id}/cancel`, `POST /payments/{id}/refund` (미구현)
+- [ ] **본인인증 PG**: `app/auth/adapters/toss_identity.py` — `IdentityVerifier` 구현 (미구현)
+- [ ] `POST /verifications/{start,callback}` — 콜백 멱등성 (미구현)
 
 ### Week 6 — Shipment + Help + Admin (1.8, 1.9, 1.10~1.13)
 
