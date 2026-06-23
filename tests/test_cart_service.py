@@ -28,7 +28,6 @@ from app.cart.models import CartItem
 from app.catalog.models import (
     ConditionGrade,
     Product,
-    ProductCategory,
     ProductImage,
     ProductStatus,
 )
@@ -48,7 +47,7 @@ def make_product(
     p = Product(
         title="테스트 냉장고",
         description="",
-        category=ProductCategory.REFRIGERATOR,
+        category="REFRIGERATOR",
         condition_grade=ConditionGrade.A,
         warranty_works=True,
         price=price,

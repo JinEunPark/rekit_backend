@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.catalog.models import ConditionGrade, Product, ProductCategory, ProductImage, ProductStatus
+from app.catalog.models import ConditionGrade, Product, ProductImage, ProductStatus
 from app.core.exceptions import FavoriteNotFound
 from app.favorites.favorites_schemas import FavoriteToggleResponse
 from app.favorites.favorites_service import FavoritesService
@@ -29,7 +29,7 @@ def make_product(
     p = Product(
         title="테스트 냉장고",
         description="",
-        category=ProductCategory.REFRIGERATOR,
+        category="REFRIGERATOR",
         condition_grade=ConditionGrade.A,
         warranty_works=True,
         price=price,

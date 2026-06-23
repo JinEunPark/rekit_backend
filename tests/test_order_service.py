@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.address.models import Address
-from app.catalog.models import ConditionGrade, Product, ProductCategory, ProductStatus
+from app.catalog.models import ConditionGrade, Product, ProductStatus
 from app.core.exceptions import (
     AddressNotFound,
     IdentityRequired,
@@ -44,7 +44,7 @@ def make_product(
     p = Product(
         title="LG 냉장고 500L",
         description="상태 양호",
-        category=ProductCategory.REFRIGERATOR,
+        category="REFRIGERATOR",
         condition_grade=ConditionGrade.B,
         price=price,
         stock=stock,

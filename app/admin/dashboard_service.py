@@ -141,7 +141,7 @@ class DashboardService:
         ).all()
         return [
             CategoryStat(
-                category=row.category.value,
+                category=row.category,
                 order_count=row.order_count,
                 revenue=row.revenue,
             )
@@ -163,7 +163,7 @@ class DashboardService:
                 title=p.title,
                 brand=p.brand,
                 stock=p.stock,
-                category=p.category.value,
+                category=p.category,
             )
             for p in rows
         ]

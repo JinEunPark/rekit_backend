@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.catalog.catalog_schemas import ProductListParams, ProductSort
-from app.catalog.models import Product, ProductImage, ProductStatus
+from app.catalog.models import Product, ProductCategoryMetaItem, ProductImage, ProductStatus
 
 if TYPE_CHECKING:
     from app.catalog.admin_catalog_schemas import AdminProductListParams
@@ -141,3 +141,23 @@ class CatalogRepository:
         )
         result = await self.session.execute(stmt)
         return list(result.scalars())
+
+    async def get_categories(self) -> list[ProductCategoryMetaItem]:
+        stmt = select(ProductCategoryMetaItem).order_by(ProductCategoryMetaItem.sort_order)
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def get_category_by_id(self, category_id: str) -> ProductCategoryMetaItem | None:
+        return (
+            await self.session.execute(
+                select(ProductCategoryMetaItem).where(ProductCategoryMetaItem.id == category_id)
+            )
+        ).scalar_one_or_none()
+
+    async def save_category(self, category: ProductCategoryMetaItem) -> ProductCategoryMetaItem:
+        self.session.add(category)
+        await self.session.flush()
+        return category
+
+    async def delete_category(self, category: ProductCategoryMetaItem) -> None:
+        await self.session.delete(category)
+        await self.session.flush()

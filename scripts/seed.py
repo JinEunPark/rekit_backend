@@ -23,7 +23,7 @@ from sqlalchemy.orm import selectinload
 import app.db.registry  # noqa: F401 — 모든 모델을 SQLAlchemy 메타데이터에 등록
 from app.core.config import settings
 from app.core.security import hash_password
-from app.catalog.models import ConditionGrade, Product, ProductCategory, ProductImage, ProductStatus
+from app.catalog.models import ConditionGrade, Product, ProductCategoryMetaItem, ProductImage, ProductStatus
 from app.cart.models import CartItem
 from app.favorites.models import Favorite
 from app.user.models import User, UserRole
@@ -84,7 +84,7 @@ async def seed_products(session: AsyncSession) -> list[Product]:
         dict(
             title="LG 냉장고 462L 실버 2019년식",
             description="성능 이상 없음. 외관 흠집 약간 있으나 작동 완벽. 직배송 가능.",
-            category=ProductCategory.REFRIGERATOR,
+            category="REFRIGERATOR",
             brand="LG전자",
             model_name="DIOS J555SB35",
             year_estimate=2019,
@@ -106,7 +106,7 @@ async def seed_products(session: AsyncSession) -> list[Product]:
         dict(
             title="삼성 드럼세탁기 12kg 화이트",
             description="2021년 구매, 이사로 처분. 찌그러짐 없음. 포장 후 배송 가능.",
-            category=ProductCategory.WASHING_MACHINE,
+            category="WASHING_MACHINE",
             brand="삼성전자",
             model_name="WF12T8000KW",
             year_estimate=2021,
@@ -128,7 +128,7 @@ async def seed_products(session: AsyncSession) -> list[Product]:
         dict(
             title="LG 올레드 TV 65인치 2020년",
             description="패널 완벽. 리모콘·스탠드 포함. 직거래만 가능 (서울 강남).",
-            category=ProductCategory.TV,
+            category="TV",
             brand="LG전자",
             model_name="OLED65C9PUA",
             year_estimate=2020,
@@ -145,7 +145,7 @@ async def seed_products(session: AsyncSession) -> list[Product]:
         dict(
             title="캐리어 에어컨 18평 스탠드형",
             description="2018년 설치. 냉방 잘 됨. 실외기 함께 판매.",
-            category=ProductCategory.AIR_CONDITIONER,
+            category="AIR_CONDITIONER",
             brand="캐리어",
             model_name="CSV-Q185KX",
             year_estimate=2018,
@@ -179,7 +179,7 @@ async def seed_products(session: AsyncSession) -> list[Product]:
         dict(
             title="다이슨 V11 청소기 (부품 일부 분실)",
             description="흡입력 정상. 배터리 수명 약 20분. 부품 없이 판매.",
-            category=ProductCategory.ETC,
+            category="ETC",
             brand="다이슨",
             model_name="V11 Fluffy",
             year_estimate=2022,
@@ -206,6 +206,27 @@ async def seed_products(session: AsyncSession) -> list[Product]:
         print(f"  [ok]   상품 생성: {product.title[:30]}  (id={product.id})")
         created.append(product)
     return created
+
+
+async def seed_categories(session: AsyncSession) -> None:
+    CATEGORIES = [
+        dict(id="REFRIGERATOR", title="냉장고", icon="fridge", sort_order=1),
+        dict(id="WASHING_MACHINE", title="세탁기", icon="washer", sort_order=2),
+        dict(id="TV", title="TV", icon="tv", sort_order=3),
+        dict(id="AIR_CONDITIONER", title="에어컨", icon="aircon", sort_order=4),
+        dict(id="KITCHEN", title="주방가전", icon="microwave", sort_order=5),
+        dict(id="ETC", title="기타", icon="menu", sort_order=99),
+    ]
+    for data in CATEGORIES:
+        existing = await session.execute(
+            select(ProductCategoryMetaItem).where(ProductCategoryMetaItem.id == data["id"])
+        )
+        if existing.scalar_one_or_none():
+            print(f"  [skip] 카테고리 이미 존재: {data['id']}")
+            continue
+        session.add(ProductCategoryMetaItem(**data))
+        print(f"  [ok]   카테고리 생성: {data['id']}")
+    await session.flush()
 
 
 async def seed_address(session: AsyncSession, user: User) -> Address:
@@ -301,17 +322,20 @@ async def main() -> None:
                 password="User1234!",
             )
 
-            print("\n[2] 상품 생성")
+            print("\n[2] 카테고리 생성")
+            await seed_categories(session)
+
+            print("\n[3] 상품 생성")
             products = await seed_products(session)
 
-            print("\n[3] 배송지 생성")
+            print("\n[4] 배송지 생성")
             await seed_address(session, user)
             await seed_address(session, user2)
 
-            print("\n[4] 장바구니 추가")
+            print("\n[5] 장바구니 추가")
             await seed_cart(session, user, products)
 
-            print("\n[5] 관심상품 추가")
+            print("\n[6] 관심상품 추가")
             await seed_favorites(session, user, products)
 
     await engine.dispose()

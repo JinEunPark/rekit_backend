@@ -1,4 +1,4 @@
-"""관리자 상품 CRUD Pydantic 스키마."""
+"""관리자 상품·카테고리 CRUD Pydantic 스키마."""
 
 from __future__ import annotations
 
@@ -6,14 +6,14 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.catalog.models import ConditionGrade, ProductCategory, ProductStatus
+from app.catalog.models import ConditionGrade, ProductStatus
 from app.core.pagination import PageMeta
 
 
 class AdminProductCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str = Field(default="")
-    category: ProductCategory
+    category: str = Field(min_length=1, max_length=30)
     brand: str | None = None
     model_name: str | None = None
     year_estimate: int | None = None
@@ -35,7 +35,7 @@ class AdminProductUpdate(BaseModel):
 
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None
-    category: ProductCategory | None = None
+    category: str | None = Field(default=None, min_length=1, max_length=30)
     brand: str | None = None
     model_name: str | None = None
     year_estimate: int | None = None
@@ -91,7 +91,7 @@ class AdminProductDetailResponse(BaseModel):
     id: int
     title: str
     description: str
-    category: ProductCategory
+    category: str
     brand: str | None
     model_name: str | None
     year_estimate: int | None
@@ -113,3 +113,31 @@ class AdminProductDetailResponse(BaseModel):
 class AdminProductListResponse(BaseModel):
     items: list[AdminProductDetailResponse]
     meta: PageMeta
+
+
+# ── 카테고리 CRUD 스키마 ────────────────────────────────────
+
+
+class AdminCategoryCreate(BaseModel):
+    """POST /admin/categories — 카테고리 신규 등록."""
+
+    id: str = Field(min_length=1, max_length=30, pattern=r"^[A-Z][A-Z0-9_]*$")
+    title: str = Field(min_length=1, max_length=100)
+    icon: str = Field(min_length=1, max_length=50)
+    sort_order: int = Field(default=0, ge=0)
+
+
+class AdminCategoryUpdate(BaseModel):
+    """PATCH /admin/categories/{id} — 보내지 않은 필드는 유지."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=100)
+    icon: str | None = Field(default=None, min_length=1, max_length=50)
+    sort_order: int | None = Field(default=None, ge=0)
+
+
+class AdminCategoryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    title: str
+    icon: str
+    sort_order: int

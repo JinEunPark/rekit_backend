@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.catalog.models import ConditionGrade, ProductCategory
+from app.catalog.models import ConditionGrade
 
 
 class FavoriteProductItem(BaseModel):
@@ -18,7 +18,7 @@ class FavoriteProductItem(BaseModel):
     original_price: int | None
     discount_pct: int | None
     thumbnail_url: str | None
-    category: ProductCategory
+    category: str
     condition_grade: ConditionGrade
     warranty_works: bool
     added_at: datetime

@@ -26,7 +26,6 @@ from app.catalog.admin_catalog_service import AdminCatalogService
 from app.catalog.models import (
     ConditionGrade,
     Product,
-    ProductCategory,
     ProductImage,
     ProductStatus,
 )
@@ -47,7 +46,7 @@ def make_product(
     p = Product(
         title=title,
         description="",
-        category=ProductCategory.REFRIGERATOR,
+        category="REFRIGERATOR",
         condition_grade=ConditionGrade.A,
         warranty_works=True,
         price=300_000,
@@ -218,7 +217,7 @@ async def test_create_product_success() -> None:
     data = AdminProductCreate(
         title="LG 냉장고 462L",
         description="깨끗한 상품",
-        category=ProductCategory.REFRIGERATOR,
+        category="REFRIGERATOR",
         condition_grade=ConditionGrade.B,
         warranty_works=True,
         price=250_000,
@@ -250,7 +249,7 @@ async def test_create_product_images_sort_order() -> None:
     ]
     data = AdminProductCreate(
         title="테스트 TV",
-        category=ProductCategory.TV,
+        category="TV",
         condition_grade=ConditionGrade.A,
         warranty_works=False,
         price=100_000,

@@ -25,6 +25,7 @@ from app.admin.sales_router import router as admin_sales_router
 from app.auth.auth_router import router as auth_router
 from app.cart.cart_router import router as cart_router
 from app.catalog.admin_catalog_router import router as admin_catalog_router
+from app.catalog.admin_category_router import router as admin_category_router
 from app.catalog.catalog_router import router as catalog_router
 from app.common.uploads import router as uploads_router
 from app.core.config import settings
@@ -43,6 +44,7 @@ api_v1.include_router(user_router)
 api_v1.include_router(address_router)
 api_v1.include_router(catalog_router)
 api_v1.include_router(admin_catalog_router)
+api_v1.include_router(admin_category_router)
 api_v1.include_router(admin_members_router)
 api_v1.include_router(admin_order_router)
 api_v1.include_router(admin_dashboard_router)

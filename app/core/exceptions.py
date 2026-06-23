@@ -129,6 +129,18 @@ class ProductNotFound(BusinessError):
     message = "상품을 찾을 수 없습니다."
 
 
+class CategoryNotFound(BusinessError):
+    code = "CATEGORY_NOT_FOUND"
+    http_status = status.HTTP_404_NOT_FOUND
+    message = "카테고리를 찾을 수 없습니다."
+
+
+class CategoryAlreadyExists(BusinessError):
+    code = "CATEGORY_ALREADY_EXISTS"
+    http_status = status.HTTP_409_CONFLICT
+    message = "이미 존재하는 카테고리 ID입니다."
+
+
 class OutOfStock(BusinessError):
     code = "OUT_OF_STOCK"
     http_status = status.HTTP_422_UNPROCESSABLE_ENTITY

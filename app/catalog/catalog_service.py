@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from app.catalog.catalog_repository import CatalogRepository
 from app.catalog.catalog_schemas import (
-    CATEGORY_META,
     CategoryMetaItem,
     ProductDetailResponse,
     ProductImageResponse,
@@ -45,8 +44,12 @@ class CatalogService:
         products = await self.repo.get_featured(limit)
         return [_to_response(p) for p in products]
 
-    def get_categories(self) -> list[CategoryMetaItem]:
-        return sorted(CATEGORY_META.values(), key=lambda c: c.sort_order)
+    async def get_categories(self) -> list[CategoryMetaItem]:
+        cats = await self.repo.get_categories()
+        return [
+            CategoryMetaItem(id=c.id, label=c.title, icon=c.icon, sort_order=c.sort_order)
+            for c in cats
+        ]
 
 
 # ── 내부 매핑 헬퍼 ───────────────────────────────────────────

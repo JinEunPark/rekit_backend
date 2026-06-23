@@ -9,7 +9,7 @@ DB 없이 fake repo + in-memory Product 객체로 도메인 로직 검증.
 - get_product: 상세 + 이미지 목록
 - ProductNotFound: 없는 상품 조회 시 raise
 - get_featured: ACTIVE 최신 N건
-- get_categories: 정적 메타 sort_order 순
+- get_categories: DB 기반 동적 카테고리, sort_order 순
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from app.catalog.catalog_service import CatalogService
 from app.catalog.models import (
     ConditionGrade,
     Product,
-    ProductCategory,
+    ProductCategoryMetaItem,
     ProductImage,
     ProductStatus,
 )
@@ -36,7 +36,7 @@ def make_product(
     *,
     product_id: int = 1,
     title: str = "테스트 냉장고",
-    category: ProductCategory = ProductCategory.REFRIGERATOR,
+    category: str = "REFRIGERATOR",
     brand: str | None = "삼성",
     model_name: str | None = "RT38K",
     condition_grade: ConditionGrade = ConditionGrade.A,
@@ -79,14 +79,30 @@ def make_image(
     return img
 
 
+def make_category(
+    *,
+    category_id: str = "REFRIGERATOR",
+    title: str = "냉장고",
+    icon: str = "fridge",
+    sort_order: int = 1,
+) -> ProductCategoryMetaItem:
+    c = ProductCategoryMetaItem(id=category_id, title=title, icon=icon, sort_order=sort_order)
+    return c
+
+
 # ── Fake repo ────────────────────────────────────────────────
 
 
 class _FakeCatalogRepo:
     """Python 리스트 기반 — SQL 없이 필터·정렬·페이지네이션 재현."""
 
-    def __init__(self, products: list[Product]) -> None:
+    def __init__(
+        self,
+        products: list[Product],
+        categories: list[ProductCategoryMetaItem] | None = None,
+    ) -> None:
         self._products = products
+        self._categories = categories or []
 
     async def get_list(self, params: ProductListParams) -> tuple[list[Product], int]:
         items = [p for p in self._products if p.status == ProductStatus.ACTIVE]
@@ -130,9 +146,15 @@ class _FakeCatalogRepo:
         active = [p for p in self._products if p.status == ProductStatus.ACTIVE]
         return sorted(active, key=lambda p: p.id, reverse=True)[:limit]  # type: ignore[arg-type]
 
+    async def get_categories(self) -> list[ProductCategoryMetaItem]:
+        return sorted(self._categories, key=lambda c: c.sort_order)
 
-def _make_service(products: list[Product]) -> CatalogService:
-    return CatalogService(_FakeCatalogRepo(products))  # type: ignore[arg-type]
+
+def _make_service(
+    products: list[Product],
+    categories: list[ProductCategoryMetaItem] | None = None,
+) -> CatalogService:
+    return CatalogService(_FakeCatalogRepo(products, categories))  # type: ignore[arg-type]
 
 
 # ── list_products ────────────────────────────────────────────
@@ -165,18 +187,16 @@ async def test_list_products_excludes_inactive_and_soldout() -> None:
 
 async def test_list_products_filter_by_category() -> None:
     products = [
-        make_product(product_id=1, category=ProductCategory.REFRIGERATOR),
-        make_product(product_id=2, category=ProductCategory.TV),
-        make_product(product_id=3, category=ProductCategory.REFRIGERATOR),
+        make_product(product_id=1, category="REFRIGERATOR"),
+        make_product(product_id=2, category="TV"),
+        make_product(product_id=3, category="REFRIGERATOR"),
     ]
     service = _make_service(products)
 
-    result = await service.list_products(
-        ProductListParams(category=ProductCategory.REFRIGERATOR)
-    )
+    result = await service.list_products(ProductListParams(category="REFRIGERATOR"))
 
     assert len(result.items) == 2
-    assert all(p.category == ProductCategory.REFRIGERATOR for p in result.items)
+    assert all(p.category == "REFRIGERATOR" for p in result.items)
 
 
 async def test_list_products_filter_by_grade() -> None:
@@ -394,18 +414,27 @@ async def test_get_featured_returns_latest_active() -> None:
 
 
 async def test_get_categories_sorted_by_sort_order() -> None:
-    service = _make_service([])
+    categories = [
+        make_category(category_id="KITCHEN", sort_order=5),
+        make_category(category_id="REFRIGERATOR", sort_order=1),
+        make_category(category_id="TV", sort_order=3),
+    ]
+    service = _make_service([], categories=categories)
 
-    categories = service.get_categories()
+    result = await service.get_categories()
 
-    orders = [c.sort_order for c in categories]
+    orders = [c.sort_order for c in result]
     assert orders == sorted(orders)
 
 
 async def test_get_categories_all_have_required_fields() -> None:
-    service = _make_service([])
+    categories = [
+        make_category(category_id="REFRIGERATOR", title="냉장고", icon="fridge", sort_order=1),
+        make_category(category_id="TV", title="TV", icon="tv", sort_order=3),
+    ]
+    service = _make_service([], categories=categories)
 
-    for cat in service.get_categories():
+    for cat in await service.get_categories():
         assert cat.id
         assert cat.label
         assert cat.icon

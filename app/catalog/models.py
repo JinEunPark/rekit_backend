@@ -10,17 +10,6 @@ if TYPE_CHECKING:
     from app.cart.models import CartItem
 
 
-class ProductCategory(str, enum.Enum):
-    """상품 대분류. 디자인 홈 그리드 8개와 1:1 매핑되도록 VACUUM/SMALL_APPLIANCE 확장 예정."""
-
-    REFRIGERATOR = "REFRIGERATOR"  # 냉장고
-    WASHING_MACHINE = "WASHING_MACHINE"  # 세탁기
-    TV = "TV"
-    AIR_CONDITIONER = "AIR_CONDITIONER"  # 에어컨
-    KITCHEN = "KITCHEN"  # 주방가전
-    ETC = "ETC"  # 기타
-
-
 class ConditionGrade(str, enum.Enum):
     """상태 등급 — 사진/안내 카드 색상이 이 값으로 결정된다."""
 
@@ -61,11 +50,11 @@ class Product(Base, TimestampMixin):
         default="",
         comment="상세 설명 (플레인 텍스트). 마크다운/HTML 은 서비스 레이어에서 sanitize",
     )
-    category: Mapped[ProductCategory] = mapped_column(
-        Enum(ProductCategory, native_enum=False, length=30),
+    category: Mapped[str] = mapped_column(
+        String(30),
         index=True,
         nullable=False,
-        comment="대분류. 카테고리 칩 필터링과 인덱스 검색에 사용",
+        comment="대분류 ID. product_categories.id 를 FK 없이 참조 (유연성 우선)",
     )
     brand: Mapped[str | None] = mapped_column(
         String(100),
@@ -187,3 +176,18 @@ class ProductImage(Base):
     )
 
     product: Mapped[Product] = relationship(back_populates="images")
+
+
+class ProductCategoryMetaItem(Base, TimestampMixin):
+    """상품 카테고리 메타 정보. 정적 데이터로 프론트에 전달."""
+
+    __tablename__ = "product_categories"
+
+    id: Mapped[str] = mapped_column(
+        String(30),
+        primary_key=True,
+        comment="카테고리 식별자 (REFRIGERATOR 등 대문자+언더스코어)",
+    )
+    title: Mapped[str] = mapped_column(String(100), nullable=False)
+    icon: Mapped[str] = mapped_column(String(50), nullable=False, default="menu")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

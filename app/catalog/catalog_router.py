@@ -89,4 +89,4 @@ async def get_categories(
     """프론트 홈 그리드·필터 칩용 카테고리 메타.
     DB 쿼리 없는 정적 응답 — 변경 시 배포 없이 캐시 무효화 가능.
     """
-    return service.get_categories()
+    return await service.get_categories()

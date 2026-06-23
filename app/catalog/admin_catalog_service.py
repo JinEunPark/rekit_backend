@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from app.catalog.admin_catalog_schemas import (
+    AdminCategoryCreate,
+    AdminCategoryResponse,
+    AdminCategoryUpdate,
     AdminProductCreate,
     AdminProductDetailResponse,
     AdminProductImageResponse,
@@ -13,8 +16,8 @@ from app.catalog.admin_catalog_schemas import (
 )
 from app.catalog.catalog_repository import CatalogRepository
 from app.catalog.catalog_utils import discount_pct as _discount_pct
-from app.catalog.models import Product, ProductImage, ProductStatus
-from app.core.exceptions import ProductNotFound
+from app.catalog.models import Product, ProductCategoryMetaItem, ProductImage, ProductStatus
+from app.core.exceptions import CategoryAlreadyExists, CategoryNotFound, ProductNotFound
 from app.core.pagination import build_page_meta
 
 
@@ -91,6 +94,38 @@ class AdminCatalogService:
         if product is None:
             raise ProductNotFound()
         product.status = ProductStatus.INACTIVE
+
+    # ── 카테고리 CRUD ──────────────────────────────────────────
+
+    async def list_categories(self) -> list[AdminCategoryResponse]:
+        cats = await self._repo.get_categories()
+        return [AdminCategoryResponse.model_validate(c) for c in cats]
+
+    async def create_category(self, data: AdminCategoryCreate) -> AdminCategoryResponse:
+        existing = await self._repo.get_category_by_id(data.id)
+        if existing is not None:
+            raise CategoryAlreadyExists()
+        cat = ProductCategoryMetaItem(
+            id=data.id, title=data.title, icon=data.icon, sort_order=data.sort_order
+        )
+        await self._repo.save_category(cat)
+        return AdminCategoryResponse.model_validate(cat)
+
+    async def update_category(
+        self, category_id: str, data: AdminCategoryUpdate
+    ) -> AdminCategoryResponse:
+        cat = await self._repo.get_category_by_id(category_id)
+        if cat is None:
+            raise CategoryNotFound()
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(cat, key, value)
+        return AdminCategoryResponse.model_validate(cat)
+
+    async def delete_category(self, category_id: str) -> None:
+        cat = await self._repo.get_category_by_id(category_id)
+        if cat is None:
+            raise CategoryNotFound()
+        await self._repo.delete_category(cat)
 
 
 def _to_image(img: ProductImage) -> AdminProductImageResponse:
