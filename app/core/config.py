@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     # 소셜 신규가입용 임시 토큰 만료 (분). JWT 로 단명 발급.
     social_signup_token_expire_minutes: int = 15
 
+    # ── 결제 PG ───────────────────────────────────────────
+    toss_secret_key: str | None = None
+    # True 로 설정하면 TossPaymentGateway 대신 FakePaymentGateway 를 사용.
+    # 로컬/개발 환경 전용. 운영(production)에서는 반드시 False.
+    use_fake_pg: bool = False
+
     # S3 호환 오브젝트 스토리지 (dev: SeaweedFS)
     s3_endpoint_url: str
     s3_region: str = "ap-northeast-2"

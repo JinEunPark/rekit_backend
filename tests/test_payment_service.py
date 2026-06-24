@@ -18,7 +18,18 @@ from app.payment.payment_schemas import (
     PaymentInitRequest,
     TossWebhookPayload,
 )
+from fastapi import BackgroundTasks
+
+from app.common.email import EmailSender
 from app.payment.payment_service import PaymentService
+
+
+class _FakeEmailSender:
+    async def send(self, *, to: str, subject: str, body: str) -> None:
+        pass
+
+
+_: EmailSender = _FakeEmailSender()  # type: ignore[assignment]
 
 # ── 팩토리 ─────────────────────────────────────────────────────
 
@@ -144,6 +155,9 @@ class _FakePaymentRepo:
         order.status = OrderStatus.PAID
         order.paid_at = datetime.now(UTC)
 
+    async def get_user_email(self, _: int) -> str | None:
+        return "test@example.com"
+
 
 def _make_service(
     orders: list[Order] | None = None,
@@ -152,7 +166,7 @@ def _make_service(
 ) -> PaymentService:
     repo = _FakePaymentRepo(orders, payments)
     gw = gateway or _FakeGateway()
-    return PaymentService(repo, gw)  # type: ignore[arg-type]
+    return PaymentService(repo, gw, _FakeEmailSender())  # type: ignore[arg-type]
 
 
 # ── init_payment ────────────────────────────────────────────────
@@ -217,7 +231,8 @@ async def test_confirm_payment_success() -> None:
             payment_key="toss_key_abc",
             order_id="RK-2606200001",
             amount=300_000,
-        )
+        ),
+        BackgroundTasks(),
     )
 
     assert result.order_number == "RK-2606200001"
@@ -234,7 +249,8 @@ async def test_confirm_payment_amount_mismatch_raises() -> None:
         await service.confirm_payment(
             PaymentConfirmRequest(
                 payment_key="k", order_id="RK-2606200001", amount=999_999
-            )
+            ),
+            BackgroundTasks(),
         )
 
 
@@ -249,7 +265,8 @@ async def test_confirm_payment_gateway_fails() -> None:
         await service.confirm_payment(
             PaymentConfirmRequest(
                 payment_key="k", order_id="RK-2606200001", amount=300_000
-            )
+            ),
+            BackgroundTasks(),
         )
 
 
@@ -276,3 +293,139 @@ async def test_webhook_unknown_event_ignored() -> None:
     await service.handle_webhook(
         TossWebhookPayload(eventType="UNKNOWN_EVENT", data={})
     )
+
+
+# ── confirm_payment: 이메일 발송 ────────────────────────────────
+
+
+async def test_confirm_payment_registers_email_task() -> None:
+    """결제 성공 시 BackgroundTasks 에 이메일 태스크가 1개 등록된다."""
+    order = make_order()
+    payment = make_payment(order_id=1)
+    service = _make_service(orders=[order], payments=[payment])
+    bg = BackgroundTasks()
+
+    await service.confirm_payment(
+        PaymentConfirmRequest(
+            payment_key="toss_key_abc",
+            order_id="RK-2606200001",
+            amount=300_000,
+        ),
+        bg,
+    )
+
+    assert len(bg.tasks) == 1
+    assert bg.tasks[0].kwargs["to"] == "test@example.com"
+    assert "RK-2606200001" in str(bg.tasks[0].kwargs["order_number"])
+
+
+async def test_confirm_payment_no_email_task_when_no_user_email() -> None:
+    """유저 이메일이 없으면 이메일 태스크가 등록되지 않는다."""
+
+    class _NoEmailRepo(_FakePaymentRepo):
+        async def get_user_email(self, _: int) -> str | None:
+            return None
+
+    order = make_order()
+    payment = make_payment(order_id=1)
+    repo = _NoEmailRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+    bg = BackgroundTasks()
+
+    await service.confirm_payment(
+        PaymentConfirmRequest(
+            payment_key="k", order_id="RK-2606200001", amount=300_000
+        ),
+        bg,
+    )
+
+    assert bg.tasks == []
+
+
+# ── _send_payment_confirmation_email: 이메일 본문 ───────────────
+
+
+class _RecordingEmailSender:
+    """발송된 메일을 records 에 누적한다."""
+
+    def __init__(self) -> None:
+        self.records: list[dict[str, str]] = []
+
+    async def send(self, *, to: str, subject: str, body: str) -> None:
+        self.records.append({"to": to, "subject": subject, "body": body})
+
+
+async def test_payment_email_subject_contains_order_number() -> None:
+    """제목에 주문번호가 포함되어야 한다."""
+    from app.payment.payment_service import _send_payment_confirmation_email
+
+    sender = _RecordingEmailSender()
+    await _send_payment_confirmation_email(
+        email_sender=sender,  # type: ignore[arg-type]
+        to="buyer@example.com",
+        order_number="RK-2606200001",
+        amount=300_000,
+        card_company="신한카드",
+        card_last4="1234",
+        installment_months=0,
+    )
+
+    assert "RK-2606200001" in sender.records[0]["subject"]
+
+
+async def test_payment_email_body_card_일시불() -> None:
+    """카드 일시불 결제 시 본문에 카드사·끝번호·일시불이 포함된다."""
+    from app.payment.payment_service import _send_payment_confirmation_email
+
+    sender = _RecordingEmailSender()
+    await _send_payment_confirmation_email(
+        email_sender=sender,  # type: ignore[arg-type]
+        to="buyer@example.com",
+        order_number="RK-2606200001",
+        amount=300_000,
+        card_company="신한카드",
+        card_last4="1234",
+        installment_months=0,
+    )
+
+    body = sender.records[0]["body"]
+    assert "신한카드" in body
+    assert "1234" in body
+    assert "일시불" in body
+    assert "300,000" in body
+
+
+async def test_payment_email_body_installment() -> None:
+    """할부 결제 시 본문에 N개월 할부가 표시된다."""
+    from app.payment.payment_service import _send_payment_confirmation_email
+
+    sender = _RecordingEmailSender()
+    await _send_payment_confirmation_email(
+        email_sender=sender,  # type: ignore[arg-type]
+        to="buyer@example.com",
+        order_number="RK-2606200002",
+        amount=500_000,
+        card_company="현대카드",
+        card_last4="5678",
+        installment_months=3,
+    )
+
+    assert "3개월 할부" in sender.records[0]["body"]
+
+
+async def test_payment_email_body_no_card_info() -> None:
+    """카드 정보 없을 때(계좌이체 등) 본문에 '결제 완료'가 표시된다."""
+    from app.payment.payment_service import _send_payment_confirmation_email
+
+    sender = _RecordingEmailSender()
+    await _send_payment_confirmation_email(
+        email_sender=sender,  # type: ignore[arg-type]
+        to="buyer@example.com",
+        order_number="RK-2606200003",
+        amount=150_000,
+        card_company=None,
+        card_last4=None,
+        installment_months=0,
+    )
+
+    assert "결제 완료" in sender.records[0]["body"]

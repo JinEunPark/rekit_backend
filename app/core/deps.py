@@ -232,10 +232,17 @@ async def get_order_service(
 
 async def get_payment_service(
     session: AsyncSession = Depends(db_session),
+    email_sender: EmailSender = Depends(get_email_sender),
 ) -> PaymentService:
-    from app.payment.adapters.toss import TossPaymentGateway
+    if settings.use_fake_pg:
+        from app.payment.adapters.fake import FakePaymentGateway
 
-    return PaymentService(PaymentRepository(session), TossPaymentGateway())
+        gateway = FakePaymentGateway()
+    else:
+        from app.payment.adapters.toss import TossPaymentGateway
+
+        gateway = TossPaymentGateway()
+    return PaymentService(PaymentRepository(session), gateway, email_sender)
 
 
 async def get_admin_catalog_service(

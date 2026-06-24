@@ -1,7 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "Bash(.venv/bin/pytest tests/test_address_schemas.py -q)"
+      "Bash(.venv/bin/pytest tests/test_address_schemas.py -q)",
+      "Bash(.venv/bin/python -c \"from app.payment.adapters.fake import FakePaymentGateway; print\\('OK'\\)\")",
+      "Bash(.venv/bin/python -c \"from app.payment.payment_service import PaymentService; print\\('OK'\\)\")",
+      "Bash(.venv/bin/pytest tests/ -q --ignore=tests/integration -k \"payment\")",
+      "Bash(.venv/bin/pytest tests/test_payment_service.py -q)",
+      "Bash(.venv/bin/pytest tests/test_payment_service.py::test_confirm_payment_success -v)",
+      "Bash(.venv/bin/pytest -q)",
+      "Bash(.venv/bin/pytest tests/test_payment_service.py -v)"
     ]
   }
 }

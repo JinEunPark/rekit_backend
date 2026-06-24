@@ -8,7 +8,7 @@ api.md 결제 API:
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 
 from app.core.deps import get_active_user, get_payment_service
 from app.core.exceptions import PaymentFailed
@@ -57,6 +57,7 @@ async def init_payment(
 )
 async def confirm_payment(
     body: PaymentConfirmRequest,
+    background_tasks: BackgroundTasks,
     service: PaymentService = Depends(get_payment_service),
 ) -> PaymentConfirmResponse:
     """토스 성공 콜백 후 서버↔PG 최종 검증.
@@ -65,7 +66,7 @@ async def confirm_payment(
     - ORDER_NOT_FOUND (404): 주문 없음
     - PAYMENT_FAILED (422): READY 결제 없음 / 금액 불일치 / PG 거절
     """
-    return await service.confirm_payment(body)
+    return await service.confirm_payment(body, background_tasks)
 
 
 @router.post(

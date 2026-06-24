@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.order.models import Order, OrderStatus
 from app.payment.adapters.ports import TossConfirmResult
 from app.payment.models import Payment, PaymentStatus
+from app.user.models import User
 
 
 class PaymentRepository:
@@ -61,6 +62,12 @@ class PaymentRepository:
         payment.installment_months = result.installment_months
         payment.approval_number = result.approval_number
         await self._session.flush()
+
+    async def get_user_email(self, user_id: int) -> str | None:
+        result = await self._session.execute(
+            select(User.email).where(User.id == user_id)
+        )
+        return result.scalar_one_or_none()
 
     async def update_order_paid(self, order: Order) -> None:
         """주문 상태를 PAID 로 전환 + paid_at 기록."""

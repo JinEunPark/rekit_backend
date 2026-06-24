@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from fastapi import BackgroundTasks
+
+from app.common.email import EmailSender
 from app.core.exceptions import OrderNotFound, PaymentFailed
 from app.order.models import OrderStatus
 
@@ -30,9 +33,15 @@ class PaymentService:
     handle_webhook  → PG 웹훅 멱등 처리
     """
 
-    def __init__(self, repo: PaymentRepository, gateway: PaymentGateway) -> None:
+    def __init__(
+        self,
+        repo: PaymentRepository,
+        gateway: PaymentGateway,
+        email_sender: EmailSender,
+    ) -> None:
         self._repo = repo
         self._gateway = gateway
+        self._email_sender = email_sender
 
     async def init_payment(
         self, user_id: int, req: PaymentInitRequest
@@ -72,7 +81,9 @@ class PaymentService:
         )
 
     async def confirm_payment(
-        self, req: PaymentConfirmRequest
+        self,
+        req: PaymentConfirmRequest,
+        background_tasks: BackgroundTasks,
     ) -> PaymentConfirmResponse:
         """프론트 토스 성공 콜백 후 서버↔PG 최종 검증.
 
@@ -81,6 +92,7 @@ class PaymentService:
         3. amount == order.total_amount 검증
         4. gateway.confirm 호출
         5. payment PAID 전환 + order PAID 전환
+        6. 결제 완료 이메일 발송 (BackgroundTasks)
         """
         order = await self._repo.get_order_by_number(req.order_id)
         if order is None:
@@ -107,6 +119,19 @@ class PaymentService:
 
         await self._repo.update_status_paid(ready_payment, result)
         await self._repo.update_order_paid(order)
+
+        user_email = await self._repo.get_user_email(order.user_id)
+        if user_email:
+            background_tasks.add_task(
+                _send_payment_confirmation_email,
+                email_sender=self._email_sender,
+                to=user_email,
+                order_number=order.order_number,
+                amount=order.total_amount,
+                card_company=result.card_company,
+                card_last4=result.card_last4,
+                installment_months=result.installment_months,
+            )
 
         return PaymentConfirmResponse(
             order_number=order.order_number,
@@ -151,3 +176,40 @@ class PaymentService:
         elif pg_status == _TOSS_ABORTED:
             payment.status = PaymentStatus.FAILED
             payment.fail_reason = data.get("failure", {}).get("message")
+
+
+async def _send_payment_confirmation_email(
+    *,
+    email_sender: EmailSender,
+    to: str,
+    order_number: str,
+    amount: int,
+    card_company: str | None,
+    card_last4: str | None,
+    installment_months: int,
+) -> None:
+    """결제 완료 안내 메일 발송. BackgroundTasks 로 실행된다."""
+    if card_company and card_last4:
+        installment = "일시불" if installment_months == 0 else f"{installment_months}개월 할부"
+        payment_info = f"{card_company} {card_last4} · {installment}"
+    else:
+        payment_info = "결제 완료"
+
+    body = f"""안녕하세요, Rekle입니다.
+
+결제가 완료되었습니다.
+
+주문번호: {order_number}
+결제금액: {amount:,}원
+결제수단: {payment_info}
+
+주문 내역은 마이페이지에서 확인하실 수 있습니다.
+
+감사합니다.
+Rekle 팀
+"""
+    await email_sender.send(
+        to=to,
+        subject=f"[Rekle] 주문 {order_number} 결제가 완료되었습니다",
+        body=body,
+    )
