@@ -3,7 +3,7 @@
 User 모델 / DB / Redis 의존 없음 — 순수 함수만 검증.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -68,8 +68,8 @@ def test_access_token_iat_is_utc_aware() -> None:
     """iat 가 UTC timestamp 인지 확인 — 서버 TZ 와 무관해야 함."""
     token = create_access_token(sub="42", claims={})
     payload = decode_token(token)
-    iat = datetime.fromtimestamp(payload["iat"], tz=timezone.utc)
-    delta = abs((datetime.now(timezone.utc) - iat).total_seconds())
+    iat = datetime.fromtimestamp(payload["iat"], tz=UTC)
+    delta = abs((datetime.now(UTC) - iat).total_seconds())
     assert delta < 5  # 발급 직후라 5초 이내여야 정상
 
 
@@ -123,7 +123,7 @@ def test_create_token_user_cannot_override_sub() -> None:
 
 def test_create_token_user_cannot_override_exp() -> None:
     """claims 로 exp 를 무한대로 늘리려 해도 시스템 exp 가 우선."""
-    far_future = int(datetime.now(timezone.utc).timestamp()) + 10**9
+    far_future = int(datetime.now(UTC).timestamp()) + 10**9
     token = create_access_token(
         sub="42",
         claims={"exp": far_future},

@@ -1,7 +1,9 @@
 
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+
 import bcrypt
 from jose import ExpiredSignatureError, JWTError, jwt
+
 from app.core.config import settings
 from app.core.exceptions import TokenExpired
 

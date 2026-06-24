@@ -19,6 +19,7 @@ from app.order.order_schemas import (
     OrderResponse,
     QuoteRequest,
     QuoteResponse,
+    ShipmentResponse,
 )
 from app.order.order_service import OrderService
 from app.user.models import User
@@ -79,3 +80,23 @@ async def cancel_order(
 ) -> OrderResponse:
     """PENDING/PAID/PREPARING 상태 주문을 취소한다."""
     return await service.cancel_order(user_id=user.id, order_number=order_number)
+
+
+@router.get("/{order_number}/shipment", response_model=ShipmentResponse)
+async def get_shipment(
+    order_number: str,
+    user: User = Depends(get_active_user),
+    service: OrderService = Depends(get_order_service),
+) -> ShipmentResponse:
+    """주문의 배송 정보를 조회한다. 배송 정보가 없으면 404."""
+    return await service.get_shipment(user_id=user.id, order_number=order_number)
+
+
+@router.post("/{order_number}/refund/request", response_model=OrderResponse)
+async def request_refund(
+    order_number: str,
+    user: User = Depends(get_active_user),
+    service: OrderService = Depends(get_order_service),
+) -> OrderResponse:
+    """DELIVERED 상태 주문에 환불을 요청한다 (MVP: PG 취소 없이 상태만 변경)."""
+    return await service.request_refund(user_id=user.id, order_number=order_number)

@@ -11,7 +11,7 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from app.address.address_service import AddressService
+from app.address.address_schemas import AddressCreate, AddressUpdate
 from app.address.models import Address
 from app.core.deps import get_active_user, get_address_service
 from app.core.exceptions import AddressLimitExceeded, AddressNotFound
@@ -41,14 +41,14 @@ class _FakeService:
     async def list_addresses(self, user_id: int) -> list[Address]:
         return self._addresses
 
-    async def create_address(self, user_id: int, data):
+    async def create_address(self, user_id: int, data: AddressCreate) -> Address:
         if len(self._addresses) >= 10:
             raise AddressLimitExceeded()
         addr = _make_addr(len(self._addresses) + 1, is_default=data.is_default)
         self._addresses.append(addr)
         return addr
 
-    async def update_address(self, user_id: int, address_id: int, data):
+    async def update_address(self, user_id: int, address_id: int, data: AddressUpdate) -> Address:
         for addr in self._addresses:
             if addr.id == address_id:
                 return addr
@@ -107,19 +107,21 @@ def client_at_limit() -> Iterator[TestClient]:
 
 
 class TestGetAddresses:
-    def test_empty_list_returns_200_with_empty_array(self, client):
+    def test_empty_list_returns_200_with_empty_array(self, client: TestClient) -> None:
         res = client.get("/api/v1/addresses")
         assert res.status_code == 200
         assert res.json() == []
 
-    def test_list_returns_addresses_with_is_default_alias(self, client_with_one_address):
+    def test_list_returns_addresses_with_is_default_alias(
+        self, client_with_one_address: TestClient
+    ) -> None:
         res = client_with_one_address.get("/api/v1/addresses")
         assert res.status_code == 200
         body = res.json()
         assert len(body) == 1
         assert "isDefault" in body[0]
 
-    def test_unauthenticated_returns_4xx(self):
+    def test_unauthenticated_returns_4xx(self) -> None:
         """dependency_overrides 없는 상태에서 호출 → 토큰 없어 401/403."""
         res = TestClient(app).get("/api/v1/addresses")
         assert res.status_code in (401, 403)
@@ -129,25 +131,27 @@ class TestGetAddresses:
 
 
 class TestPostAddresses:
-    def test_valid_body_returns_201(self, client):
+    def test_valid_body_returns_201(self, client: TestClient) -> None:
         res = client.post("/api/v1/addresses", json=_VALID_BODY)
         assert res.status_code == 201
         assert res.json()["recipient"] == "홍길동"
 
-    def test_invalid_phone_returns_422_validation_error(self, client):
+    def test_invalid_phone_returns_422_validation_error(self, client: TestClient) -> None:
         res = client.post("/api/v1/addresses", json={**_VALID_BODY, "phone": "02-bad"})
         assert res.status_code == 422
         assert res.json()["error"]["code"] == "VALIDATION_ERROR"
 
-    def test_invalid_zipcode_returns_422(self, client):
+    def test_invalid_zipcode_returns_422(self, client: TestClient) -> None:
         res = client.post("/api/v1/addresses", json={**_VALID_BODY, "zipcode": "9999"})
         assert res.status_code == 422
 
-    def test_missing_required_field_returns_422(self, client):
+    def test_missing_required_field_returns_422(self, client: TestClient) -> None:
         res = client.post("/api/v1/addresses", json={"recipient": "홍길동"})
         assert res.status_code == 422
 
-    def test_over_limit_returns_422_address_limit_exceeded(self, client_at_limit):
+    def test_over_limit_returns_422_address_limit_exceeded(
+        self, client_at_limit: TestClient
+    ) -> None:
         res = client_at_limit.post("/api/v1/addresses", json=_VALID_BODY)
         assert res.status_code == 422
         assert res.json()["error"]["code"] == "ADDRESS_LIMIT_EXCEEDED"
@@ -157,18 +161,18 @@ class TestPostAddresses:
 
 
 class TestPatchAddress:
-    def test_update_existing_returns_200(self, client_with_one_address):
+    def test_update_existing_returns_200(self, client_with_one_address: TestClient) -> None:
         res = client_with_one_address.patch(
             "/api/v1/addresses/1", json={"recipient": "김철수"}
         )
         assert res.status_code == 200
 
-    def test_update_not_found_returns_404(self, client):
+    def test_update_not_found_returns_404(self, client: TestClient) -> None:
         res = client.patch("/api/v1/addresses/999", json={"recipient": "김철수"})
         assert res.status_code == 404
         assert res.json()["error"]["code"] == "ADDRESS_NOT_FOUND"
 
-    def test_invalid_phone_in_patch_returns_422(self, client_with_one_address):
+    def test_invalid_phone_in_patch_returns_422(self, client_with_one_address: TestClient) -> None:
         res = client_with_one_address.patch(
             "/api/v1/addresses/1", json={"phone": "02-invalid"}
         )
@@ -180,11 +184,11 @@ class TestPatchAddress:
 
 
 class TestDeleteAddress:
-    def test_delete_existing_returns_204(self, client_with_one_address):
+    def test_delete_existing_returns_204(self, client_with_one_address: TestClient) -> None:
         res = client_with_one_address.delete("/api/v1/addresses/1")
         assert res.status_code == 204
 
-    def test_delete_not_found_returns_404(self, client):
+    def test_delete_not_found_returns_404(self, client: TestClient) -> None:
         res = client.delete("/api/v1/addresses/999")
         assert res.status_code == 404
         assert res.json()["error"]["code"] == "ADDRESS_NOT_FOUND"

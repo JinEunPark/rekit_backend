@@ -9,7 +9,7 @@ DB 가 필요한 multi-call 통합은 SQLAlchemy async + TestClient 의 event lo
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
@@ -30,7 +30,7 @@ class _FakeOAuth:
         return self.profile
 
 
-def _override_with(profile: SocialProfile):
+def _override_with(profile: SocialProfile) -> Callable[[SocialProvider], OAuthProvider]:
     def _fake(provider: SocialProvider) -> OAuthProvider:
         return _FakeOAuth(profile)
 

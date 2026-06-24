@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.security import HTTPAuthorizationCredentials
 
-from app.auth.auth_repository import AuthRepository
 from app.core.deps import get_current_user
 from app.core.exceptions import AccountInactive, TokenExpired
 from app.core.security import create_access_token

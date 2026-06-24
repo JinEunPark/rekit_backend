@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 
 from app.core.exceptions import InvalidOrderStatus, OrderCancelForbidden, OrderNotFound
 from app.core.pagination import build_page_meta
-from app.payment.models import PaymentStatus
 from app.order.admin_order_repository import AdminOrderRepository
 from app.order.admin_order_schemas import (
     AdminOrderCancelRequest,
@@ -23,6 +22,7 @@ from app.order.admin_order_schemas import (
     AdminShipmentInput,
 )
 from app.order.models import Order, OrderStatus
+from app.payment.models import PaymentStatus
 
 _CANCELLABLE = {OrderStatus.PENDING, OrderStatus.PAID, OrderStatus.PREPARING}
 _MANUAL_SETTABLE = {OrderStatus.PREPARING, OrderStatus.SHIPPING, OrderStatus.DELIVERED}

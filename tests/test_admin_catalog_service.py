@@ -13,6 +13,7 @@ DB 없이 fake repo + in-memory Product 객체로 도메인 로직 검증.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+
 import pytest
 
 from app.catalog.admin_catalog_schemas import (
@@ -150,7 +151,9 @@ class _FakeAdminCatalogRepo:
         return product
 
 
-def _make_service(products: list[Product] | None = None) -> tuple[AdminCatalogService, _FakeAdminCatalogRepo]:
+def _make_service(
+    products: list[Product] | None = None,
+) -> tuple[AdminCatalogService, _FakeAdminCatalogRepo]:
     repo = _FakeAdminCatalogRepo(products)
     service = AdminCatalogService(repo)  # type: ignore[arg-type]
     return service, repo
@@ -212,7 +215,7 @@ async def test_list_products_search_keyword() -> None:
 
 async def test_create_product_success() -> None:
     """신규 상품 생성 — 필드값 + 이미지 2개 포함."""
-    service, repo = _make_service()
+    service, _ = _make_service()
 
     data = AdminProductCreate(
         title="LG 냉장고 462L",

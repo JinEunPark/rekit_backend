@@ -19,6 +19,8 @@ from app.core.exceptions import (
     OrderCancelForbidden,
     OrderNotFound,
     OutOfStock,
+    RefundForbidden,
+    ShipmentNotFound,
 )
 from app.core.pagination import build_page_meta
 from app.core.shipping import calc_shipping, is_direct_delivery_available
@@ -32,6 +34,7 @@ from app.order.order_schemas import (
     OrderResponse,
     QuoteRequest,
     QuoteResponse,
+    ShipmentResponse,
 )
 from app.order.shipment import ShipmentMethod
 
@@ -167,9 +170,35 @@ class OrderService:
 
     async def get_order(self, user_id: int, order_number: str) -> OrderResponse:
         """order_number 로 단건 조회. 소유권 불일치는 OrderNotFound 로 처리(정보 노출 방지)."""
-        order = await self._repo.get_by_order_number(order_number)
+        order = await self._get_order_for_user(user_id, order_number)
+        return _to_order_response(order)
+
+    # ── 배송 조회 ────────────────────────────────────────────────────
+
+    async def get_shipment(self, user_id: int, order_number: str) -> ShipmentResponse:
+        """order_number 의 배송 정보 반환. 소유권 불일치 및 배송 정보 미존재는 각각 404."""
+        order = await self._repo.get_by_order_number_with_shipment(order_number)
         if order is None or order.user_id != user_id:
             raise OrderNotFound()
+        if order.shipment is None:
+            raise ShipmentNotFound()
+        return ShipmentResponse.model_validate(order.shipment)
+
+    # ── 환불 요청 ────────────────────────────────────────────────────
+
+    async def request_refund(self, user_id: int, order_number: str) -> OrderResponse:
+        """DELIVERED 상태 주문에 대해 환불을 요청한다 (MVP: 상태만 REFUNDED 로 전환).
+
+        실제 PG 취소 호출은 payment 모듈 책임으로 추후 연동.
+        """
+        order = await self._get_order_for_user(user_id, order_number)
+
+        if order.status != OrderStatus.DELIVERED:
+            raise RefundForbidden()
+
+        order.status = OrderStatus.REFUNDED
+        order.cancelled_at = datetime.now(UTC)
+
         return _to_order_response(order)
 
     # ── 취소 ────────────────────────────────────────────────────────
@@ -179,9 +208,7 @@ class OrderService:
 
         PAID 이상의 결제 취소(PG 호출)는 payment 모듈 책임이며, 여기서는 상태만 전환.
         """
-        order = await self._repo.get_by_order_number(order_number)
-        if order is None or order.user_id != user_id:
-            raise OrderNotFound()
+        order = await self._get_order_for_user(user_id, order_number)
 
         if order.status not in _CANCELLABLE_STATUSES:
             raise OrderCancelForbidden()
@@ -190,6 +217,15 @@ class OrderService:
         order.cancelled_at = datetime.now(UTC)
 
         return _to_order_response(order)
+
+    # ── 내부 헬퍼 ────────────────────────────────────────────────────
+
+    async def _get_order_for_user(self, user_id: int, order_number: str) -> Order:
+        """order_number 로 주문 조회 + 소유권 검증. 실패 시 OrderNotFound."""
+        order = await self._repo.get_by_order_number(order_number)
+        if order is None or order.user_id != user_id:
+            raise OrderNotFound()
+        return order
 
 
 # ── 변환 헬퍼 ────────────────────────────────────────────────────────

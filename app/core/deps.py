@@ -21,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.address.address_repository import AddressRepository
 from app.address.address_service import AddressService
+from app.admin.dashboard_service import DashboardService
+from app.admin.sales_service import SalesService
 from app.auth.adapters.oauth_factory import build_oauth_provider
 from app.auth.adapters.ports import OAuthProvider
 from app.auth.auth_repository import AuthRepository
@@ -28,15 +30,18 @@ from app.auth.auth_service import AuthService
 from app.auth.models import SocialProvider
 from app.cart.cart_repository import CartRepository
 from app.cart.cart_service import CartService
-from app.admin.dashboard_service import DashboardService
-from app.admin.sales_service import SalesService
 from app.catalog.admin_catalog_service import AdminCatalogService
 from app.catalog.catalog_repository import CatalogRepository
 from app.catalog.catalog_service import CatalogService
 from app.common.email import ConsoleEmailSender, EmailSender, GmailSmtpEmailSender
 from app.core.config import Settings, settings
 from app.core.database import async_session_factory
-from app.core.exceptions import AccountInactive, PasswordChangeRequired, PermissionDenied, TokenExpired
+from app.core.exceptions import (
+    AccountInactive,
+    PasswordChangeRequired,
+    PermissionDenied,
+    TokenExpired,
+)
 from app.core.security import decode_token
 from app.favorites.favorites_repository import FavoritesRepository
 from app.favorites.favorites_service import FavoritesService

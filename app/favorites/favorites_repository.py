@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.catalog.models import Product, ProductImage
+from app.catalog.models import Product
 from app.favorites.models import Favorite
 
 

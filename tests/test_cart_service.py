@@ -15,7 +15,6 @@ DB 없이 서비스 로직을 검증한다:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 
 import pytest
 
@@ -23,7 +22,7 @@ from app.cart.cart_schemas import (
     AddToCartRequest,
     UpdateCartItemRequest,
 )
-from app.cart.cart_service import CartService, _SHIPPING_FEE_ESTIMATE
+from app.cart.cart_service import _SHIPPING_FEE_ESTIMATE, CartService
 from app.cart.models import CartItem
 from app.catalog.models import (
     ConditionGrade,
@@ -354,11 +353,11 @@ async def test_cart_summary_computation() -> None:
     items_total = 550_000
     total = 550_000 + 60_000 = 610_000
     """
-    productA = make_product(product_id=1, price=200_000, stock=5)
-    productB = make_product(product_id=2, price=150_000, stock=5)
-    itemA = make_cart_item(item_id=1, user_id=1, product=productA, quantity=2)
-    itemB = make_cart_item(item_id=2, user_id=1, product=productB, quantity=1)
-    service = _make_service(items=[itemA, itemB])
+    product_a = make_product(product_id=1, price=200_000, stock=5)
+    product_b = make_product(product_id=2, price=150_000, stock=5)
+    item_a = make_cart_item(item_id=1, user_id=1, product=product_a, quantity=2)
+    item_b = make_cart_item(item_id=2, user_id=1, product=product_b, quantity=1)
+    service = _make_service(items=[item_a, item_b])
 
     result = await service.get_cart(user_id=1)
 

@@ -2,6 +2,7 @@ from math import ceil
 
 from pydantic import BaseModel, Field
 
+
 class PageParams(BaseModel):
     page: int = Field(default=1, ge=1, description="페이지 번호 (1부터 시작)")
     size: int = Field(default=10, ge=1, le=100, description="페이지 크기 (1-100)")

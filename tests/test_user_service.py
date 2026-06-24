@@ -13,7 +13,8 @@ import pytest
 
 from app.core.exceptions import InvalidCredentials
 from app.core.security import hash_password, verify_password
-from app.user.models import User, UserRole
+from app.user.models import User, UserRole, UserStatus
+from app.user.user_schemas import UpdateProfileRequest
 from app.user.user_service import UserService
 
 
@@ -64,6 +65,65 @@ def test_change_password_raises_when_current_password_mismatch() -> None:
 
     # password_hash 는 그대로
     assert verify_password("actualpw1", user.password_hash)
+
+
+# ── update_profile ───────────────────────────────────────────────────────────
+
+
+def test_update_profile_changes_username() -> None:
+    user = _make_user()
+    service = UserService()
+
+    service.update_profile(user=user, data=UpdateProfileRequest(username="새이름"))
+
+    assert user.username == "새이름"
+
+
+def test_update_profile_changes_phone() -> None:
+    user = _make_user()
+    service = UserService()
+
+    service.update_profile(user=user, data=UpdateProfileRequest(phone="01099998888"))
+
+    assert user.phone == "01099998888"
+
+
+def test_update_profile_none_fields_are_skipped() -> None:
+    """None 필드는 기존 값을 건드리지 않는다."""
+    user = _make_user()
+    original_username = user.username
+    service = UserService()
+
+    service.update_profile(user=user, data=UpdateProfileRequest(phone="01011112222"))
+
+    assert user.username == original_username
+
+
+# ── withdraw ─────────────────────────────────────────────────────────────────
+
+
+def test_withdraw_deactivates_user() -> None:
+    user = _make_user()
+    service = UserService()
+
+    service.withdraw(user=user)
+
+    assert user.is_active is False
+    assert user.status == UserStatus.DORMANT
+    assert user.withdrawn_at is not None
+
+
+def test_withdraw_clears_ci_di() -> None:
+    """탈퇴 시 개인식별 정보 즉시 파기."""
+    user = _make_user()
+    user.ci = "some-ci-value"
+    user.di = "some-di-value"
+    service = UserService()
+
+    service.withdraw(user=user)
+
+    assert user.ci is None
+    assert user.di is None
 
 
 def test_change_password_does_not_match_new_password_against_old_hash() -> None:

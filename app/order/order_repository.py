@@ -48,6 +48,16 @@ class OrderRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_order_number_with_shipment(self, order_number: str) -> Order | None:
+        """order_number 로 주문 단건 조회 (shipment 포함, items 제외). get_shipment 전용."""
+        stmt = (
+            select(Order)
+            .where(Order.order_number == order_number)
+            .options(selectinload(Order.shipment))
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_product(self, product_id: int) -> Product | None:
         """락 없는 단건 상품 조회. get_quote 같은 read-only 경로용."""
         stmt = (

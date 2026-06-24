@@ -12,6 +12,22 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.auth.auth_schemas import PASSWORD_MIN_LENGTH, validate_password_policy
 
 
+class UpdateProfileRequest(BaseModel):
+    """PATCH /users/me 요청 바디. 변경할 필드만 전송 (partial update)."""
+
+    username: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=50,
+        description="변경할 사용자 이름",
+    )
+    phone: str | None = Field(
+        default=None,
+        pattern=r"^01[016789]\d{7,8}$",
+        description="변경할 휴대폰 번호 (하이픈 없이 01012345678 형식)",
+    )
+
+
 class ChangePasswordRequest(BaseModel):
     """POST /users/me/password 요청 바디. api.md §4.3 + 클라 ChangePasswordView.
 

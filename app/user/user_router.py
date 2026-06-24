@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, status
 from app.auth.auth_schemas import UserResponse
 from app.core.deps import get_active_user, get_current_user, get_user_service
 from app.user.models import User
-from app.user.user_schemas import ChangePasswordRequest
+from app.user.user_schemas import ChangePasswordRequest, UpdateProfileRequest
 from app.user.user_service import UserService
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -37,6 +37,36 @@ async def get_me(
     `from_attributes=True` 라 ORM User → DTO 자동 매핑.
     """
     return UserResponse.model_validate(user)
+
+
+@router.patch(
+    "/me",
+    response_model=UserResponse,
+    response_model_by_alias=True,
+    status_code=status.HTTP_200_OK,
+    summary="내 프로필 수정",
+)
+async def update_me(
+    body: UpdateProfileRequest,
+    user: User = Depends(get_active_user),
+    service: UserService = Depends(get_user_service),
+) -> UserResponse:
+    """username / phone 부분 업데이트. api.md §4.2."""
+    service.update_profile(user=user, data=body)
+    return UserResponse.model_validate(user)
+
+
+@router.delete(
+    "/me",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="회원탈퇴",
+)
+async def withdraw_me(
+    user: User = Depends(get_active_user),
+    service: UserService = Depends(get_user_service),
+) -> None:
+    """계정 비활성화 + CI/DI 파기. 주문 데이터는 전자상거래법에 따라 5년 보존."""
+    service.withdraw(user=user)
 
 
 @router.post(

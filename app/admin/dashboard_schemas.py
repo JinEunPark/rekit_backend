@@ -7,7 +7,6 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.order.models import OrderStatus
-from app.order.shipment import ShipmentMethod
 
 
 class DashboardSummary(BaseModel):

@@ -13,7 +13,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from app.auth.adapters.ports import OAuthProvider, SocialProfile
+from app.auth.adapters.ports import SocialProfile
 from app.auth.auth_service import AuthService
 from app.auth.models import SocialAccount, SocialProvider
 from app.common.email import ConsoleEmailSender
@@ -115,7 +115,9 @@ async def test_social_login_returns_tokens_when_social_account_exists() -> None:
         )
     )
     oauth = _FakeOAuth(
-        SocialProfile(provider="kakao", social_id="kakao-123", email="user@example.com", name="홍길동")
+        SocialProfile(
+            provider="kakao", social_id="kakao-123", email="user@example.com", name="홍길동"
+        )
     )
     service = _make_service(repo)
 

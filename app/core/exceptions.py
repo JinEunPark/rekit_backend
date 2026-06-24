@@ -225,6 +225,18 @@ class InvalidOrderStatus(BusinessError):
     message = "현재 상태에서는 해당 작업을 수행할 수 없습니다."
 
 
+class RefundForbidden(BusinessError):
+    code = "REFUND_FORBIDDEN"
+    http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+    message = "현재 상태에서는 환불을 요청할 수 없습니다."
+
+
+class ShipmentNotFound(BusinessError):
+    code = "SHIPMENT_NOT_FOUND"
+    http_status = status.HTTP_404_NOT_FOUND
+    message = "배송 정보를 찾을 수 없습니다."
+
+
 class PermissionDenied(BusinessError):
     code = "PERMISSION_DENIED"
     http_status = status.HTTP_403_FORBIDDEN

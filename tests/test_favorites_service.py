@@ -15,7 +15,6 @@ from app.favorites.favorites_schemas import FavoriteToggleResponse
 from app.favorites.favorites_service import FavoritesService
 from app.favorites.models import Favorite
 
-
 # ── 팩토리 ─────────────────────────────────────────────────────
 
 

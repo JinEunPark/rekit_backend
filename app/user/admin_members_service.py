@@ -13,7 +13,7 @@ from app.user.admin_members_schemas import (
     AdminMemberStatusUpdate,
     AdminMemberSummary,
 )
-from app.user.models import User, UserStatus
+from app.user.models import UserStatus
 
 
 def _to_member_item(row: MemberRow) -> AdminMemberItem:

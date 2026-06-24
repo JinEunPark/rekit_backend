@@ -162,7 +162,7 @@ async def seed_products(session: AsyncSession) -> list[Product]:
         dict(
             title="삼성 김치냉장고 234L",
             description="도어 실링 교체 완료. 냉각 정상 작동. 택배 불가, 직배만.",
-            category=ProductCategory.REFRIGERATOR,
+            category="REFRIGERATOR",
             brand="삼성전자",
             model_name="RP22R31513H",
             year_estimate=2017,

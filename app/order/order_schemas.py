@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.pagination import PageMeta
 from app.order.models import OrderStatus
-from app.order.shipment import ShipmentMethod
+from app.order.shipment import ShipmentMethod, ShipmentStatus
 
 # ── 요청 스키마 ──────────────────────────────────────────────────────
 
@@ -97,3 +97,18 @@ class OrderListResponse(BaseModel):
 
     items: list[OrderResponse]
     meta: PageMeta
+
+
+class ShipmentResponse(BaseModel):
+    """GET /orders/{order_number}/shipment 응답."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    method: ShipmentMethod
+    status: ShipmentStatus
+    carrier: str | None
+    tracking_number: str | None
+    shipped_at: datetime | None
+    delivered_at: datetime | None
+
+

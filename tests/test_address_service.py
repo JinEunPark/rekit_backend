@@ -62,7 +62,7 @@ def _create_data(*, is_default: bool = False) -> AddressCreate:
 
 class TestListAddresses:
     @pytest.mark.asyncio
-    async def test_returns_all_addresses_from_repo(self):
+    async def test_returns_all_addresses_from_repo(self) -> None:
         addrs = [_make_address(address_id=1), _make_address(address_id=2)]
         service = AddressService(_make_repo(addresses=addrs))
 
@@ -71,7 +71,7 @@ class TestListAddresses:
         assert result == addrs
 
     @pytest.mark.asyncio
-    async def test_empty_user_returns_empty_list(self):
+    async def test_empty_user_returns_empty_list(self) -> None:
         service = AddressService(_make_repo(addresses=[]))
 
         result = await service.list_addresses(user_id=1)
@@ -84,7 +84,7 @@ class TestListAddresses:
 
 class TestCreateAddress:
     @pytest.mark.asyncio
-    async def test_create_saves_address(self):
+    async def test_create_saves_address(self) -> None:
         service = AddressService(_make_repo(count=0))
 
         result = await service.create_address(1, _create_data())
@@ -92,7 +92,7 @@ class TestCreateAddress:
         assert result.recipient == "홍길동"
 
     @pytest.mark.asyncio
-    async def test_create_with_is_default_clears_existing(self):
+    async def test_create_with_is_default_clears_existing(self) -> None:
         repo = _make_repo(count=1)
         service = AddressService(repo)
 
@@ -101,7 +101,7 @@ class TestCreateAddress:
         repo.clear_default.assert_called_once_with(1)
 
     @pytest.mark.asyncio
-    async def test_create_without_is_default_skips_clear(self):
+    async def test_create_without_is_default_skips_clear(self) -> None:
         repo = _make_repo(count=1)
         service = AddressService(repo)
 
@@ -110,14 +110,14 @@ class TestCreateAddress:
         repo.clear_default.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_create_at_limit_raises_address_limit_exceeded(self):
+    async def test_create_at_limit_raises_address_limit_exceeded(self) -> None:
         service = AddressService(_make_repo(count=MAX_ADDRESSES_PER_USER))
 
         with pytest.raises(AddressLimitExceeded):
             await service.create_address(1, _create_data())
 
     @pytest.mark.asyncio
-    async def test_create_just_below_limit_succeeds(self):
+    async def test_create_just_below_limit_succeeds(self) -> None:
         service = AddressService(_make_repo(count=MAX_ADDRESSES_PER_USER - 1))
 
         result = await service.create_address(1, _create_data())
@@ -130,14 +130,14 @@ class TestCreateAddress:
 
 class TestUpdateAddress:
     @pytest.mark.asyncio
-    async def test_update_not_found_raises_address_not_found(self):
+    async def test_update_not_found_raises_address_not_found(self) -> None:
         service = AddressService(_make_repo(found=None))
 
         with pytest.raises(AddressNotFound):
             await service.update_address(1, 99, AddressUpdate())
 
     @pytest.mark.asyncio
-    async def test_update_partial_changes_only_given_fields(self):
+    async def test_update_partial_changes_only_given_fields(self) -> None:
         addr = _make_address()
         service = AddressService(_make_repo(found=addr))
 
@@ -147,7 +147,7 @@ class TestUpdateAddress:
         assert result.phone == "01012345678"  # 변경 안 됨
 
     @pytest.mark.asyncio
-    async def test_update_set_is_default_true_clears_others(self):
+    async def test_update_set_is_default_true_clears_others(self) -> None:
         addr = _make_address()
         repo = _make_repo(found=addr)
         service = AddressService(repo)
@@ -157,7 +157,7 @@ class TestUpdateAddress:
         repo.clear_default.assert_called_once_with(1)
 
     @pytest.mark.asyncio
-    async def test_update_without_is_default_skips_clear(self):
+    async def test_update_without_is_default_skips_clear(self) -> None:
         addr = _make_address()
         repo = _make_repo(found=addr)
         service = AddressService(repo)
@@ -167,7 +167,7 @@ class TestUpdateAddress:
         repo.clear_default.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_update_is_default_false_does_not_clear(self):
+    async def test_update_is_default_false_does_not_clear(self) -> None:
         """is_default=False 명시는 이 배송지를 기본에서 해제할 뿐, 다른 것을 clear 안 함."""
         addr = _make_address(is_default=True)
         repo = _make_repo(found=addr)
@@ -184,14 +184,14 @@ class TestUpdateAddress:
 
 class TestDeleteAddress:
     @pytest.mark.asyncio
-    async def test_delete_not_found_raises_address_not_found(self):
+    async def test_delete_not_found_raises_address_not_found(self) -> None:
         service = AddressService(_make_repo(found=None))
 
         with pytest.raises(AddressNotFound):
             await service.delete_address(1, 99)
 
     @pytest.mark.asyncio
-    async def test_delete_calls_repo_delete(self):
+    async def test_delete_calls_repo_delete(self) -> None:
         addr = _make_address()
         repo = _make_repo(found=addr)
         service = AddressService(repo)

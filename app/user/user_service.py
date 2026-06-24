@@ -10,13 +10,35 @@ JPA 비유: @Service. router(@RestController) 와 모델(@Entity) 사이의 비�
   표준 응답 포맷으로 변환.
 """
 
+from datetime import UTC, datetime
+
 from app.core.exceptions import InvalidCredentials
 from app.core.security import hash_password, verify_password
-from app.user.models import User
+from app.user.models import User, UserStatus
+from app.user.user_schemas import UpdateProfileRequest
 
 
 class UserService:
     """사용자 본인 정보 변경. 인스턴스 상태 없음 — 단순 도메인 함수 묶음."""
+
+    def update_profile(self, *, user: User, data: UpdateProfileRequest) -> None:
+        """username / phone 을 부분 업데이트한다. None 필드는 건드리지 않음."""
+        if data.username is not None:
+            user.username = data.username
+        if data.phone is not None:
+            user.phone = data.phone
+
+    def withdraw(self, *, user: User) -> None:
+        """회원탈퇴 처리 — 계정 비활성화 + CI/DI 파기.
+
+        주문 정보는 전자상거래법 5년 보존 의무로 물리 삭제하지 않는다.
+        CI/DI 는 요구사항정의서 §3.2 에 따라 탈퇴 즉시 파기.
+        """
+        user.is_active = False
+        user.status = UserStatus.DORMANT
+        user.ci = None
+        user.di = None
+        user.withdrawn_at = datetime.now(UTC)
 
     def change_password(
         self,

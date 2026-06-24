@@ -166,6 +166,11 @@ class User(Base, TimestampMixin):
         nullable=True,
         comment="본인인증 결과 저장. 통계 외 용도로 사용 금지",
     )
+    withdrawn_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="회원탈퇴 처리 시각. NULL 이면 활성 계정",
+    )
 
     addresses: Mapped[list["Address"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

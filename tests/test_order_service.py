@@ -20,15 +20,17 @@ from app.core.exceptions import (
     OrderCancelForbidden,
     OrderNotFound,
     OutOfStock,
+    RefundForbidden,
+    ShipmentNotFound,
 )
-from app.order.models import Order, OrderItem, OrderStatus
+from app.order.models import Order, OrderStatus
 from app.order.order_schemas import (
     CreateOrderRequest,
     OrderItemRequest,
     QuoteRequest,
 )
 from app.order.order_service import OrderService
-from app.order.shipment import ShipmentMethod
+from app.order.shipment import Shipment, ShipmentMethod, ShipmentStatus
 
 # ── 팩토리 ──────────────────────────────────────────────────────────
 
@@ -102,6 +104,25 @@ def make_order(
     return o
 
 
+def make_shipment(
+    *,
+    order_id: int = 1,
+    method: ShipmentMethod = ShipmentMethod.PARCEL,
+    status: ShipmentStatus = ShipmentStatus.PREPARING,
+    carrier: str | None = None,
+    tracking_number: str | None = None,
+) -> Shipment:
+    s = Shipment(
+        order_id=order_id,
+        method=method,
+        status=status,
+        carrier=carrier,
+        tracking_number=tracking_number,
+    )
+    s.id = order_id
+    return s
+
+
 # ── FakeOrderRepository ─────────────────────────────────────────────
 
 
@@ -114,10 +135,12 @@ class FakeOrderRepository:
         products: list[Product] | None = None,
         addresses: list[Address] | None = None,
         orders: list[Order] | None = None,
+        shipments: list[Shipment] | None = None,
     ) -> None:
         self._products: dict[int, Product] = {p.id: p for p in (products or [])}
         self._addresses: list[Address] = addresses or []
         self._orders: list[Order] = orders or []
+        self._shipments: list[Shipment] = shipments or []
         self._next_order_id = 100
 
     # ── 필수 인터페이스 ────────────────────────────────────
@@ -134,6 +157,13 @@ class FakeOrderRepository:
 
     async def get_by_order_number(self, order_number: str) -> Order | None:
         return next((o for o in self._orders if o.order_number == order_number), None)
+
+    async def get_by_order_number_with_shipment(self, order_number: str) -> Order | None:
+        order = next((o for o in self._orders if o.order_number == order_number), None)
+        if order is None:
+            return None
+        order.shipment = next((s for s in self._shipments if s.order_id == order.id), None)
+        return order
 
     async def get_product(self, product_id: int) -> Product | None:
         return self._products.get(product_id)
@@ -176,16 +206,19 @@ def _make_service(
     products: list[Product] | None = None,
     addresses: list[Address] | None = None,
     orders: list[Order] | None = None,
+    shipments: list[Shipment] | None = None,
 ) -> OrderService:
-    repo = FakeOrderRepository(products=products, addresses=addresses, orders=orders)
-    return OrderService(repo)
+    repo = FakeOrderRepository(
+        products=products, addresses=addresses, orders=orders, shipments=shipments
+    )
+    return OrderService(repo)  # type: ignore[arg-type]
 
 
 # ── get_quote ────────────────────────────────────────────────────────
 
 
 class TestGetQuote:
-    async def test_get_quote_freight(self):
+    async def test_get_quote_freight(self) -> None:
         """화물택배 선택 → shipping_fee=60000, discount=0."""
         product = make_product(price=300_000, stock=5)
         address = make_address(zipcode="01234")
@@ -203,7 +236,7 @@ class TestGetQuote:
         assert result.items_total == 300_000
         assert result.total_amount == 360_000
 
-    async def test_get_quote_direct_available(self):
+    async def test_get_quote_direct_available(self) -> None:
         """DIRECT 배송 + 서울 zipcode → direct_available=True, discount=20000."""
         product = make_product(price=300_000, stock=5)
         address = make_address(zipcode="01234")  # 서울 prefix
@@ -221,7 +254,7 @@ class TestGetQuote:
         assert result.discount_amount == 20_000
         assert result.total_amount == 300_000 + 40_000 - 20_000
 
-    async def test_get_quote_direct_unavailable(self):
+    async def test_get_quote_direct_unavailable(self) -> None:
         """DIRECT 배송 + 지방 zipcode → direct_available=False, 예외 발생."""
         product = make_product(price=300_000, stock=5)
         address = make_address(zipcode="50000")  # 경남 — DIRECT 불가
@@ -232,10 +265,10 @@ class TestGetQuote:
             address_id=1,
             shipping_method=ShipmentMethod.DIRECT,
         )
-        with pytest.raises(Exception):
+        with pytest.raises(OrderCancelForbidden):
             await service.get_quote(user_id=1, req=req)
 
-    async def test_get_quote_address_not_found(self):
+    async def test_get_quote_address_not_found(self) -> None:
         """존재하지 않는 address_id → AddressNotFound."""
         product = make_product()
         service = _make_service(products=[product], addresses=[])
@@ -253,7 +286,7 @@ class TestGetQuote:
 
 
 class TestCreateOrder:
-    async def test_create_order_requires_identity(self):
+    async def test_create_order_requires_identity(self) -> None:
         """identity_verified=False → IdentityRequired."""
         product = make_product()
         address = make_address()
@@ -267,7 +300,7 @@ class TestCreateOrder:
         with pytest.raises(IdentityRequired):
             await service.create_order(user_id=1, req=req, identity_verified=False)
 
-    async def test_create_order_out_of_stock(self):
+    async def test_create_order_out_of_stock(self) -> None:
         """stock=0 → OutOfStock."""
         product = make_product(stock=0)
         address = make_address()
@@ -281,7 +314,7 @@ class TestCreateOrder:
         with pytest.raises(OutOfStock):
             await service.create_order(user_id=1, req=req, identity_verified=True)
 
-    async def test_create_order_success(self):
+    async def test_create_order_success(self) -> None:
         """정상 주문 → order_number RK-YYMMDD#### 포맷, 재고 감소."""
         product = make_product(price=300_000, stock=5)
         address = make_address()
@@ -306,12 +339,12 @@ class TestCreateOrder:
         assert result.items[0].quantity == 2
         assert result.items[0].subtotal == 600_000
 
-    async def test_create_order_decrements_stock(self):
+    async def test_create_order_decrements_stock(self) -> None:
         """주문 성공 → 재고가 quantity 만큼 감소."""
         product = make_product(stock=5)
         address = make_address()
         repo = FakeOrderRepository(products=[product], addresses=[address])
-        service = OrderService(repo)
+        service = OrderService(repo)  # type: ignore[arg-type]
 
         req = CreateOrderRequest(
             items=[OrderItemRequest(product_id=1, quantity=3)],
@@ -322,7 +355,7 @@ class TestCreateOrder:
 
         assert repo._products[1].stock == 2
 
-    async def test_create_order_address_not_owned(self):
+    async def test_create_order_address_not_owned(self) -> None:
         """다른 user_id 소유 address → AddressNotFound."""
         product = make_product()
         address = make_address(user_id=99)  # 다른 사용자
@@ -336,7 +369,7 @@ class TestCreateOrder:
         with pytest.raises(AddressNotFound):
             await service.create_order(user_id=1, req=req, identity_verified=True)
 
-    async def test_create_order_stock_exactly_enough(self):
+    async def test_create_order_stock_exactly_enough(self) -> None:
         """재고 == 요청 수량 → 성공."""
         product = make_product(stock=2)
         address = make_address()
@@ -350,7 +383,7 @@ class TestCreateOrder:
         result = await service.create_order(user_id=1, req=req, identity_verified=True)
         assert result is not None
 
-    async def test_create_order_stock_insufficient_raises(self):
+    async def test_create_order_stock_insufficient_raises(self) -> None:
         """요청 수량 > 재고 → OutOfStock."""
         product = make_product(stock=1)
         address = make_address()
@@ -369,7 +402,7 @@ class TestCreateOrder:
 
 
 class TestCancelOrder:
-    async def test_cancel_order_pending(self):
+    async def test_cancel_order_pending(self) -> None:
         """PENDING 주문 → CANCELLED 성공."""
         order = make_order(status=OrderStatus.PENDING)
         service = _make_service(orders=[order])
@@ -379,7 +412,7 @@ class TestCancelOrder:
         assert result.status == OrderStatus.CANCELLED
         assert result.cancelled_at is not None
 
-    async def test_cancel_order_paid(self):
+    async def test_cancel_order_paid(self) -> None:
         """PAID 주문도 취소 가능."""
         order = make_order(status=OrderStatus.PAID)
         service = _make_service(orders=[order])
@@ -388,7 +421,7 @@ class TestCancelOrder:
 
         assert result.status == OrderStatus.CANCELLED
 
-    async def test_cancel_order_preparing(self):
+    async def test_cancel_order_preparing(self) -> None:
         """PREPARING 주문도 취소 가능."""
         order = make_order(status=OrderStatus.PREPARING)
         service = _make_service(orders=[order])
@@ -397,7 +430,7 @@ class TestCancelOrder:
 
         assert result.status == OrderStatus.CANCELLED
 
-    async def test_cancel_order_forbidden(self):
+    async def test_cancel_order_forbidden(self) -> None:
         """SHIPPING 상태 → OrderCancelForbidden."""
         order = make_order(status=OrderStatus.SHIPPING)
         service = _make_service(orders=[order])
@@ -405,7 +438,7 @@ class TestCancelOrder:
         with pytest.raises(OrderCancelForbidden):
             await service.cancel_order(user_id=1, order_number=order.order_number)
 
-    async def test_cancel_order_delivered_forbidden(self):
+    async def test_cancel_order_delivered_forbidden(self) -> None:
         """DELIVERED 상태 → OrderCancelForbidden."""
         order = make_order(status=OrderStatus.DELIVERED)
         service = _make_service(orders=[order])
@@ -418,7 +451,7 @@ class TestCancelOrder:
 
 
 class TestListOrders:
-    async def test_list_orders_empty(self):
+    async def test_list_orders_empty(self) -> None:
         """주문이 없을 때 빈 목록 반환."""
         service = _make_service(orders=[])
 
@@ -427,7 +460,7 @@ class TestListOrders:
         assert result.items == []
         assert result.meta.total == 0
 
-    async def test_list_orders_returns_user_orders_only(self):
+    async def test_list_orders_returns_user_orders_only(self) -> None:
         """다른 user_id 주문은 노출 안 됨."""
         my_order = make_order(order_id=1, user_id=1)
         other_order = make_order(order_id=2, user_id=2)
@@ -438,7 +471,7 @@ class TestListOrders:
 
         assert result.meta.total == 1
 
-    async def test_list_orders_pagination(self):
+    async def test_list_orders_pagination(self) -> None:
         """페이지네이션 메타 정확성."""
         orders = [make_order(order_id=i, user_id=1) for i in range(1, 6)]
         for i, o in enumerate(orders):
@@ -456,14 +489,14 @@ class TestListOrders:
 
 
 class TestGetOrder:
-    async def test_get_order_not_found(self):
+    async def test_get_order_not_found(self) -> None:
         """없는 order_number → OrderNotFound."""
         service = _make_service(orders=[])
 
         with pytest.raises(OrderNotFound):
             await service.get_order(user_id=1, order_number="RK-NOTEXIST")
 
-    async def test_get_order_wrong_owner(self):
+    async def test_get_order_wrong_owner(self) -> None:
         """타인의 주문 조회 → OrderNotFound (정보 노출 방지)."""
         order = make_order(user_id=2)
         service = _make_service(orders=[order])
@@ -471,7 +504,7 @@ class TestGetOrder:
         with pytest.raises(OrderNotFound):
             await service.get_order(user_id=1, order_number=order.order_number)
 
-    async def test_get_order_success(self):
+    async def test_get_order_success(self) -> None:
         """본인 주문 조회 성공."""
         order = make_order(user_id=1)
         service = _make_service(orders=[order])
@@ -479,3 +512,97 @@ class TestGetOrder:
         result = await service.get_order(user_id=1, order_number=order.order_number)
 
         assert result.order_number == order.order_number
+
+
+# ── get_shipment ──────────────────────────────────────────────────────
+
+
+class TestGetShipment:
+    async def test_get_shipment_success(self) -> None:
+        """배송 정보 존재 → ShipmentResponse 반환."""
+        order = make_order(order_id=1, user_id=1)
+        shipment = make_shipment(
+            order_id=1,
+            method=ShipmentMethod.PARCEL,
+            status=ShipmentStatus.IN_TRANSIT,
+            carrier="CJ대한통운",
+            tracking_number="123456789",
+        )
+        service = _make_service(orders=[order], shipments=[shipment])
+
+        result = await service.get_shipment(user_id=1, order_number=order.order_number)
+
+        assert result.method == ShipmentMethod.PARCEL
+        assert result.status == ShipmentStatus.IN_TRANSIT
+        assert result.carrier == "CJ대한통운"
+        assert result.tracking_number == "123456789"
+
+    async def test_get_shipment_order_not_found(self) -> None:
+        """없는 order_number → OrderNotFound."""
+        service = _make_service(orders=[])
+
+        with pytest.raises(OrderNotFound):
+            await service.get_shipment(user_id=1, order_number="RK-NOTEXIST")
+
+    async def test_get_shipment_wrong_owner(self) -> None:
+        """타인 주문 조회 → OrderNotFound."""
+        order = make_order(order_id=1, user_id=2)
+        shipment = make_shipment(order_id=1)
+        service = _make_service(orders=[order], shipments=[shipment])
+
+        with pytest.raises(OrderNotFound):
+            await service.get_shipment(user_id=1, order_number=order.order_number)
+
+    async def test_get_shipment_not_created_yet(self) -> None:
+        """주문은 있지만 배송 정보 미생성 → ShipmentNotFound."""
+        order = make_order(order_id=1, user_id=1)
+        service = _make_service(orders=[order], shipments=[])
+
+        with pytest.raises(ShipmentNotFound):
+            await service.get_shipment(user_id=1, order_number=order.order_number)
+
+
+# ── request_refund ────────────────────────────────────────────────────
+
+
+class TestRequestRefund:
+    async def test_request_refund_delivered_success(self) -> None:
+        """DELIVERED 주문 → REFUNDED 전환, cancelled_at 기록."""
+        order = make_order(order_id=1, user_id=1, status=OrderStatus.DELIVERED)
+        service = _make_service(orders=[order])
+
+        result = await service.request_refund(user_id=1, order_number=order.order_number)
+
+        assert result.status == OrderStatus.REFUNDED
+        assert result.cancelled_at is not None
+
+    async def test_request_refund_non_delivered_forbidden(self) -> None:
+        """DELIVERED 가 아닌 상태 → RefundForbidden."""
+        for bad_status in (
+            OrderStatus.PENDING,
+            OrderStatus.PAID,
+            OrderStatus.PREPARING,
+            OrderStatus.SHIPPING,
+            OrderStatus.CANCELLED,
+        ):
+            order = make_order(order_id=1, user_id=1, status=bad_status)
+            order.order_number = f"RK-TEST{bad_status.value}"
+            service = _make_service(orders=[order])
+
+            with pytest.raises(RefundForbidden):
+                await service.request_refund(user_id=1, order_number=order.order_number)
+
+    async def test_request_refund_order_not_found(self) -> None:
+        """없는 order_number → OrderNotFound."""
+        service = _make_service(orders=[])
+
+        with pytest.raises(OrderNotFound):
+            await service.request_refund(user_id=1, order_number="RK-NOTEXIST")
+
+    async def test_request_refund_wrong_owner(self) -> None:
+        """타인 주문 환불 요청 → OrderNotFound."""
+        order = make_order(order_id=1, user_id=2, status=OrderStatus.DELIVERED)
+        service = _make_service(orders=[order])
+
+        with pytest.raises(OrderNotFound):
+            await service.request_refund(user_id=1, order_number=order.order_number)

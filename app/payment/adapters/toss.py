@@ -14,7 +14,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.exceptions import PaymentFailed
-from app.payment.adapters.ports import PaymentGateway, TossConfirmResult
+from app.payment.adapters.ports import TossConfirmResult
 
 _TOSS_CONFIRM_URL = "https://api.tosspayments.com/v1/payments/confirm"
 

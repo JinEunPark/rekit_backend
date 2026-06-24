@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -73,25 +74,7 @@ PRODUCT_IMAGES: dict[int, list[str]] = {
     20: ["https://images.unsplash.com/photo-1626806787461-102c1bfaaea1?w=800&q=80"],
 }
 
-
-async def upload_to_seaweedfs(key: str, data: bytes, content_type: str) -> str:
-    """aioboto3 로 SeaweedFS 에 직접 PUT 업로드. public URL 반환."""
-    session = aioboto3.Session()
-    async with session.client(
-        "s3",
-        endpoint_url=settings.s3_endpoint_url,
-        region_name=settings.s3_region,
-        aws_access_key_id=settings.s3_access_key,
-        aws_secret_access_key=settings.s3_secret_key,
-        config=AioConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
-    ) as s3:
-        await s3.put_object(
-            Bucket=settings.s3_bucket,
-            Key=key,
-            Body=data,
-            ContentType=content_type,
-        )
-    return f"{settings.s3_public_url_base.rstrip('/')}/{key}"
+EXT_MAP = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 
 
 async def download_image(url: str, client: httpx.AsyncClient) -> tuple[bytes, str]:
@@ -104,55 +87,90 @@ async def download_image(url: str, client: httpx.AsyncClient) -> tuple[bytes, st
     return resp.content, content_type
 
 
-EXT_MAP = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
+async def _process_one(
+    *,
+    product_id: int,
+    sort_order: int,
+    img_url: str,
+    http_client: httpx.AsyncClient,
+    s3: object,
+    sem: asyncio.Semaphore,
+) -> ProductImage | None:
+    """이미지 1장을 다운로드 → SeaweedFS 업로드 → ProductImage 객체 반환."""
+    async with sem:
+        try:
+            data, content_type = await download_image(img_url, http_client)
+            ext = EXT_MAP.get(content_type, "jpg")
+            key = f"products/{uuid4()}.{ext}"
+            await s3.put_object(  # type: ignore[attr-defined]
+                Bucket=settings.s3_bucket,
+                Key=key,
+                Body=data,
+                ContentType=content_type,
+            )
+            public_url = f"{settings.s3_public_url_base.rstrip('/')}/{key}"
+            print(f"  [ok] id={product_id} [{sort_order}] {key} ({len(data) // 1024}KB)")
+            return ProductImage(product_id=product_id, url=public_url, sort_order=sort_order)
+        except Exception as exc:
+            print(f"  [err] id={product_id} [{sort_order}] {exc}")
+            return None
 
 
 async def main() -> None:
     print("=== SeaweedFS 이미지 업로드 시작 ===\n")
 
-    async with httpx.AsyncClient(
-        headers={"User-Agent": "rekle-seed/1.0"}
-    ) as http_client:
-        async with AsyncSession(engine) as session:
-            async with session.begin():
+    # 동시 요청 수 제한 (Unsplash + SeaweedFS 과부하 방지)
+    sem = asyncio.Semaphore(5)
 
-                # 기존 product_images 전체 삭제
-                await session.execute(text("DELETE FROM product_images"))
-                print("[1] 기존 product_images 전부 삭제\n")
+    session_s3 = aioboto3.Session()
+    async with httpx.AsyncClient(headers={"User-Agent": "rekle-seed/1.0"}) as http_client:
+        async with session_s3.client(
+            "s3",
+            endpoint_url=settings.s3_endpoint_url,
+            region_name=settings.s3_region,
+            aws_access_key_id=settings.s3_access_key,
+            aws_secret_access_key=settings.s3_secret_key,
+            config=AioConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
+        ) as s3:
+            async with AsyncSession(engine) as session:
+                async with session.begin():
+                    await session.execute(text("DELETE FROM product_images"))
+                    print("[1] 기존 product_images 전부 삭제\n")
 
-                # 상품 목록 조회
-                products = list(
-                    (await session.execute(select(Product).order_by(Product.id))).scalars()
-                )
+                    products = list(
+                        (await session.execute(select(Product).order_by(Product.id))).scalars()
+                    )
 
-                print("[2] 이미지 다운로드 → SeaweedFS 업로드 → DB 삽입")
-                for product in products:
-                    urls = PRODUCT_IMAGES.get(product.id)
-                    if not urls:
-                        print(f"  [skip] id={product.id} — 이미지 정의 없음")
-                        continue
+                    print("[2] 이미지 다운로드 → SeaweedFS 업로드 (병렬)")
 
-                    for sort_order, img_url in enumerate(urls):
-                        try:
-                            data, content_type = await download_image(img_url, http_client)
-                            from uuid import uuid4
-                            ext = EXT_MAP.get(content_type, "jpg")
-                            key = f"products/{uuid4()}.{ext}"
-                            public_url = await upload_to_seaweedfs(key, data, content_type)
+                    tasks = []
+                    for product in products:
+                        urls = PRODUCT_IMAGES.get(product.id)
+                        if not urls:
+                            print(f"  [skip] id={product.id} — 이미지 정의 없음")
+                            continue
+                        for sort_order, img_url in enumerate(urls):
+                            tasks.append(
+                                _process_one(
+                                    product_id=product.id,
+                                    sort_order=sort_order,
+                                    img_url=img_url,
+                                    http_client=http_client,
+                                    s3=s3,
+                                    sem=sem,
+                                )
+                            )
 
-                            session.add(ProductImage(
-                                product_id=product.id,
-                                url=public_url,
-                                sort_order=sort_order,
-                            ))
-                            print(f"  [ok] id={product.id} [{sort_order}] {key} ({len(data)//1024}KB)")
-                        except Exception as exc:
-                            print(f"  [err] id={product.id} [{sort_order}] {exc}")
+                    results = await asyncio.gather(*tasks)
+                    images = [img for img in results if img is not None]
 
-                await session.flush()
+                    for img in images:
+                        session.add(img)
+
+                    await session.flush()
 
     await engine.dispose()
-    print("\n=== 완료 ===")
+    print(f"\n=== 완료 ({len(images)}장) ===")
     print(f"클라이언트 이미지 베이스 URL: {settings.s3_public_url_base}")
 
 

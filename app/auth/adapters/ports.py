@@ -9,7 +9,6 @@ service 가 직접 import 하지 않고 이 Protocol 에만 의존한다.
 from dataclasses import dataclass
 from typing import Protocol
 
-
 # ── 결과 DTO ────────────────────────────────────────────
 
 
