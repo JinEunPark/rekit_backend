@@ -1,11 +1,11 @@
 # Rekle Backend TODO — 디자인 시스템 기반 구현 계획
 
 > **분석 기준**: `/Volumes/A/web_projects/rekle` 프론트 디자인 (Vue 3 mockup, `_design/buyer/*`, `_design/admin/*`)
-> **현 백엔드 상태** (2026-06-22 기준):
-> - **구현 완료**: auth 전체 / users / catalog / admin catalog CRUD / cart / favorites / address / order / payment (init·confirm·webhook) / uploads
-> - **미구현**: SMS 인증 / 본인인증 PG 연동 / shipment 추적 / 알림·공지 / admin dashboard·orders·members·sales / 환불
-> - **테스트**: 273개 통과 (단위 + 통합, DB·Redis 없이 fake repo + fake OAuth)
-> **작성일**: 2026-05-01 / **최종 업데이트**: 2026-06-22
+> **현 백엔드 상태** (2026-06-24 기준):
+> - **구현 완료**: auth 전체 / users (PATCH·DELETE /me 포함) / catalog (DB 동적 카테고리) / admin catalog CRUD / admin dashboard·orders·members·sales / cart / favorites / address / order (환불요청·배송조회 포함) / payment (init·confirm·webhook) / uploads
+> - **미구현**: SMS 인증 / 본인인증 PG 연동 / shipment 추적 (스마트택배 API) / 알림·공지 / PG 환불 실호출
+> - **테스트**: 291개 통과 (단위 + 통합, DB·Redis 없이 fake repo + fake OAuth)
+> **작성일**: 2026-05-01 / **최종 업데이트**: 2026-06-24
 
 ---
 
@@ -54,8 +54,8 @@
 - [x] `POST /users/me/password` — 비밀번호 변경 (`must_change_password` 해제)
 - [ ] `POST /auth/sms/send` — SMS 인증번호 발송 (Redis에 코드 캐시, rate-limit)
 - [ ] `POST /auth/sms/verify` — SMS 인증번호 검증 → `phone_verified_at` 기록
-- [ ] `PATCH /users/me` — 이름/연락처 수정
-- [ ] `DELETE /users/me` — 회원탈퇴 (CI/DI 즉시 파기, 거래정보 5년 보존)
+- [x] `PATCH /users/me` — 이름/연락처 수정
+- [x] `DELETE /users/me` — 회원탈퇴 (CI/DI 즉시 파기, `withdrawn_at` 기록, 거래정보 5년 보존)
 - [ ] `POST /users/me/social/connect` — 기가입 사용자 소셜 계정 추가 연결
 
 ### 1.2 본인인증 (`/api/v1/verifications`)
@@ -102,11 +102,11 @@
 - [x] `POST /payments/init` — Payment(READY) 생성 + 토스 결제창 정보 반환
 - [x] `POST /payments/confirm` — 토스 서버confirm + 금액 검증 + Order PAID 전환
 - [x] `POST /payments/webhooks/toss` — HMAC 서명 검증 + 멱등 상태 전환
-- [ ] `POST /orders/{id}/refund/request` — 환불 요청 (미구현)
+- [x] `POST /orders/{order_number}/refund/request` — 환불 요청 (DELIVERED → REFUNDED 상태 전환. PG 실호출은 미구현)
 
 ### 1.8 배송 (`/api/v1/shipments`)
 
-- [ ] `GET /orders/{order_number}/shipment` — 배송 정보
+- [x] `GET /orders/{order_number}/shipment` — 배송 정보
 - [ ] `GET /shipments/{tracking_number}/track` — 스마트택배 API 프록시 (Redis 캐시)
 
 ### 1.9 알림 / 공지 (`/api/v1/notifications`, `/api/v1/announcements`) **[모델 신규]**
@@ -116,13 +116,13 @@
 - [ ] `GET /announcements` — 공지사항 (My 메뉴)
 - [ ] `GET /announcements/{id}`
 
-### 1.10 관리자 — 대시보드 (`/api/v1/admin/dashboard`)
+### 1.10 관리자 — 대시보드 (`/api/v1/admin/dashboard`) ✅ 구현 완료
 
-- [ ] `GET /admin/dashboard/summary` — KPI 4종(오늘 주문수/매출/처리대기/재고부족), 비교값(전일 대비, 긴급 카운트)
-- [ ] `GET /admin/dashboard/sales-chart?period=7d|30d|90d` — 일별 막대그래프
-- [ ] `GET /admin/dashboard/pending-orders?limit=4` — 처리 대기 최근 주문
-- [ ] `GET /admin/dashboard/popular-categories` — 카테고리별 판매건수/비율
-- [ ] `GET /admin/dashboard/stock-alerts` — 재고 0/임박, 문의 카운트(있다면)
+- [x] `GET /admin/dashboard/summary` — KPI 4종(오늘 주문수/매출/처리대기/재고부족), 비교값(전일 대비, 긴급 카운트)
+- [x] `GET /admin/dashboard/sales-chart?period=7d|30d|90d` — 일별 막대그래프
+- [x] `GET /admin/dashboard/pending-orders?limit=4` — 처리 대기 최근 주문
+- [x] `GET /admin/dashboard/popular-categories` — 카테고리별 판매건수/비율
+- [x] `GET /admin/dashboard/stock-alerts` — 재고 0/임박
 
 ### 1.11 관리자 — 상품 (`/api/v1/admin/products`) ✅ CRUD 구현 완료
 
@@ -134,30 +134,30 @@
 - [x] `PUT /admin/products/{id}/images` — 이미지 전체 교체 (추가·삭제·순서 일괄 반영)
 - [ ] `POST /admin/products/import-csv` — Phase 우선순위 낮음
 
-### 1.12 관리자 — 주문 (`/api/v1/admin/orders`)
+### 1.12 관리자 — 주문 (`/api/v1/admin/orders`) ✅ 대부분 구현 완료
 
-- [ ] `GET /admin/orders` — 표 (탭: 전체/결제완료/준비중/배송중/배송완료/취소환불, 카운트 포함)
-- [ ] `GET /admin/orders/{order_number}` — 상세
-- [ ] `POST /admin/orders/{order_number}/shipment` — 송장 입력 (carrier+tracking_number) → 자동 SHIPPING 상태 전환
-- [ ] `PATCH /admin/orders/{order_number}/status` — 수동 상태 변경 (배송완료 등)
-- [ ] `POST /admin/orders/{order_number}/cancel` — 관리자 취소
-- [ ] `POST /admin/orders/{order_number}/refund` — 환불 처리 (PG 부분/전액 취소 호출)
-- [ ] `GET /admin/orders/export.csv`
+- [x] `GET /admin/orders` — 표 (탭: 전체/결제완료/준비중/배송중/배송완료/취소환불, 카운트 포함)
+- [x] `GET /admin/orders/{order_number}` — 상세
+- [x] `POST /admin/orders/{order_number}/shipment` — 송장 입력 (carrier+tracking_number) → 자동 SHIPPING 상태 전환
+- [x] `PATCH /admin/orders/{order_number}/status` — 수동 상태 변경 (배송완료 등)
+- [x] `POST /admin/orders/{order_number}/cancel` — 관리자 취소
+- [ ] `POST /admin/orders/{order_number}/refund` — PG 부분/전액 취소 호출 (미구현 — PG 연동 필요)
+- [x] `GET /admin/orders/export.csv`
 
-### 1.13 관리자 — 회원 (`/api/v1/admin/members`)
+### 1.13 관리자 — 회원 (`/api/v1/admin/members`) ✅ 구현 완료
 
-- [ ] `GET /admin/members/summary` — KPI 4종(전체/인증/신규/구매)
-- [ ] `GET /admin/members` — 표 (검색: 이름/이메일/휴대폰)
-- [ ] `GET /admin/members/{id}` — 상세 (가입일, 주문 이력, 인증 로그)
-- [ ] `PATCH /admin/members/{id}/status` — 활성/제재 토글
+- [x] `GET /admin/members/summary` — KPI 4종(전체/인증/신규/구매)
+- [x] `GET /admin/members` — 표 (검색: 이름/이메일/휴대폰)
+- [x] `GET /admin/members/{id}` — 상세 (가입일, 주문 이력)
+- [x] `PATCH /admin/members/{id}/status` — 활성/제재 토글
 
-### 1.14 관리자 — 매출 (`/api/v1/admin/sales`)
+### 1.14 관리자 — 매출 (`/api/v1/admin/sales`) ✅ 구현 완료
 
-- [ ] `GET /admin/sales/summary?from=&to=` — 헤드라인(총매출/주문수/평균주문/취소율, 전월 대비)
-- [ ] `GET /admin/sales/timeseries?from=&to=&granularity=day|week`
-- [ ] `GET /admin/sales/by-payment-method?from=&to=`
-- [ ] `GET /admin/sales/top-products?from=&to=&limit=5`
-- [ ] `GET /admin/sales/export.csv`
+- [x] `GET /admin/sales/summary?from=&to=` — 헤드라인(총매출/주문수/평균주문/취소율, 전월 대비)
+- [x] `GET /admin/sales/timeseries?from=&to=&granularity=day|week`
+- [x] `GET /admin/sales/by-payment-method?from=&to=`
+- [x] `GET /admin/sales/top-products?from=&to=&limit=5`
+- [x] `GET /admin/sales/export.csv`
 
 ### 1.15 업로드 ✅ 구현 완료
 
@@ -207,21 +207,20 @@
 ### Phase 1 (최소 동작)
 
 1. ✅ JWT/Depends 정비 + auth (sign-up/sign-in/refresh/sign-out/find-id/find-password/소셜 3종)
-2. ✅ GET /users/me, POST /users/me/password
+2. ✅ GET /users/me, POST /users/me/password, PATCH /users/me, DELETE /users/me
 3. ✅ 상품 조회 (buyer) — `GET /products`, `GET /products/{id}`, `GET /products/featured`, `GET /categories`
 4. ✅ 주소록 CRUD
 5. ✅ 장바구니 CRUD + 관심상품 CRUD
 6. 본인인증 PG 연동 (start/callback/me) — Order 진입 가드 **(DB 직접 설정으로 우회 중)**
-7. ✅ 주문 생성 + 토스 결제 confirm/webhook (멱등)
-8. ✅ 관리자 상품 CRUD / 미완: 송장 입력 → SHIPPING 전환
+7. ✅ 주문 생성 + 토스 결제 confirm/webhook (멱등) + 환불 요청 + 배송 정보 조회
+8. ✅ 관리자 상품 CRUD + 이미지 관리 + 주문 관리(송장·상태·취소·CSV) + 대시보드 + 회원 + 매출
 
 ### Phase 2 (안정화)
 
-9. 배송 추적 자동 폴링 (Celery)
-10. 주문 취소/환불
-11. 관리자 대시보드 4 KPI + 차트
-12. SMS/이메일 알림 발송
-13. 관심상품, 알림센터
+9. 배송 추적 자동 폴링 (Celery / 스마트택배 API)
+10. PG 환불 실호출 (`POST /admin/orders/{n}/refund`, `POST /payments/{id}/refund`)
+11. SMS/이메일 알림 발송
+12. 알림센터 (`Notification` 모델 + 목록/읽음)
 
 ### Phase 3 (확장)
 
@@ -541,7 +540,7 @@ class Promotion(Base, TimestampMixin):
 
 > **아키텍처**: Modular Monolith + Layered (기본) + Ports & Adapters (외부 통합 모듈만)
 > **모듈 위치**: `app/{auth,user,catalog,cart,address,order,payment,common}/` — `docs/memory.md` 참고
-> **현재 상태 (2026-06-22)**: Week 0~5 대부분 완료. 테스트 273개. 미완: SMS/본인인증 PG/환불/shipment추적/admin 고급 기능.
+> **현재 상태 (2026-06-24)**: Week 0~6 대부분 완료. 테스트 291개. 미완: SMS/본인인증 PG/PG환불실호출/shipment추적/알림.
 
 각 주차 끝에 마이그레이션 1개씩 추가하고, 모든 새 엔드포인트는 통합 테스트(pytest + httpx) 1개씩 동반.
 
@@ -573,7 +572,8 @@ class Promotion(Base, TimestampMixin):
 - [x] `GET /users/me` — 프로필 + 소셜 연결 현황
 - [x] `POST /users/me/password` — 비밀번호 변경 (`must_change_password` 해제)
 - [ ] `POST /auth/sms/send`, `POST /auth/sms/verify` — Redis 코드 캐시 (미구현, Redis 필요)
-- [ ] `PATCH /users/me`, `DELETE /users/me` — 미구현
+- [x] `PATCH /users/me` — username/phone 부분 업데이트
+- [x] `DELETE /users/me` — CI/DI 파기 + `withdrawn_at` 기록
 - [ ] CI/DI 컬럼 양방향 암호화 (AES-GCM) — 미구현
 
 ### Week 2 — Catalog (상품) 모듈 ✅ 완료 (일부 잔여)
@@ -609,7 +609,7 @@ class Promotion(Base, TimestampMixin):
 - [x] `POST /orders` — 본인인증 → 배치 `WHERE id IN (...) FOR UPDATE` → 주문 생성 → 재고 차감
 - [x] `GET /orders`, `GET /orders/{order_number}` — 본인 주문만
 - [x] `POST /orders/{order_number}/cancel` — PENDING/PAID/PREPARING만, `cancelled_at` 기록
-- [ ] `POST /orders/{id}/refund/request` — 첨부 이미지 키 검증, status → 환불요청 (미구현)
+- [x] `POST /orders/{order_number}/refund/request` — DELIVERED → REFUNDED 전환 (PG 실호출은 미구현)
 - [ ] 주문 생성 동시성 통합 테스트 — 동일 상품 동시 주문 1건만 성공 검증 (미구현)
 
 ### Week 5 — Payment 모듈 ✅ 완료 (일부 잔여)
@@ -624,20 +624,19 @@ class Promotion(Base, TimestampMixin):
 - [ ] **본인인증 PG**: `app/auth/adapters/toss_identity.py` — `IdentityVerifier` 구현 (미구현)
 - [ ] `POST /verifications/{start,callback}` — 콜백 멱등성 (미구현)
 
-### Week 6 — Shipment + Help + Admin (1.8, 1.9, 1.10~1.13)
+### Week 6 — Shipment + Help + Admin (1.8, 1.9, 1.10~1.13) ✅ 대부분 완료
 
-- [ ] `app/order/shipment_router.py` — 배송 정보/추적 (`/orders/{n}/shipment`, `/shipments/{tn}/track`)
-- [ ] 스마트택배 API 어댑터 (Redis 캐시 5분)
-- [ ] `app/help/` 모듈 — 공지/FAQ/문의 (`Notice`, `Faq`, `ContactInquiry` 신규 모델 + 마이그레이션)
-- [ ] `app/notification/` 모듈 — `Notification` 신규 모델 + 알림 목록/읽음
-- [ ] **Admin 라우터** (모두 `Depends(get_current_admin)` 가드):
-  - [ ] `/admin/dashboard/{summary,sales-chart,pending-orders,popular-categories,stock-alerts}`
-  - [ ] `/admin/products` CRUD + 이미지 관리
-  - [ ] `/admin/orders` 목록/상세 + `POST /admin/orders/{id}/shipment` 송장 입력 → status 자동 전환
-  - [ ] `/admin/members` 목록 + 상세 + 검색
-  - [ ] `/admin/sales/{summary,chart,by-method,top-products}` (월/일별)
-  - [ ] `/admin/inventory` 재고 관리 + bulk 등록 CSV import
-  - [ ] CSV 내보내기 — 주문/매출/회원
+- [x] `GET /orders/{order_number}/shipment` — 배송 정보 조회
+- [ ] `GET /shipments/{tracking_number}/track` — 스마트택배 API 프록시 (미구현, Redis 캐시 5분)
+- [ ] `app/help/` 모듈 — 공지/FAQ/문의 (미구현)
+- [ ] `app/notification/` 모듈 — `Notification` 신규 모델 + 알림 목록/읽음 (미구현)
+- [x] **Admin 라우터** (모두 `Depends(get_current_admin)` 가드):
+  - [x] `/admin/dashboard/{summary,sales-chart,pending-orders,popular-categories,stock-alerts}`
+  - [x] `/admin/products` CRUD + 이미지 전체 교체
+  - [x] `/admin/orders` 목록/상세/송장입력/상태변경/취소/CSV 내보내기
+  - [x] `/admin/members` 목록/상세/검색/상태변경 + KPI 4종
+  - [x] `/admin/sales/{summary,timeseries,by-payment-method,top-products,export.csv}`
+  - [ ] `/admin/inventory` bulk CSV import (미구현)
 
 ### Week 7 — 운영 / 마무리 (필수)
 

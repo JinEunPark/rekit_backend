@@ -10,6 +10,7 @@ DB 없이 fake repository 로 도메인 로직만 검증.
 """
 
 from datetime import timedelta
+from typing import cast
 
 import pytest
 from fastapi import BackgroundTasks
@@ -421,7 +422,7 @@ async def test_issue_temp_password_queues_bg_task_with_16char_password() -> None
 
     assert len(bg.tasks) == 1
     task = bg.tasks[0]
-    pw: str = task.kwargs["temp_password"]
+    pw = cast(str, task.kwargs["temp_password"])
     assert len(pw) == 16
     assert any(c.isalpha() for c in pw)
     assert any(c.isdigit() for c in pw)

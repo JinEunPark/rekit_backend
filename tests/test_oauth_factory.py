@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from app.auth.adapters.google_oauth import GoogleOAuthAdapter
@@ -13,7 +15,7 @@ from app.core.config import Settings
 from app.core.exceptions import SocialProviderNotConfigured
 
 
-def _settings(**overrides: object) -> Settings:
+def _settings(**overrides: Any) -> Settings:
     """필수 settings 만 채운 기본 — overrides 로 OAuth 자리만 변경."""
     return Settings.model_construct(**overrides)
 

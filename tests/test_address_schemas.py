@@ -1,5 +1,7 @@
 """address 스키마 단위 테스트 — Pydantic 검증."""
 
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 
@@ -7,7 +9,7 @@ from app.address.address_schemas import AddressCreate, AddressResponse, AddressU
 
 # ── 공용 valid payload ─────────────────────────────────
 
-_VALID = dict(
+_VALID: dict[str, Any] = dict(
     recipient="홍길동",
     phone="01012345678",
     zipcode="12345",
