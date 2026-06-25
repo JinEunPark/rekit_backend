@@ -22,6 +22,7 @@ from app.auth.auth_schemas import (
     CheckLoginIdRequest,
     FindIdRequest,
     FindPasswordRequest,
+    SendVerificationRequest,
     SentResponse,
     SignInRequest,
     SignUpRequest,
@@ -29,7 +30,8 @@ from app.auth.auth_schemas import (
     SocialCallbackResponse,
     SocialSignUpRequest,
     TokenResponse,
-    UserResponse,
+    VerifyCodeRequest,
+    VerifyCodeResponse,
 )
 from app.auth.auth_service import AuthService
 from app.auth.models import SocialProvider
@@ -67,8 +69,48 @@ def _set_refresh_cookie(response: Response, token: str, max_age_days: int) -> No
 
 
 @router.post(
+    "/email/send-verification",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="이메일 인증 코드 발송",
+)
+async def send_email_verification(
+    body: SendVerificationRequest,
+    background_tasks: BackgroundTasks,
+    service: AuthService = Depends(get_auth_service),
+) -> None:
+    """6자리 인증 코드를 해당 이메일로 발송한다. rate-limit: 1분에 1회.
+
+    Errors:
+    - VerificationRateLimited (429): 60초 이내 재요청.
+    """
+    await service.send_email_verification_code(body.email, background_tasks)
+
+
+@router.post(
+    "/email/verify-code",
+    response_model=VerifyCodeResponse,
+    response_model_by_alias=True,
+    status_code=status.HTTP_200_OK,
+    summary="이메일 인증 코드 확인",
+)
+async def verify_email_code(
+    body: VerifyCodeRequest,
+    service: AuthService = Depends(get_auth_service),
+) -> VerifyCodeResponse:
+    """인증 코드 검증 후 verifiedToken(JWT, 15분) 을 반환한다.
+
+    반환된 verifiedToken 을 회원가입 요청의 verifiedToken 필드로 사용한다.
+
+    Errors:
+    - InvalidVerificationCode (400): 코드 불일치 또는 만료.
+    """
+    token = await service.verify_email_code(body.email, body.code)
+    return VerifyCodeResponse(verified_token=token)
+
+
+@router.post(
     "/sign-up",
-    response_model=UserResponse,
+    response_model=TokenResponse,
     response_model_by_alias=True,
     status_code=status.HTTP_201_CREATED,
     summary="회원가입",
@@ -77,26 +119,25 @@ async def sign_up(
     body: SignUpRequest,
     response: Response,
     service: AuthService = Depends(get_auth_service),
-) -> UserResponse:
+) -> TokenResponse:
     """회원가입. api.md §3.2 + 클라 SignUpView.vue.
 
-    응답:
-    - user + accessToken: JSON body — 가입 직후 화면 그릴 때 추가 GET 불필요.
-    - refresh_token: HttpOnly 쿠키.
+    verifiedToken(POST /auth/email/verify-code 에서 발급)으로 이메일 소유를 증명.
+    가입 성공 즉시 로그인 상태로 전환된다.
 
-    실패 케이스 → exception_handler 가 표준 포맷으로 변환:
-    - UsernameTaken (409, USERNAME_TAKEN)
-    - EmailTaken (409, EMAIL_TAKEN)
-    - 검증 실패 (422, VALIDATION_ERROR)
+    응답:
+    - accessToken: JSON body
+    - refresh_token: HttpOnly 쿠키
+
+    Errors:
+    - TokenExpired (401): verifiedToken 만료/위조.
+    - UsernameTaken (409): login_id 중복.
+    - EmailTaken (409): email 중복.
+    - VALIDATION_ERROR (422): 입력값 검증 실패.
     """
-    user = await service.sign_up(
-        login_id=body.login_id,
-        username=body.username,
-        password=body.password,
-        email=body.email,
-        agreed_marketing=body.agreed_marketing,
-    )
-    return UserResponse.model_validate(user)
+    _, access, refresh = await service.sign_up(body)
+    _set_refresh_cookie(response, refresh, settings.refresh_token_expire_days)
+    return TokenResponse(access_token=access, must_change_password=False)
 
 
 @router.post(
@@ -335,13 +376,12 @@ async def social_sign_up(
     - TokenExpired (401): tempToken 만료/위조.
     - 검증 실패 (422): login_id 형식, 약관 미동의.
     """
-    user, access, refresh = await service.social_sign_up(
+    _, access, refresh = await service.social_sign_up(
         temp_token=body.temp_token,
         login_id=body.login_id,
         username=body.username,
         agreed_marketing=body.agreed_marketing,
     )
-    del user  # router 응답엔 토큰만 (UserResponse 가 필요하면 별도 반환 가능)
 
     _set_refresh_cookie(response, refresh, settings.refresh_token_expire_days)
     return TokenResponse(access_token=access, must_change_password=False)

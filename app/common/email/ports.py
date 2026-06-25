@@ -24,4 +24,11 @@ class EmailMessage:
 class EmailSender(Protocol):
     """이메일 발송 인터페이스. 구현체는 동기/비동기 어느 백엔드든 OK."""
 
-    async def send(self, *, to: str, subject: str, body: str) -> None: ...
+    async def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        html_body: str | None = None,
+    ) -> None: ...

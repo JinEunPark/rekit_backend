@@ -8,7 +8,13 @@
       "Bash(.venv/bin/pytest tests/test_payment_service.py -q)",
       "Bash(.venv/bin/pytest tests/test_payment_service.py::test_confirm_payment_success -v)",
       "Bash(.venv/bin/pytest -q)",
-      "Bash(.venv/bin/pytest tests/test_payment_service.py -v)"
+      "Bash(.venv/bin/pytest tests/test_payment_service.py -v)",
+      "Bash(.venv/bin/pytest tests/test_email_verification_service.py -q)",
+      "Bash(.venv/bin/pytest tests/test_email_verification_service.py -v)",
+      "Skill(artifact-design)",
+      "Skill(artifact-design:*)",
+      "Bash(xargs ls -la)",
+      "Bash(.venv/bin/pytest tests/test_auth_service.py::test_find_login_id_queues_bg_task_when_user_exists tests/test_social_login.py::test_social_login_returns_tokens_when_social_account_exists -v --tb=long)"
     ]
   }
 }

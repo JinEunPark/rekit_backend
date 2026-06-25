@@ -17,12 +17,19 @@ class ConsoleEmailSender:
     def __init__(self) -> None:
         self.sent: list[EmailMessage] = []
 
-    async def send(self, *, to: str, subject: str, body: str) -> None:
+    async def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        html_body: str | None = None,
+    ) -> None:
         msg = EmailMessage(to=to, subject=subject, body=body)
         self.sent.append(msg)
-        # 한 번에 알아보기 쉽도록 구분선 + 메타 + 본문.
+        html_note = " [HTML 포함]" if html_body else ""
         print(
             "\n[EMAIL ─────────────────────────────────────]\n"
-            f"To: {to}\nSubject: {subject}\n\n{body}\n"
+            f"To: {to}\nSubject: {subject}{html_note}\n\n{body}\n"
             "[──────────────────────────────────── /EMAIL]\n"
         )

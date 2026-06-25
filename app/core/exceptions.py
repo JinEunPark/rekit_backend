@@ -237,6 +237,18 @@ class ShipmentNotFound(BusinessError):
     message = "배송 정보를 찾을 수 없습니다."
 
 
+class InvalidVerificationCode(BusinessError):
+    code = "INVALID_VERIFICATION_CODE"
+    http_status = status.HTTP_400_BAD_REQUEST
+    message = "인증 코드가 올바르지 않거나 만료되었습니다."
+
+
+class VerificationRateLimited(BusinessError):
+    code = "VERIFICATION_RATE_LIMITED"
+    http_status = status.HTTP_429_TOO_MANY_REQUESTS
+    message = "잠시 후 다시 시도해주세요. (1분에 1회)"
+
+
 class PermissionDenied(BusinessError):
     code = "PERMISSION_DENIED"
     http_status = status.HTTP_403_FORBIDDEN

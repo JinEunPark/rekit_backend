@@ -25,8 +25,10 @@ from app.payment.payment_service import PaymentService
 
 
 class _FakeEmailSender:
-    async def send(self, *, to: str, subject: str, body: str) -> None:
-        pass
+    async def send(
+        self, *, to: str, subject: str, body: str, html_body: str | None = None
+    ) -> None:
+        del to, subject, body, html_body
 
 
 _: EmailSender = _FakeEmailSender()  # type: ignore[assignment]
@@ -351,7 +353,10 @@ class _RecordingEmailSender:
     def __init__(self) -> None:
         self.records: list[dict[str, str]] = []
 
-    async def send(self, *, to: str, subject: str, body: str) -> None:
+    async def send(
+        self, *, to: str, subject: str, body: str, html_body: str | None = None
+    ) -> None:
+        del html_body
         self.records.append({"to": to, "subject": subject, "body": body})
 
 

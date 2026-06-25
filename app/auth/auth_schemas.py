@@ -30,6 +30,11 @@ USERNAME_MIN_LENGTH = 1
 USERNAME_MAX_LENGTH = 50
 
 
+def _normalize_email(v: str) -> str:
+    """이메일 소문자 정규화. 이메일을 받는 모든 스키마에서 공통 사용."""
+    return v.lower()
+
+
 def validate_password_policy(v: str) -> str:
     """비밀번호 정책 검증 — 영문 + 숫자 동시 포함.
 
@@ -71,17 +76,24 @@ class SignInRequest(BaseModel):
 class SignUpRequest(BaseModel):
     """POST /auth/sign-up 요청 바디. api.md §3.2 + 클라 SignUpView.vue.
 
-    필드 매핑 (클라 camelCase → 서버 snake_case):
-    - loginId         → login_id          (로그인 아이디)
-    - agreedTerms     → agreed_terms      (필수)
-    - agreedPrivacy   → agreed_privacy    (필수)
-    - agreedMarketing → agreed_marketing  (선택)
+    이메일은 verified_token(JWT) 에 포함되어 있다 — 직접 받지 않는다.
+    클라이언트는 이메일 인증 완료 후 받은 verifiedToken 을 함께 전송한다.
 
-    필수 약관(_terms / _privacy) 은 반드시 True. False 면 ValidationError → 422.
+    필드 매핑 (클라 camelCase → 서버 snake_case):
+    - verifiedToken   → verified_token     (이메일 인증 완료 JWT, 15분 유효)
+    - loginId         → login_id           (로그인 아이디)
+    - agreedTerms     → agreed_terms       (필수)
+    - agreedPrivacy   → agreed_privacy     (필수)
+    - agreedMarketing → agreed_marketing   (선택)
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
+    verified_token: str = Field(
+        min_length=10,
+        validation_alias="verifiedToken",
+        description="이메일 인증 완료 JWT (POST /auth/email/verify-code 에서 발급)",
+    )
     login_id: str = Field(
         pattern=LOGIN_ID_PATTERN,
         validation_alias="loginId",
@@ -96,7 +108,6 @@ class SignUpRequest(BaseModel):
         min_length=PASSWORD_MIN_LENGTH,
         description="비밀번호 (영문+숫자 포함 8자 이상)",
     )
-    email: EmailStr = Field(description="이메일 (비밀번호 찾기 등 본인 확인용)")
     agreed_terms: bool = Field(
         validation_alias="agreedTerms",
         description="이용약관 동의 (필수)",
@@ -111,11 +122,6 @@ class SignUpRequest(BaseModel):
         description="마케팅 정보 수신 동의 (선택)",
     )
 
-    @field_validator("email")
-    @classmethod
-    def _lowercase_email(cls, v: str) -> str:
-        return v.lower()
-
     @field_validator("password")
     @classmethod
     def _password_must_have_letter_and_digit(cls, v: str) -> str:
@@ -124,7 +130,6 @@ class SignUpRequest(BaseModel):
     @field_validator("agreed_terms", "agreed_privacy")
     @classmethod
     def _must_be_true(cls, v: bool) -> bool:
-        # 필수 약관 미동의는 비즈니스 규칙 위반. ValidationError 로 422 변환.
         if not v:
             raise ValueError("필수 약관에 동의해야 합니다.")
         return v
@@ -325,4 +330,58 @@ class UserResponse(BaseModel):
         default=0,
         serialization_alias="ecoKg",
         description="누적 절약 kg (집계 결과)",
+    )
+
+
+# ── 이메일 인증 ────────────────────────────────────────
+
+
+class SendVerificationRequest(BaseModel):
+    """POST /auth/email/send-verification 요청 바디.
+
+    6자리 인증 코드를 해당 이메일로 발송 요청. rate-limit: 1분에 1회.
+    """
+
+    email: EmailStr = Field(description="인증 코드를 받을 이메일")
+
+    @field_validator("email")
+    @classmethod
+    def _lowercase_email(cls, v: str) -> str:
+        return _normalize_email(v)
+
+
+class VerifyCodeRequest(BaseModel):
+    """POST /auth/email/verify-code 요청 바디.
+
+    이메일 + 6자리 코드를 검증하고 verifiedToken(JWT) 을 반환한다.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    email: EmailStr = Field(description="인증 코드를 받은 이메일")
+    code: str = Field(
+        min_length=6,
+        max_length=6,
+        pattern=r"^\d{6}$",
+        description="6자리 숫자 인증 코드",
+    )
+
+    @field_validator("email")
+    @classmethod
+    def _lowercase_email(cls, v: str) -> str:
+        return _normalize_email(v)
+
+
+class VerifyCodeResponse(BaseModel):
+    """POST /auth/email/verify-code 응답 바디.
+
+    검증 성공 시 verifiedToken(JWT, 15분 유효)을 반환한다.
+    회원가입 시 이 토큰을 verifiedToken 필드로 전달해야 한다.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    verified_token: str = Field(
+        serialization_alias="verifiedToken",
+        description="이메일 인증 완료 JWT — 회원가입 요청 시 사용",
     )

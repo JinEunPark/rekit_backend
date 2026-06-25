@@ -108,3 +108,31 @@ def create_social_signup_token(
 def decode_social_signup_token(token: str) -> dict:
     """create_social_signup_token 으로 발급한 토큰 검증 + payload 반환."""
     return decode_token(token, expected_type=_SOCIAL_SIGNUP_TOKEN_TYPE)
+
+
+# ── 이메일 인증 완료 토큰 ─────────────────────────────────────────
+# 6자리 코드 검증 성공 시 발급. 회원가입 요청 시 이 토큰으로 이메일 소유를 증명.
+# 단명 (15분). 가입 완료 전 소멸하면 코드 재인증 필요.
+
+_EMAIL_VERIFIED_TOKEN_TYPE = "email-verified"
+
+
+def create_email_verified_token(
+    *,
+    email: str,
+    expires_in: timedelta | None = None,
+) -> str:
+    now = datetime.now(timezone.utc)
+    exp = now + (expires_in or timedelta(minutes=15))
+    payload = {
+        "email": email,
+        "iat": now,
+        "exp": exp,
+        "type": _EMAIL_VERIFIED_TOKEN_TYPE,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def decode_email_verified_token(token: str) -> dict:
+    """create_email_verified_token 으로 발급한 토큰 검증 + payload 반환."""
+    return decode_token(token, expected_type=_EMAIL_VERIFIED_TOKEN_TYPE)

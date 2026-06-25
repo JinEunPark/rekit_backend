@@ -16,6 +16,7 @@ from app.auth.auth_schemas import (
     TokenResponse,
     UserResponse,
 )
+from app.core.security import create_email_verified_token
 
 # ── SignInRequest ─────────────────────────────────────
 
@@ -47,10 +48,10 @@ def test_sign_in_request_remember_defaults_to_false() -> None:
 def _valid_sign_up_payload(**overrides: object) -> dict[str, object]:
     """기본 정상 페이로드. 필요 필드만 override 해서 케이스 빌드."""
     base: dict[str, object] = {
+        "verifiedToken": create_email_verified_token(email="user@example.com"),
         "loginId": "eunyoung_kim",
         "username": "박은영",
         "password": "abc12345",
-        "email": "user@example.com",
         "agreedTerms": True,
         "agreedPrivacy": True,
         "agreedMarketing": False,
@@ -63,12 +64,15 @@ def test_sign_up_request_accepts_valid_payload() -> None:
     req = SignUpRequest.model_validate(_valid_sign_up_payload())
     assert req.login_id == "eunyoung_kim"
     assert req.username == "박은영"
-    assert req.email == "user@example.com"
+    assert len(req.verified_token) > 10
 
 
-def test_sign_up_request_normalizes_email_to_lowercase() -> None:
-    req = SignUpRequest.model_validate(_valid_sign_up_payload(email="A@B.COM"))
-    assert req.email == "a@b.com"
+def test_sign_up_request_rejects_missing_verified_token() -> None:
+    """verifiedToken 없이 가입 시도 → ValidationError."""
+    payload = _valid_sign_up_payload()
+    del payload["verifiedToken"]  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        SignUpRequest.model_validate(payload)
 
 
 def test_sign_up_request_rejects_invalid_login_id_pattern() -> None:

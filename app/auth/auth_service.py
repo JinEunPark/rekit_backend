@@ -22,24 +22,30 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from fastapi import BackgroundTasks
+from redis.asyncio import Redis
 
 from app.auth.adapters.ports import OAuthProvider
 from app.auth.auth_repository import AuthRepository
-from app.auth.auth_schemas import validate_password_policy
+from app.auth.auth_schemas import SignUpRequest, validate_password_policy
 from app.auth.models import SocialAccount, SocialProvider
 from app.common.email import EmailSender
+from app.common.email.templates import render_verification_email
 from app.core.config import settings
 from app.core.database import async_session_factory
 from app.core.exceptions import (
     EmailTaken,
     InvalidCredentials,
+    InvalidVerificationCode,
     SocialEmailRequired,
     UsernameTaken,
+    VerificationRateLimited,
 )
 from app.core.security import (
     create_access_token,
+    create_email_verified_token,
     create_refresh_token,
     create_social_signup_token,
+    decode_email_verified_token,
     decode_social_signup_token,
     decode_token,
     hash_password,
@@ -48,6 +54,9 @@ from app.core.security import (
 from app.user.models import User, UserRole
 
 _log = logging.getLogger(__name__)
+
+_VERIFY_CODE_KEY = "email:verify:{}"
+_VERIFY_RATE_KEY = "email:verify:rate:{}"
 
 
 @dataclass(frozen=True)
@@ -68,9 +77,10 @@ class SocialLoginResult:
 
 
 class AuthService:
-    def __init__(self, repo: AuthRepository, email_sender: EmailSender) -> None:
+    def __init__(self, repo: AuthRepository, email_sender: EmailSender, redis: Redis) -> None:
         self.repo = repo
         self.email_sender = email_sender
+        self._redis = redis
 
     # ── 로그인 ────────────────────────────────────────
 
@@ -104,57 +114,83 @@ class AuthService:
         access, refresh = self._issue_tokens(user, remember=remember)
         return access, refresh, user.must_change_password
 
+    # ── 이메일 인증 ─────────────────────────────────────
+
+    async def send_email_verification_code(
+        self,
+        email: str,
+        background_tasks: BackgroundTasks,
+    ) -> None:
+        """6자리 인증 코드를 발급해 Redis 에 저장하고 이메일 발송 태스크를 큐잉. rate-limit: 60초.
+
+        Raises:
+            VerificationRateLimited (429): 60초 이내 재요청.
+        """
+        locked = await self._redis.set(_VERIFY_RATE_KEY.format(email), "1", nx=True, ex=60)
+        if locked is None:
+            raise VerificationRateLimited()
+
+        code = "".join(secrets.choice("0123456789") for _ in range(6))
+        await self._redis.set(_VERIFY_CODE_KEY.format(email), code, ex=600)
+
+        background_tasks.add_task(
+            _bg_send_verification_email,
+            to=email,
+            code=code,
+            email_sender=self.email_sender,
+        )
+
+    async def verify_email_code(self, email: str, code: str) -> str:
+        """코드 검증 → verified_token(JWT) 반환. 성공 시 Redis 코드 삭제 (일회용).
+
+        Raises:
+            InvalidVerificationCode (400): 코드 불일치 또는 만료.
+        """
+        stored = await self._redis.get(_VERIFY_CODE_KEY.format(email))
+        if stored is None or stored != code:
+            raise InvalidVerificationCode()
+
+        await self._redis.delete(_VERIFY_CODE_KEY.format(email))
+        return create_email_verified_token(email=email)
+
     # ── 회원가입 ──────────────────────────────────────
 
-    async def sign_up(
-        self,
-        *,
-        login_id: str,
-        username: str,
-        password: str,
-        email: str,
-        agreed_marketing: bool,
-    ) -> User:
+    async def sign_up(self, req: SignUpRequest) -> tuple[User, str, str]:
         """회원가입. api.md §3.2.
 
-        Args:
-            login_id, username, password, email: schema 에서 검증 완료.
-            agreed_marketing: 선택 약관. 필수 약관(terms/privacy)은 schema 에서
-                반드시 True 가 보장되므로 service 가 다시 받지 않는다.
+        이메일은 req.verified_token 에서 추출한다 — 이메일 인증이 완료된 값임이 보장.
 
         Returns:
             (user, access_token, refresh_token).
 
         Raises:
+            TokenExpired (401): verified_token 만료/위조.
             UsernameTaken (409): 동일 login_id 가 이미 존재.
             EmailTaken (409): 동일 email 이 이미 존재.
         """
-        normalized_email = email.lower()
+        email: str = decode_email_verified_token(req.verified_token)["email"]
 
-        # 중복은 login_id → email 순으로 체크. 두 검사 후에 INSERT 해도 race 시 DB
-        # UNIQUE 가 최종 방어선이지만, 사전 체크가 일반 케이스의 UX 를 깔끔하게 함.
-        if await self.repo.exists_by_login_id(login_id):
+        if await self.repo.exists_by_login_id(req.login_id):
             raise UsernameTaken()
-        if await self.repo.exists_by_email(normalized_email):
+        if await self.repo.exists_by_email(email):
             raise EmailTaken()
 
         now = datetime.now(UTC)
-        # role/is_active 는 모델에 default 가 있지만 그건 DB INSERT 시점에만 적용된다.
-        # 메모리에서 user.role 을 즉시 사용해야 하므로(토큰 claim) 명시적으로 지정.
         user = User(
-            login_id=login_id,
-            username=username,
-            email=normalized_email,
-            password_hash=hash_password(password),
+            login_id=req.login_id,
+            username=req.username,
+            email=email,
+            password_hash=hash_password(req.password),
             role=UserRole.USER,
             is_active=True,
             agreed_terms_at=now,
             agreed_privacy_at=now,
-            agreed_marketing_at=now if agreed_marketing else None,
+            agreed_marketing_at=now if req.agreed_marketing else None,
         )
         user = await self.repo.add(user)
 
-        return user
+        access, refresh = self._issue_tokens(user, remember=False)
+        return user, access, refresh
 
     async def is_login_id_available(self, login_id: str) -> bool:
         """로그인 아이디 사용 가능 여부 — /auth/check-login-id 의 도메인 로직."""
@@ -438,6 +474,21 @@ def _generate_temp_password() -> str:
 # 응답 후 실행. 자체 DB session 을 열어 요청 트랜잭션과 분리 — SMTP 지연이
 # 요청 connection 을 묶지 않도록. 실패 시 로그만 남기고 정상 종료 (사용자에게
 # 별도 알림 X — find-id/find-password 는 enumeration 방어로 응답 통일).
+
+
+async def _bg_send_verification_email(
+    *,
+    to: str,
+    code: str,
+    email_sender: EmailSender,
+) -> None:
+    """이메일 인증 코드 발송 BG task."""
+    await email_sender.send(
+        to=to,
+        subject="[rekit] 이메일 인증 코드",
+        body=f"인증 코드: {code}\n\n10분 이내에 입력해 주세요.\n\n본 메일은 발송 전용입니다.",
+        html_body=render_verification_email(code),
+    )
 
 
 async def _bg_send_login_id_email(

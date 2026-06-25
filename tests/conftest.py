@@ -1,4 +1,4 @@
-"""pytest 공용 부트스트랩 + 팩토리.
+"""pytest 공용 부트스트랩 + 팩토리, 공용 테스트 더블.
 
 여기서 app.db.registry 를 import 해서 모든 SQLAlchemy 모델을 메타데이터에
 등록한다. User.relationship("Address", ...) 같은 string ref 는 mapper configure
@@ -14,6 +14,39 @@ from datetime import UTC, datetime
 from app.core.security import hash_password
 from app.db import registry  # noqa: F401
 from app.user.models import User, UserRole
+
+
+class FakeRedis:
+    """인메모리 Redis 대역. TTL·NX 의미론 단순화 — 도메인 로직 단위 테스트 전용.
+
+    NX: 키가 없을 때만 쓴다. 있으면 None 반환 (Redis SET NX 와 동일 의미론).
+    TTL 은 저장하지 않는다 (단위 테스트에서 만료 시뮬레이션 필요 시 직접 delete 사용).
+    """
+
+    def __init__(self) -> None:
+        self._store: dict[str, str] = {}
+
+    async def get(self, key: str) -> str | None:
+        return self._store.get(key)
+
+    async def set(
+        self,
+        key: str,
+        value: str,
+        ex: int | None = None,
+        nx: bool = False,
+    ) -> bool | None:
+        del ex  # TTL 미구현 — 테스트에서 만료 시뮬레이션 필요 시 직접 delete 사용
+        if nx and key in self._store:
+            return None
+        self._store[key] = value
+        return True
+
+    async def delete(self, key: str) -> None:
+        self._store.pop(key, None)
+
+    async def exists(self, key: str) -> int:
+        return 1 if key in self._store else 0
 
 
 def make_user(

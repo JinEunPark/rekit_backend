@@ -36,6 +36,7 @@ from app.catalog.catalog_service import CatalogService
 from app.common.email import ConsoleEmailSender, EmailSender, GmailSmtpEmailSender
 from app.core.config import Settings, settings
 from app.core.database import async_session_factory
+from app.core.redis import get_redis
 from app.core.exceptions import (
     AccountInactive,
     PasswordChangeRequired,
@@ -134,8 +135,8 @@ async def get_auth_service(
     session: AsyncSession = Depends(db_session),
     email_sender: EmailSender = Depends(get_email_sender),
 ) -> AuthService:
-    """AuthService 팩토리. session → Repository → Service 로 합성 + EmailSender 주입."""
-    return AuthService(AuthRepository(session), email_sender=email_sender)
+    """AuthService 팩토리. session → Repository → Service 로 합성 + EmailSender + Redis 주입."""
+    return AuthService(AuthRepository(session), email_sender=email_sender, redis=get_redis())
 
 
 async def get_user_service() -> UserService:

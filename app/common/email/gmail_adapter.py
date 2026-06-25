@@ -13,27 +13,38 @@ aiosmtplib 는 lazy import — console 어댑터만 쓰는 dev 환경에선 미�
 
 from __future__ import annotations
 
-from email.message import EmailMessage as MimeMessage
+from email.message import EmailMessage
 
 
 class GmailSmtpEmailSender:
-    """EmailSender Protocol 구현. STARTTLS 587 포트로 Gmail SMTP 발송."""
+    """EmailSender Protocol 구현. STARTTLS 587 포트로 Gmail SMTP 발송.
+
+    html_body 가 전달되면 multipart/alternative 로 text + HTML 동시 발송.
+    이메일 클라이언트가 HTML 지원 시 HTML 렌더링, 미지원 시 text fallback.
+    """
 
     def __init__(self, *, user: str, password: str, from_addr: str | None = None) -> None:
         self.user = user
         self.password = password
-        # from_addr 미지정 시 user(gmail 주소) 그대로 — 일관성을 위해 .env 의 EMAIL_FROM 권장
         self.from_addr = from_addr or user
 
-    async def send(self, *, to: str, subject: str, body: str) -> None:
-        # lazy import: console 어댑터만 쓰는 환경에서 aiosmtplib 미설치 허용
+    async def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        html_body: str | None = None,
+    ) -> None:
         import aiosmtplib
 
-        msg = MimeMessage()
+        msg = EmailMessage()
         msg["From"] = self.from_addr
         msg["To"] = to
         msg["Subject"] = subject
         msg.set_content(body)
+        if html_body:
+            msg.add_alternative(html_body, subtype="html")
 
         await aiosmtplib.send(
             msg,

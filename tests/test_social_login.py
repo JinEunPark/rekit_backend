@@ -30,7 +30,7 @@ from app.core.security import (
     decode_social_signup_token,
 )
 from app.user.models import User
-from tests.conftest import make_user
+from tests.conftest import FakeRedis, make_user
 
 # ── Fakes ───────────────────────────────────────────────
 
@@ -96,7 +96,7 @@ class _FakeAuthRepo:
 
 
 def _make_service(repo: object) -> AuthService:
-    return AuthService(repo, email_sender=ConsoleEmailSender())  # type: ignore[arg-type]
+    return AuthService(repo, email_sender=ConsoleEmailSender(), redis=FakeRedis())  # type: ignore[arg-type]
 
 
 # ── social_login: 기존 사용자 ─────────────────────────────
