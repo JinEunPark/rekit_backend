@@ -146,6 +146,9 @@ class _FakeCatalogRepo:
         active = [p for p in self._products if p.status == ProductStatus.ACTIVE]
         return sorted(active, key=lambda p: p.id, reverse=True)[:limit]  # type: ignore[arg-type]
 
+    async def get_by_ids(self, product_ids: list[int]) -> list[Product]:
+        return [p for p in self._products if p.id in product_ids]
+
     async def get_categories(self) -> list[ProductCategoryMetaItem]:
         return sorted(self._categories, key=lambda c: c.sort_order)
 
@@ -439,3 +442,28 @@ async def test_get_categories_all_have_required_fields() -> None:
         assert cat.label
         assert cat.icon
         assert cat.sort_order > 0
+
+
+# ── get_products_by_ids ───────────────────────────────────────
+
+
+async def test_get_products_by_ids_returns_matching() -> None:
+    """요청한 ID 의 상품만 반환."""
+    products = [make_product(product_id=i) for i in range(1, 6)]
+    service = _make_service(products)
+
+    result = await service.get_products_by_ids([1, 3, 5])
+
+    ids = {p.id for p in result}
+    assert ids == {1, 3, 5}
+
+
+async def test_get_products_by_ids_ignores_missing_ids() -> None:
+    """일부 ID 가 없어도 존재하는 상품만 반환 — 에러 없음."""
+    products = [make_product(product_id=1), make_product(product_id=2)]
+    service = _make_service(products)
+
+    result = await service.get_products_by_ids([1, 2, 999])
+
+    ids = {p.id for p in result}
+    assert ids == {1, 2}

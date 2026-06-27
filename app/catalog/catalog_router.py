@@ -14,6 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, status
 
 from app.catalog.catalog_schemas import (
+    BulkProductRequest,
     CategoryMetaItem,
     ProductDetailResponse,
     ProductListParams,
@@ -24,6 +25,19 @@ from app.catalog.catalog_service import CatalogService
 from app.core.deps import get_catalog_service
 
 router = APIRouter(tags=["catalog"])
+
+
+@router.post(
+    "/products/bulk",
+    response_model=list[ProductResponse],
+    status_code=status.HTTP_200_OK,
+    summary="상품 ID 배열 bulk 조회",
+)
+async def get_products_bulk(
+    body: BulkProductRequest,
+    service: CatalogService = Depends(get_catalog_service),
+) -> list[ProductResponse]:
+    return await service.get_products_by_ids(body.ids)
 
 
 @router.get(

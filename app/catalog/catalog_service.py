@@ -44,6 +44,10 @@ class CatalogService:
         products = await self.repo.get_featured(limit)
         return [_to_response(p) for p in products]
 
+    async def get_products_by_ids(self, ids: list[int]) -> list[ProductResponse]:
+        products = await self.repo.get_by_ids(ids)
+        return [_to_response(p) for p in products]
+
     async def get_categories(self) -> list[CategoryMetaItem]:
         cats = await self.repo.get_categories()
         return [

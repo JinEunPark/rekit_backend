@@ -24,6 +24,10 @@ class ProductSort(str, enum.Enum):
     PRICE_DESC = "price_desc"
 
 
+class BulkProductRequest(BaseModel):
+    ids: list[int] = Field(..., min_length=1, max_length=100)
+
+
 class ProductListParams(BaseModel):
     """GET /products 쿼리 파라미터. FastAPI Depends() 로 자동 주입."""
 

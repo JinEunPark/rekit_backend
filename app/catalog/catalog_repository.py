@@ -65,7 +65,7 @@ class CatalogRepository:
         base = (
             base.offset((params.page - 1) * params.size)
             .limit(params.size)
-            .options(selectinload(Product.images))
+            .options(selectinload(Product.images.and_(ProductImage.sort_order == 0)))
         )
 
         result = await self.session.execute(base)
@@ -130,6 +130,16 @@ class CatalogRepository:
         await self.session.refresh(product, attribute_names=["images"])
         return product
 
+    async def get_by_ids(self, product_ids: list[int]) -> list[Product]:
+        """ID 목록으로 상품 bulk 조회. 없는 ID 는 조용히 무시."""
+        stmt = (
+            select(Product)
+            .where(Product.id.in_(product_ids))
+            .options(selectinload(Product.images.and_(ProductImage.sort_order == 0)))
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars())
+
     async def get_featured(self, limit: int = 4) -> list[Product]:
         """홈 '오늘 입고된 상품' — ACTIVE 상품을 최신순으로 limit 건."""
         stmt = (
@@ -137,7 +147,7 @@ class CatalogRepository:
             .where(Product.status == ProductStatus.ACTIVE)
             .order_by(Product.created_at.desc(), Product.id.desc())
             .limit(limit)
-            .options(selectinload(Product.images))
+            .options(selectinload(Product.images.and_(ProductImage.sort_order == 0)))
         )
         result = await self.session.execute(stmt)
         return list(result.scalars())
