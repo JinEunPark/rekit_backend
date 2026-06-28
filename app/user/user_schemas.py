@@ -28,6 +28,12 @@ class UpdateProfileRequest(BaseModel):
     )
 
 
+class WithdrawRequest(BaseModel):
+    """DELETE /users/me 요청 바디. 비밀번호 재확인으로 본인 확인."""
+
+    password: str = Field(min_length=1, description="현재 비밀번호 (본인 확인용)")
+
+
 class ChangePasswordRequest(BaseModel):
     """POST /users/me/password 요청 바디. api.md §4.3 + 클라 ChangePasswordView.
 

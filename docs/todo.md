@@ -54,7 +54,11 @@
 - [x] `POST /users/me/password` — 비밀번호 변경 (`must_change_password` 해제)
 - [ ] `POST /auth/sms/send` — SMS 인증번호 발송 (Redis에 코드 캐시, rate-limit)
 - [ ] `POST /auth/sms/verify` — SMS 인증번호 검증 → `phone_verified_at` 기록
-- [x] `PATCH /users/me` — 이름/연락처 수정
+- [x] `PATCH /users/me` — username/phone 부분 업데이트 _(현재 인증 없이 자유변경 — §7.3 개인정보 수정 정책 참고)_
+- [ ] `POST /users/me/phone/send-verification` — 전화번호 변경: 새 번호로 SMS 인증코드 발송 (Redis TTL 10분)
+- [ ] `POST /users/me/phone/verify` — 인증코드 확인 후 `users.phone` 교체
+- [ ] `POST /users/me/email/send-verification` — 이메일 변경: 새 주소로 인증코드 발송 (Redis TTL 10분)
+- [ ] `POST /users/me/email/verify` — 인증코드 확인 후 `users.email` 교체
 - [x] `DELETE /users/me` — 회원탈퇴 (CI/DI 즉시 파기, `withdrawn_at` 기록, 거래정보 5년 보존)
 - [ ] `POST /users/me/social/connect` — 기가입 사용자 소셜 계정 추가 연결
 
@@ -492,6 +496,18 @@ class Promotion(Base, TimestampMixin):
 
 ### 7.3 검증 / 비즈니스 룰
 
+- [ ] **개인정보 수정 정책** — 필드별 변경 허용 수준 및 구현 상태
+
+  | 필드 | 정책 | 구현 상태 |
+  |---|---|---|
+  | `password` | 현재 비번 확인 후 변경 | ✅ 완료 |
+  | `phone` | SMS 인증코드 발송 → 확인 후 교체 | ❌ 미구현 (Redis 필요) |
+  | `email` | 새 이메일로 인증코드 발송 → 확인 후 교체 | ❌ 미구현 (Redis 필요) |
+  | `username` | 본인인증 완료 후 변경 잠금 (현재 자유변경 가능) | ⚠️ 본인인증 PG 연동 후 처리 |
+  | `login_id` | 변경 불가 | ✅ 변경 불가 유지 |
+
+  - phone/email 변경 모두 `app/core/redis.py` 구현 선행 필요
+  - `username` 잠금: 본인인증 PG 연동(§1.2) 완료 후 `identity_verified_at IS NOT NULL` 조건으로 `PATCH /users/me` 에서 차단
 - [ ] **환불 정책 7일** ([screens-buyer-1.jsx:371](/tmp/rekle-design/extracted2/rekle/project/screens-buyer-1.jsx)): "배송 후 7일 이내 동작 불량은 환불 가능, 단순 변심 반품 불가"
   - `POST /orders/{id}/refund/request`에서 `delivered_at + 7일` 윈도우 검증
   - 사유를 `MALFUNCTION` / `CHANGE_OF_MIND` 구분 — 후자는 자동 거절
@@ -573,6 +589,7 @@ class Promotion(Base, TimestampMixin):
 - [x] `POST /users/me/password` — 비밀번호 변경 (`must_change_password` 해제)
 - [ ] `POST /auth/sms/send`, `POST /auth/sms/verify` — Redis 코드 캐시 (미구현, Redis 필요)
 - [x] `PATCH /users/me` — username/phone 부분 업데이트
+  - ⚠️ **TODO**: `username` 은 본인인증 결과(실명)와 연동되므로, 본인인증 완료 이후에는 PATCH 로 자유 변경 불가로 바꿔야 함. 현재는 인증 없이 변경 가능한 상태로 열려 있음 — 본인인증 PG 연동(§1.2) 완료 후 함께 처리.
 - [x] `DELETE /users/me` — CI/DI 파기 + `withdrawn_at` 기록
 - [ ] CI/DI 컬럼 양방향 암호화 (AES-GCM) — 미구현
 

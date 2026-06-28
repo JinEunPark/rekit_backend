@@ -133,34 +133,43 @@ class TestAddressUpdate:
 # ── AddressResponse: ORM → DTO 매핑 ───────────────────
 
 
+def _fake_address(
+    *,
+    id: int = 1,
+    recipient: str = "홍",
+    phone: str = "01012345678",
+    zipcode: str = "12345",
+    address1: str = "서울",
+    address2: str | None = None,
+    label: str | None = None,
+    memo: str | None = None,
+    is_default: bool = False,
+) -> object:
+    """AddressResponse.model_validate 용 ORM 속성 스텁."""
+
+    class _Fake:
+        pass
+
+    obj = _Fake()
+    for k, v in locals().items():
+        if k != "obj":
+            setattr(obj, k, v)
+    return obj
+
+
 class TestAddressResponse:
     def test_from_attributes_maps_correctly(self) -> None:
-        class _Fake:
-            id = 7
-            recipient = "김철수"
-            phone = "01011112222"
-            zipcode = "54321"
-            address1 = "부산시 해운대구"
-            address2 = "301호"
-            is_default = True
-
-        resp = AddressResponse.model_validate(_Fake())
+        resp = AddressResponse.model_validate(
+            _fake_address(id=7, recipient="김철수", phone="01011112222",
+                          zipcode="54321", address1="부산시 해운대구",
+                          address2="301호", label="집", is_default=True)
+        )
         assert resp.id == 7
         assert resp.is_default is True
 
     def test_serialization_alias_is_default(self) -> None:
         """is_default → isDefault 로 직렬화되어야 한다."""
-
-        class _Fake:
-            id = 1
-            recipient = "홍"
-            phone = "01012345678"
-            zipcode = "12345"
-            address1 = "서울"
-            address2 = None
-            is_default = False
-
-        resp = AddressResponse.model_validate(_Fake())
+        resp = AddressResponse.model_validate(_fake_address())
         dumped = resp.model_dump(by_alias=True)
         assert "isDefault" in dumped
         assert "is_default" not in dumped

@@ -54,6 +54,16 @@ class Address(Base, TimestampMixin):
         nullable=True,
         comment="상세 주소 (동·호수 등)",
     )
+    label: Mapped[str | None] = mapped_column(
+        String(30),
+        nullable=True,
+        comment="배송지 별칭 (예: 집, 회사)",
+    )
+    memo: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
+        comment="배송 메모 (예: 경비실 앞 놔주세요)",
+    )
     is_default: Mapped[bool] = mapped_column(
         Boolean,
         default=False,

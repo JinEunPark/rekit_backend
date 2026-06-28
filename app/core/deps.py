@@ -55,6 +55,7 @@ from app.payment.payment_service import PaymentService
 from app.user.admin_members_repository import AdminMembersRepository
 from app.user.admin_members_service import AdminMembersService
 from app.user.models import User, UserRole
+from app.user.user_repository import UserRepository
 from app.user.user_service import UserService
 
 
@@ -139,9 +140,11 @@ async def get_auth_service(
     return AuthService(AuthRepository(session), email_sender=email_sender, redis=get_redis())
 
 
-async def get_user_service() -> UserService:
-    """UserService 팩토리. 내부 상태 없는 도메인 함수 묶음 — 매 요청 새 인스턴스도 가벼움."""
-    return UserService()
+async def get_user_service(
+    session: AsyncSession = Depends(db_session),
+) -> UserService:
+    """UserService 팩토리. session → UserRepository → UserService."""
+    return UserService(UserRepository(session))
 
 
 async def get_address_service(

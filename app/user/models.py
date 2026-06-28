@@ -22,11 +22,12 @@ class UserRole(str, enum.Enum):
 
 
 class UserStatus(str, enum.Enum):
-    """계정 상태. BANNED 는 로그인 차단, DORMANT 는 1년 무접속 휴면."""
+    """계정 상태. BANNED 는 로그인 차단, DORMANT 는 1년 무접속 휴면, WITHDRAWN 은 자발적 탈퇴."""
 
     ACTIVE = "ACTIVE"
     BANNED = "BANNED"
     DORMANT = "DORMANT"
+    WITHDRAWN = "WITHDRAWN"
 
 
 class Gender(str, enum.Enum):

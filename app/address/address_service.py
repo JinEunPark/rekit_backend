@@ -23,15 +23,7 @@ class AddressService:
             raise AddressLimitExceeded()
         if data.is_default:
             await self._repo.clear_default(user_id)
-        address = Address(
-            user_id=user_id,
-            recipient=data.recipient,
-            phone=data.phone,
-            zipcode=data.zipcode,
-            address1=data.address1,
-            address2=data.address2,
-            is_default=data.is_default,
-        )
+        address = Address(user_id=user_id, **data.model_dump())
         return await self._repo.save(address)
 
     async def update_address(

@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _PHONE_RE = re.compile(r"^01[016789]\d{7,8}$")
 _ZIPCODE_RE = re.compile(r"^\d{5}$")
+_LABEL_MAX = 30
+_MEMO_MAX = 200
 
 
 def _clean_phone(v: str) -> str:
@@ -38,6 +40,8 @@ class AddressCreate(BaseModel):
     zipcode: str = Field(description="우편번호 5자리")
     address1: str = Field(min_length=1, max_length=255, description="기본 주소 (도로명/지번)")
     address2: str | None = Field(default=None, max_length=255, description="상세 주소 (동·호수)")
+    label: str | None = Field(default=None, max_length=_LABEL_MAX, description="배송지 별칭 (예: 집, 회사)")
+    memo: str | None = Field(default=None, max_length=_MEMO_MAX, description="배송 메모")
     is_default: bool = Field(default=False, description="기본 배송지 여부")
 
     @field_validator("phone")
@@ -65,6 +69,8 @@ class AddressUpdate(BaseModel):
     zipcode: str | None = Field(default=None)
     address1: str | None = Field(default=None, min_length=1, max_length=255)
     address2: str | None = Field(default=None)
+    label: str | None = Field(default=None, max_length=_LABEL_MAX)
+    memo: str | None = Field(default=None, max_length=_MEMO_MAX)
     is_default: bool | None = Field(default=None)
 
     @field_validator("phone")
@@ -89,4 +95,6 @@ class AddressResponse(BaseModel):
     zipcode: str
     address1: str
     address2: str | None
+    label: str | None
+    memo: str | None
     is_default: bool = Field(serialization_alias="isDefault")

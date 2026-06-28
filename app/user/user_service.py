@@ -15,11 +15,13 @@ from datetime import UTC, datetime
 from app.core.exceptions import InvalidCredentials
 from app.core.security import hash_password, verify_password
 from app.user.models import User, UserStatus
+from app.user.user_repository import UserRepository
 from app.user.user_schemas import UpdateProfileRequest
 
 
 class UserService:
-    """사용자 본인 정보 변경. 인스턴스 상태 없음 — 단순 도메인 함수 묶음."""
+    def __init__(self, repo: UserRepository) -> None:
+        self.repo = repo
 
     def update_profile(self, *, user: User, data: UpdateProfileRequest) -> None:
         """username / phone 을 부분 업데이트한다. None 필드는 건드리지 않음."""
@@ -28,17 +30,31 @@ class UserService:
         if data.phone is not None:
             user.phone = data.phone
 
-    def withdraw(self, *, user: User) -> None:
-        """회원탈퇴 처리 — 계정 비활성화 + CI/DI 파기.
+    def _assert_password(self, raw: str, hashed: str) -> None:
+        if not verify_password(raw, hashed):
+            raise InvalidCredentials()
 
-        주문 정보는 전자상거래법 5년 보존 의무로 물리 삭제하지 않는다.
-        CI/DI 는 요구사항정의서 §3.2 에 따라 탈퇴 즉시 파기.
+    async def withdraw(self, *, user: User, password: str) -> None:
+        """비밀번호 확인 후 PII 전체 익명화 + 소셜 계정 삭제.
+
+        - 재가입 가능하도록 email·login_id 를 unique 안전한 값으로 교체
+        - 주문 데이터는 전자상거래법 5년 보존 의무로 유지 (orders 스냅샷은 별도 배치로 익명화)
+        - 소셜 계정(email_at_link PII 포함)은 즉시 삭제
         """
-        user.is_active = False
-        user.status = UserStatus.DORMANT
+        self._assert_password(password, user.password_hash)
+        user.email = f"withdrawn_{user.id}@deleted"
+        user.login_id = f"withdrawn_{user.id}"
+        user.username = "(탈퇴한 사용자)"
+        user.phone = None
+        user.password_hash = ""
+        user.birth_date = None
+        user.gender = None
         user.ci = None
         user.di = None
+        user.is_active = False
+        user.status = UserStatus.WITHDRAWN
         user.withdrawn_at = datetime.now(UTC)
+        await self.repo.delete_social_accounts(user.id)
 
     def change_password(
         self,
@@ -56,8 +72,7 @@ class UserService:
             - user.password_hash 갱신 (bcrypt re-hash)
             - user.must_change_password = False (임시 비번 발급 상태였다면 해제)
         """
-        if not verify_password(current_password, user.password_hash):
-            raise InvalidCredentials()
+        self._assert_password(current_password, user.password_hash)
 
         user.password_hash = hash_password(new_password)
         # SQLAlchemy 가 dirty 추적을 attribute touch 기준으로 하므로 — 이미 False 면
