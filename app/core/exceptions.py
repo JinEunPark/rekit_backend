@@ -141,9 +141,17 @@ class CategoryAlreadyExists(BusinessError):
     message = "이미 존재하는 카테고리 ID입니다."
 
 
+class ProductUnavailable(BusinessError):
+    """INACTIVE 또는 SOLD_OUT 상태 상품 — 주문 불가."""
+
+    code = "PRODUCT_UNAVAILABLE"
+    http_status = status.HTTP_400_BAD_REQUEST
+    message = "현재 주문할 수 없는 상품입니다."
+
+
 class OutOfStock(BusinessError):
     code = "OUT_OF_STOCK"
-    http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
+    http_status = status.HTTP_400_BAD_REQUEST
     message = "재고가 부족합니다."
 
 

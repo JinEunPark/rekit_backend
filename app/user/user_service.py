@@ -10,18 +10,40 @@ JPA 비유: @Service. router(@RestController) 와 모델(@Entity) 사이의 비�
   표준 응답 포맷으로 변환.
 """
 
-from datetime import UTC, datetime
+from __future__ import annotations
 
-from app.core.exceptions import InvalidCredentials
+import secrets
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+from app.core.exceptions import InvalidCredentials, OtpInvalid, OtpRateLimited
 from app.core.security import hash_password, verify_password
 from app.user.models import User, UserStatus
 from app.user.user_repository import UserRepository
 from app.user.user_schemas import UpdateProfileRequest
 
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
+
+    from app.auth.adapters.ports import SmsSender
+
+_PHONE_OTP_KEY = "sms:verify:{}"
+_PHONE_OTP_RATE_KEY = "sms:verify:rate:{}"
+_PHONE_OTP_TTL = 300  # 5분
+_PHONE_OTP_RATE_TTL = 60  # 1분 (재발송 제한)
+
 
 class UserService:
-    def __init__(self, repo: UserRepository) -> None:
+    def __init__(
+        self,
+        repo: UserRepository,
+        *,
+        sms_sender: SmsSender | None = None,
+        redis: Redis | None = None,
+    ) -> None:
         self.repo = repo
+        self._sms_sender = sms_sender
+        self._redis = redis
 
     def update_profile(self, *, user: User, data: UpdateProfileRequest) -> None:
         """username / phone 을 부분 업데이트한다. None 필드는 건드리지 않음."""
@@ -55,6 +77,40 @@ class UserService:
         user.status = UserStatus.WITHDRAWN
         user.withdrawn_at = datetime.now(UTC)
         await self.repo.delete_social_accounts(user.id)
+
+    async def send_phone_verification(self, *, phone: str) -> None:
+        """6자리 OTP 를 생성해 Redis 에 저장하고 SMS 발송. rate-limit: 60초.
+
+        Raises:
+            OtpRateLimited (429): 60초 이내 재요청.
+        """
+        assert self._redis is not None and self._sms_sender is not None
+
+        locked = await self._redis.set(
+            _PHONE_OTP_RATE_KEY.format(phone), "1", nx=True, ex=_PHONE_OTP_RATE_TTL
+        )
+        if locked is None:
+            raise OtpRateLimited()
+
+        code = "".join(secrets.choice("0123456789") for _ in range(6))
+        await self._redis.set(_PHONE_OTP_KEY.format(phone), code, ex=_PHONE_OTP_TTL)
+        await self._sms_sender.send(phone, f"[Rekle] 인증번호: {code}")
+
+    async def verify_phone(self, *, user: User, phone: str, code: str) -> None:
+        """OTP 검증 후 phone / phone_verified_at 업데이트.
+
+        Raises:
+            OtpInvalid (422): 코드 불일치 또는 만료.
+        """
+        assert self._redis is not None
+
+        stored = await self._redis.get(_PHONE_OTP_KEY.format(phone))
+        if stored != code:
+            raise OtpInvalid()
+
+        await self._redis.delete(_PHONE_OTP_KEY.format(phone))
+        user.phone = phone
+        user.phone_verified_at = datetime.now(UTC)
 
     def change_password(
         self,

@@ -178,6 +178,11 @@ class OrderItem(Base):
         nullable=False,
         comment="주문 당시 상품명 (스냅샷)",
     )
+    product_brand_snapshot: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="주문 당시 브랜드명 (스냅샷). NULL 허용 — 브랜드 미입력 상품 대응",
+    )
     product_image_url_snapshot: Mapped[str | None] = mapped_column(
         String(500),
         nullable=True,

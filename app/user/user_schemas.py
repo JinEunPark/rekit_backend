@@ -34,6 +34,25 @@ class WithdrawRequest(BaseModel):
     password: str = Field(min_length=1, description="현재 비밀번호 (본인 확인용)")
 
 
+class PhoneSendRequest(BaseModel):
+    """POST /users/me/phone/send-verification 요청 바디."""
+
+    phone: str = Field(
+        pattern=r"^01[016789]\d{7,8}$",
+        description="인증받을 휴대폰 번호 (하이픈 없이, 예: 01012345678)",
+    )
+
+
+class PhoneVerifyRequest(BaseModel):
+    """POST /users/me/phone/verify 요청 바디."""
+
+    phone: str = Field(
+        pattern=r"^01[016789]\d{7,8}$",
+        description="인증받은 휴대폰 번호",
+    )
+    code: str = Field(min_length=6, max_length=6, description="6자리 인증번호")
+
+
 class ChangePasswordRequest(BaseModel):
     """POST /users/me/password 요청 바디. api.md §4.3 + 클라 ChangePasswordView.
 

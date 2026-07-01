@@ -53,6 +53,17 @@ class OtpSender(Protocol):
         ...
 
 
+class SmsSender(Protocol):
+    """SMS 단순 발송기 — OTP 코드 생성·저장은 service 책임.
+
+    실제 발송 어댑터(NHN Cloud, Aligo 등)로 교체 시 이 Protocol 구현체만 바꾸면 된다.
+    """
+
+    async def send(self, phone: str, message: str) -> None:
+        """phone 으로 message 를 SMS 발송한다."""
+        ...
+
+
 class IdentityVerifier(Protocol):
     """본인인증 PG 어댑터 — TOSS/NICE/KCB 통합 인터페이스."""
 

@@ -14,7 +14,13 @@ from fastapi import APIRouter, Depends, status
 from app.auth.auth_schemas import UserResponse
 from app.core.deps import get_active_user, get_current_user, get_user_service
 from app.user.models import User
-from app.user.user_schemas import ChangePasswordRequest, UpdateProfileRequest, WithdrawRequest
+from app.user.user_schemas import (
+    ChangePasswordRequest,
+    PhoneSendRequest,
+    PhoneVerifyRequest,
+    UpdateProfileRequest,
+    WithdrawRequest,
+)
 from app.user.user_service import UserService
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -68,6 +74,42 @@ async def withdraw_me(
 ) -> None:
     """계정 비활성화 + CI/DI 파기. 주문 데이터는 전자상거래법에 따라 5년 보존."""
     await service.withdraw(user=user, password=body.password)
+
+
+@router.post(
+    "/me/phone/send-verification",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="휴대폰 인증번호 발송",
+    dependencies=[Depends(get_active_user)],
+)
+async def send_phone_verification(
+    body: PhoneSendRequest,
+    service: UserService = Depends(get_user_service),
+) -> None:
+    """6자리 OTP를 SMS로 발송. 60초 이내 재요청 시 429.
+
+    Errors:
+    - OtpRateLimited (429): 60초 이내 재요청.
+    """
+    await service.send_phone_verification(phone=body.phone)
+
+
+@router.post(
+    "/me/phone/verify",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="휴대폰 인증번호 확인",
+)
+async def verify_phone(
+    body: PhoneVerifyRequest,
+    user: User = Depends(get_active_user),
+    service: UserService = Depends(get_user_service),
+) -> None:
+    """OTP 검증 후 user.phone / phone_verified_at 업데이트.
+
+    Errors:
+    - OtpInvalid (422): 코드 불일치 또는 만료(5분).
+    """
+    await service.verify_phone(user=user, phone=body.phone, code=body.code)
 
 
 @router.post(

@@ -33,6 +33,7 @@ from app.cart.cart_service import CartService
 from app.catalog.admin_catalog_service import AdminCatalogService
 from app.catalog.catalog_repository import CatalogRepository
 from app.catalog.catalog_service import CatalogService
+from app.auth.adapters.console_sms import ConsoleSmsSender
 from app.common.email import ConsoleEmailSender, EmailSender, GmailSmtpEmailSender
 from app.core.config import Settings, settings
 from app.core.database import async_session_factory
@@ -140,11 +141,17 @@ async def get_auth_service(
     return AuthService(AuthRepository(session), email_sender=email_sender, redis=get_redis())
 
 
+@lru_cache
+def _cached_sms_sender() -> ConsoleSmsSender:
+    """프로세스 단위 싱글턴 SMS 어댑터."""
+    return ConsoleSmsSender()
+
+
 async def get_user_service(
     session: AsyncSession = Depends(db_session),
 ) -> UserService:
-    """UserService 팩토리. session → UserRepository → UserService."""
-    return UserService(UserRepository(session))
+    """UserService 팩토리. session → UserRepository → UserService + SmsSender + Redis."""
+    return UserService(UserRepository(session), sms_sender=_cached_sms_sender(), redis=get_redis())
 
 
 async def get_address_service(

@@ -96,6 +96,12 @@ class OrderRepository:
         result = await self._session.execute(stmt)
         return {p.id: p for p in result.scalars()}
 
+    async def get_address_by_id(self, address_id: int) -> Address | None:
+        """address_id 단건 조회 (소유권 확인 없음). 존재 여부만 확인할 때 사용."""
+        stmt = select(Address).where(Address.id == address_id)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_address_by_user(self, user_id: int, address_id: int) -> Address | None:
         """user_id + address_id 로 배송지 조회. 소유권 확인 포함."""
         stmt = select(Address).where(

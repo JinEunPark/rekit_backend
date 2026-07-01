@@ -20,6 +20,8 @@ from app.core.exceptions import (
     OrderCancelForbidden,
     OrderNotFound,
     OutOfStock,
+    PermissionDenied,
+    ProductUnavailable,
     RefundForbidden,
     ShipmentNotFound,
 )
@@ -41,6 +43,7 @@ def make_product(
     price: int = 300_000,
     stock: int = 5,
     status: ProductStatus = ProductStatus.ACTIVE,
+    brand: str | None = "LG전자",
 ) -> Product:
     """테스트용 Product 인스턴스 (DB 없이 메모리)."""
     p = Product(
@@ -53,6 +56,7 @@ def make_product(
         status=status,
     )
     p.id = product_id
+    p.brand = brand
     p.images = []
     return p
 
@@ -176,6 +180,9 @@ class FakeOrderRepository:
     ) -> dict[int, Product]:
         return {pid: self._products[pid] for pid in product_ids if pid in self._products}
 
+    async def get_address_by_id(self, address_id: int) -> Address | None:
+        return next((a for a in self._addresses if a.id == address_id), None)
+
     async def get_address_by_user(self, user_id: int, address_id: int) -> Address | None:
         return next(
             (a for a in self._addresses if a.user_id == user_id and a.id == address_id),
@@ -269,7 +276,7 @@ class TestGetQuote:
             await service.get_quote(user_id=1, req=req)
 
     async def test_get_quote_address_not_found(self) -> None:
-        """존재하지 않는 address_id → AddressNotFound."""
+        """존재하지 않는 address_id → AddressNotFound (404)."""
         product = make_product()
         service = _make_service(products=[product], addresses=[])
 
@@ -279,6 +286,34 @@ class TestGetQuote:
             shipping_method=ShipmentMethod.PARCEL,
         )
         with pytest.raises(AddressNotFound):
+            await service.get_quote(user_id=1, req=req)
+
+    async def test_get_quote_address_not_owned_returns_403(self) -> None:
+        """address 존재하지만 다른 user 소유 → PermissionDenied (403)."""
+        product = make_product()
+        address = make_address(user_id=99)
+        service = _make_service(products=[product], addresses=[address])
+
+        req = QuoteRequest(
+            items=[OrderItemRequest(product_id=1, quantity=1)],
+            address_id=1,
+            shipping_method=ShipmentMethod.PARCEL,
+        )
+        with pytest.raises(PermissionDenied):
+            await service.get_quote(user_id=1, req=req)
+
+    async def test_get_quote_inactive_product_raises_product_unavailable(self) -> None:
+        """견적 시 INACTIVE 상품 → ProductUnavailable (400)."""
+        product = make_product(status=ProductStatus.INACTIVE)
+        address = make_address()
+        service = _make_service(products=[product], addresses=[address])
+
+        req = QuoteRequest(
+            items=[OrderItemRequest(product_id=1, quantity=1)],
+            address_id=1,
+            shipping_method=ShipmentMethod.PARCEL,
+        )
+        with pytest.raises(ProductUnavailable):
             await service.get_quote(user_id=1, req=req)
 
 
@@ -355,10 +390,23 @@ class TestCreateOrder:
 
         assert repo._products[1].stock == 2
 
-    async def test_create_order_address_not_owned(self) -> None:
-        """다른 user_id 소유 address → AddressNotFound."""
+    async def test_create_order_address_not_found(self) -> None:
+        """존재하지 않는 address_id → AddressNotFound (404)."""
         product = make_product()
-        address = make_address(user_id=99)  # 다른 사용자
+        service = _make_service(products=[product], addresses=[])
+
+        req = CreateOrderRequest(
+            items=[OrderItemRequest(product_id=1, quantity=1)],
+            address_id=99,
+            shipping_method=ShipmentMethod.PARCEL,
+        )
+        with pytest.raises(AddressNotFound):
+            await service.create_order(user_id=1, req=req, identity_verified=True)
+
+    async def test_create_order_address_not_owned_returns_403(self) -> None:
+        """address 존재하지만 다른 user_id 소유 → PermissionDenied (403)."""
+        product = make_product()
+        address = make_address(user_id=99)  # 다른 사용자 소유
         service = _make_service(products=[product], addresses=[address])
 
         req = CreateOrderRequest(
@@ -366,8 +414,66 @@ class TestCreateOrder:
             address_id=1,
             shipping_method=ShipmentMethod.PARCEL,
         )
-        with pytest.raises(AddressNotFound):
+        with pytest.raises(PermissionDenied):
             await service.create_order(user_id=1, req=req, identity_verified=True)
+
+    async def test_create_order_inactive_product_raises_product_unavailable(self) -> None:
+        """INACTIVE 상품 → ProductUnavailable (400)."""
+        product = make_product(status=ProductStatus.INACTIVE)
+        address = make_address()
+        service = _make_service(products=[product], addresses=[address])
+
+        req = CreateOrderRequest(
+            items=[OrderItemRequest(product_id=1, quantity=1)],
+            address_id=1,
+            shipping_method=ShipmentMethod.PARCEL,
+        )
+        with pytest.raises(ProductUnavailable):
+            await service.create_order(user_id=1, req=req, identity_verified=True)
+
+    async def test_create_order_sold_out_product_raises_product_unavailable(self) -> None:
+        """SOLD_OUT 상품 → ProductUnavailable (400)."""
+        product = make_product(status=ProductStatus.SOLD_OUT, stock=0)
+        address = make_address()
+        service = _make_service(products=[product], addresses=[address])
+
+        req = CreateOrderRequest(
+            items=[OrderItemRequest(product_id=1, quantity=1)],
+            address_id=1,
+            shipping_method=ShipmentMethod.PARCEL,
+        )
+        with pytest.raises(ProductUnavailable):
+            await service.create_order(user_id=1, req=req, identity_verified=True)
+
+    async def test_create_order_stores_brand_snapshot(self) -> None:
+        """주문 생성 시 상품 브랜드가 스냅샷으로 저장된다."""
+        product = make_product(brand="삼성전자")
+        address = make_address()
+        service = _make_service(products=[product], addresses=[address])
+
+        req = CreateOrderRequest(
+            items=[OrderItemRequest(product_id=1, quantity=1)],
+            address_id=1,
+            shipping_method=ShipmentMethod.PARCEL,
+        )
+        result = await service.create_order(user_id=1, req=req, identity_verified=True)
+
+        assert result.items[0].product_brand_snapshot == "삼성전자"
+
+    async def test_create_order_brand_snapshot_none_when_no_brand(self) -> None:
+        """브랜드 미입력 상품 → product_brand_snapshot=None."""
+        product = make_product(brand=None)
+        address = make_address()
+        service = _make_service(products=[product], addresses=[address])
+
+        req = CreateOrderRequest(
+            items=[OrderItemRequest(product_id=1, quantity=1)],
+            address_id=1,
+            shipping_method=ShipmentMethod.PARCEL,
+        )
+        result = await service.create_order(user_id=1, req=req, identity_verified=True)
+
+        assert result.items[0].product_brand_snapshot is None
 
     async def test_create_order_stock_exactly_enough(self) -> None:
         """재고 == 요청 수량 → 성공."""
@@ -446,19 +552,41 @@ class TestCancelOrder:
         with pytest.raises(OrderCancelForbidden):
             await service.cancel_order(user_id=1, order_number=order.order_number)
 
+    async def test_cancel_order_cancelled_forbidden(self) -> None:
+        """이미 CANCELLED 상태 → OrderCancelForbidden."""
+        order = make_order(status=OrderStatus.CANCELLED)
+        service = _make_service(orders=[order])
+
+        with pytest.raises(OrderCancelForbidden):
+            await service.cancel_order(user_id=1, order_number=order.order_number)
+
+    async def test_cancel_order_refunded_forbidden(self) -> None:
+        """REFUNDED 상태 → OrderCancelForbidden."""
+        order = make_order(status=OrderStatus.REFUNDED)
+        service = _make_service(orders=[order])
+
+        with pytest.raises(OrderCancelForbidden):
+            await service.cancel_order(user_id=1, order_number=order.order_number)
+
 
 # ── list_orders ──────────────────────────────────────────────────────
 
 
 class TestListOrders:
     async def test_list_orders_empty(self) -> None:
-        """주문이 없을 때 빈 목록 반환."""
+        """주문이 없을 때 items=[] 이고 meta.total=0, total_pages=0."""
         service = _make_service(orders=[])
 
         result = await service.list_orders(user_id=1, page=1, size=20)
 
         assert result.items == []
         assert result.meta.total == 0
+        assert result.meta.total_pages == 0
+        assert result.meta.page == 1
+        assert result.meta.size == 20
+        # 직렬화 시에도 null 이 아닌 [] 임을 확인
+        dumped = result.model_dump()
+        assert isinstance(dumped["items"], list)
 
     async def test_list_orders_returns_user_orders_only(self) -> None:
         """다른 user_id 주문은 노출 안 됨."""

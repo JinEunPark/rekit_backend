@@ -19,6 +19,8 @@ from app.core.exceptions import (
     OrderCancelForbidden,
     OrderNotFound,
     OutOfStock,
+    PermissionDenied,
+    ProductUnavailable,
     RefundForbidden,
     ShipmentNotFound,
 )
@@ -50,9 +52,7 @@ class OrderService:
 
     async def get_quote(self, user_id: int, req: QuoteRequest) -> QuoteResponse:
         """배송비 포함 견적을 계산해 반환한다. 재고 락 없이 read-only 조회."""
-        address = await self._repo.get_address_by_user(user_id, req.address_id)
-        if address is None:
-            raise AddressNotFound()
+        address = await self._get_address_for_user(user_id, req.address_id)
 
         direct_available = is_direct_delivery_available(address.zipcode)
 
@@ -67,7 +67,7 @@ class OrderService:
         for item_req in req.items:
             product = await self._repo.get_product(item_req.product_id)
             if product is None or product.status != ProductStatus.ACTIVE:
-                raise OutOfStock()
+                raise ProductUnavailable()
             items_total += product.price * item_req.quantity
 
         total_amount = items_total + shipping_fee - discount_amount
@@ -93,9 +93,7 @@ class OrderService:
         if not identity_verified:
             raise IdentityRequired()
 
-        address = await self._repo.get_address_by_user(user_id, req.address_id)
-        if address is None:
-            raise AddressNotFound()
+        address = await self._get_address_for_user(user_id, req.address_id)
 
         if req.shipping_method == ShipmentMethod.DIRECT:
             if not is_direct_delivery_available(address.zipcode):
@@ -106,7 +104,7 @@ class OrderService:
         for item_req in req.items:
             product = product_map.get(item_req.product_id)
             if product is None or product.status != ProductStatus.ACTIVE:
-                raise OutOfStock()
+                raise ProductUnavailable()
             if product.stock < item_req.quantity:
                 raise OutOfStock()
 
@@ -138,6 +136,7 @@ class OrderService:
             OrderItem(
                 product_id=(p := product_map[i.product_id]).id,
                 product_title_snapshot=p.title,
+                product_brand_snapshot=p.brand,
                 product_image_url_snapshot=p.images[0].url if p.images else None,
                 price_snapshot=p.price,
                 quantity=i.quantity,
@@ -220,6 +219,15 @@ class OrderService:
 
     # ── 내부 헬퍼 ────────────────────────────────────────────────────
 
+    async def _get_address_for_user(self, user_id: int, address_id: int):  # type: ignore[return]
+        """배송지 존재(404) → 소유권(403) 순서로 검증 후 Address 반환."""
+        address = await self._repo.get_address_by_id(address_id)
+        if address is None:
+            raise AddressNotFound()
+        if address.user_id != user_id:
+            raise PermissionDenied()
+        return address
+
     async def _get_order_for_user(self, user_id: int, order_number: str) -> Order:
         """order_number 로 주문 조회 + 소유권 검증. 실패 시 OrderNotFound."""
         order = await self._repo.get_by_order_number(order_number)
@@ -236,6 +244,7 @@ def _to_order_item_response(item: OrderItem) -> OrderItemResponse:
         id=item.id if item.id is not None else 0,
         product_id=item.product_id,
         product_title_snapshot=item.product_title_snapshot,
+        product_brand_snapshot=item.product_brand_snapshot,
         product_image_url_snapshot=item.product_image_url_snapshot,
         price_snapshot=item.price_snapshot,
         quantity=item.quantity,
