@@ -128,12 +128,12 @@ class _FakeHelpRepo:
 def _make_help_service() -> tuple[HelpService, _FakeHelpRepo, _FakeEmailSender]:
     repo = _FakeHelpRepo()
     email = _FakeEmailSender()
-    return HelpService(repo, email), repo, email
+    return HelpService(repo, email), repo, email  # type: ignore[arg-type]
 
 
 def _make_admin_service() -> tuple[AdminHelpService, _FakeHelpRepo]:
     repo = _FakeHelpRepo()
-    return AdminHelpService(repo), repo
+    return AdminHelpService(repo), repo  # type: ignore[arg-type]
 
 
 # ── 픽스처 헬퍼 ──────────────────────────────────────────────────────

@@ -17,6 +17,7 @@ from app.auth.auth_schemas import (
     UserResponse,
 )
 from app.core.security import create_email_verified_token
+from app.user.models import UserRole
 
 # ── SignInRequest ─────────────────────────────────────
 
@@ -155,7 +156,7 @@ def test_user_response_serializes_login_id_and_eco_kg_as_camel_case() -> None:
         username="박은영",
         email="a@b.com",
         verified=False,
-        role="USER",
+        role=UserRole.USER,
     )
     dumped = resp.model_dump(by_alias=True)
     assert dumped["loginId"] == "eunyoung_kim"

@@ -97,7 +97,8 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    # BaseSettings 필드는 .env/환경변수에서 채워짐 — Pyright 는 이를 모르고 오탐
+    return Settings()  # pyright: ignore[reportCallIssue]
 
 
 settings = get_settings()
