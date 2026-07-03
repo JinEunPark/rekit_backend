@@ -263,6 +263,24 @@ class PermissionDenied(BusinessError):
     message = "권한이 없습니다."
 
 
+class NoticeNotFound(BusinessError):
+    code = "NOTICE_NOT_FOUND"
+    http_status = status.HTTP_404_NOT_FOUND
+    message = "공지사항을 찾을 수 없습니다."
+
+
+class FaqNotFound(BusinessError):
+    code = "FAQ_NOT_FOUND"
+    http_status = status.HTTP_404_NOT_FOUND
+    message = "FAQ를 찾을 수 없습니다."
+
+
+class ContactNotFound(BusinessError):
+    code = "CONTACT_NOT_FOUND"
+    http_status = status.HTTP_404_NOT_FOUND
+    message = "문의를 찾을 수 없습니다."
+
+
 # ── handler 등록 ──────────────────────────────────────────────
 
 

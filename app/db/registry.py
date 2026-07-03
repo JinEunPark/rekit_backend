@@ -12,6 +12,7 @@ from app.cart.models import CartItem  # noqa: F401
 from app.catalog.models import Product, ProductImage  # noqa: F401
 from app.db.base import Base
 from app.favorites.models import Favorite  # noqa: F401
+from app.help.models import Contact, Faq, Notice  # noqa: F401
 from app.order.models import Order, OrderItem  # noqa: F401
 from app.order.shipment import Shipment  # noqa: F401
 from app.payment.models import Payment  # noqa: F401

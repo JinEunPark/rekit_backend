@@ -53,6 +53,8 @@ from app.order.order_repository import OrderRepository
 from app.order.order_service import OrderService
 from app.payment.payment_repository import PaymentRepository
 from app.payment.payment_service import PaymentService
+from app.help.repository import HelpRepository
+from app.help.service import AdminHelpService, HelpService
 from app.user.admin_members_repository import AdminMembersRepository
 from app.user.admin_members_service import AdminMembersService
 from app.user.models import User, UserRole
@@ -284,3 +286,16 @@ async def get_sales_service(
     session: AsyncSession = Depends(db_session),
 ) -> SalesService:
     return SalesService(session)
+
+
+async def get_help_service(
+    session: AsyncSession = Depends(db_session),
+    email_sender: EmailSender = Depends(get_email_sender),
+) -> HelpService:
+    return HelpService(HelpRepository(session), email_sender)
+
+
+async def get_admin_help_service(
+    session: AsyncSession = Depends(db_session),
+) -> AdminHelpService:
+    return AdminHelpService(HelpRepository(session))

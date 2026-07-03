@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     # 소셜 신규가입용 임시 토큰 만료 (분). JWT 로 단명 발급.
     social_signup_token_expire_minutes: int = 15
 
+    # 문의 알림 수신 이메일. None 이면 email_from 으로 fallback.
+    help_admin_email: str | None = None
+
     # ── 결제 PG ───────────────────────────────────────────
     toss_secret_key: str | None = None
     # True 로 설정하면 TossPaymentGateway 대신 FakePaymentGateway 를 사용.
@@ -85,6 +88,11 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @property
+    def effective_admin_email(self) -> str | None:
+        """문의 알림 수신 이메일. help_admin_email > email_from 순으로 fallback."""
+        return self.help_admin_email or self.email_from
 
 
 @lru_cache

@@ -19,6 +19,8 @@ JPA 비유: @RequestBody 가 매핑되는 DTO + Bean Validation. 응답 DTO 는 
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.user.models import UserRole
+
 # 클라 SignUpView.vue 의 정규식과 1:1 동기화. 서버가 더 느슨하면 클라 통과 → 서버
 # 거부로 UX 불일치, 서버가 더 빡세면 그 반대. 양쪽이 같아야 함.
 LOGIN_ID_PATTERN = r"^[a-zA-Z0-9_]{4,20}$"
@@ -326,6 +328,7 @@ class UserResponse(BaseModel):
     email: EmailStr = Field(description="이메일")
     phone: str | None = Field(default=None, description="휴대폰. 본인인증 후 채워짐")
     verified: bool = Field(description="본인인증 완료 여부")
+    role: UserRole = Field(description="권한")
     eco_kg: int = Field(
         default=0,
         serialization_alias="ecoKg",

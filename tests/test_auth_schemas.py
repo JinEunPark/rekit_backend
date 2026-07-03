@@ -155,6 +155,7 @@ def test_user_response_serializes_login_id_and_eco_kg_as_camel_case() -> None:
         username="박은영",
         email="a@b.com",
         verified=False,
+        role="USER",
     )
     dumped = resp.model_dump(by_alias=True)
     assert dumped["loginId"] == "eunyoung_kim"
