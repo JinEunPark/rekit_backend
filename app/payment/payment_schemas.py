@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.payment.models import PaymentMethod, PaymentStatus
 
@@ -52,7 +52,9 @@ class PaymentConfirmResponse(BaseModel):
 class TossWebhookPayload(BaseModel):
     """POST /payments/webhooks/toss — 토스 웹훅 바디."""
 
-    eventType: str
+    model_config = ConfigDict(populate_by_name=True)
+
+    event_type: str = Field(alias="eventType")
     data: dict[str, Any]
 
 

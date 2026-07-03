@@ -38,19 +38,19 @@ class BusinessError(Exception):
 # ── api.md §1.5 매핑된 구체 예외 ──────────────────────────────
 
 
-class InvalidCredentials(BusinessError):
+class InvalidCredentialsError(BusinessError):
     code = "INVALID_CREDENTIALS"
     http_status = status.HTTP_401_UNAUTHORIZED
     message = "아이디 또는 비밀번호가 올바르지 않습니다."
 
 
-class TokenExpired(BusinessError):
+class TokenExpiredError(BusinessError):
     code = "TOKEN_EXPIRED"
     http_status = status.HTTP_401_UNAUTHORIZED
     message = "토큰이 만료되었습니다."
 
 
-class AccountInactive(BusinessError):
+class AccountInactiveError(BusinessError):
     """비활성화된 계정의 인증된 호출. 토큰은 유효하지만 권한 없음 → 403."""
 
     code = "ACCOUNT_INACTIVE"
@@ -58,7 +58,7 @@ class AccountInactive(BusinessError):
     message = "계정이 비활성화 상태입니다."
 
 
-class PasswordChangeRequired(BusinessError):
+class PasswordChangeRequiredError(BusinessError):
     """임시 비밀번호로 발급된 상태(must_change_password=True) — 비번 변경 외 차단.
 
     클라이언트는 이 코드를 받으면 비밀번호 변경 페이지로 강제 redirect 한다.
@@ -69,7 +69,7 @@ class PasswordChangeRequired(BusinessError):
     message = "임시 비밀번호 사용 중입니다. 새 비밀번호로 변경 후 이용해주세요."
 
 
-class SocialEmailRequired(BusinessError):
+class SocialEmailRequiredError(BusinessError):
     """소셜 OAuth 콜백에서 이메일 동의가 빠진 경우.
 
     카카오 등은 사용자가 이메일 동의를 거부할 수 있는데 — 이메일이 없으면
@@ -81,7 +81,7 @@ class SocialEmailRequired(BusinessError):
     message = "소셜 로그인에 이메일 동의가 필요합니다. 동의 후 다시 시도해주세요."
 
 
-class SocialProviderNotConfigured(BusinessError):
+class SocialProviderNotConfiguredError(BusinessError):
     """해당 소셜 PG 의 client_id / secret / redirect_uri 가 .env 에 없는 상태.
 
     503 으로 응답해 운영 측에서 .env 채우면 즉시 복구되는 일시 상태임을 명시.
@@ -92,7 +92,7 @@ class SocialProviderNotConfigured(BusinessError):
     message = "해당 소셜 로그인이 아직 활성화되지 않았습니다."
 
 
-class SocialOAuthFailed(BusinessError):
+class SocialOAuthFailedError(BusinessError):
     """소셜 PG 와의 통신/인증이 실패. token exchange 4xx/5xx, 네트워크 오류 등.
 
     502 (Bad Gateway) — 백엔드 자체 문제가 아니라 외부 PG 응답 이상이라는 의미.
@@ -105,43 +105,49 @@ class SocialOAuthFailed(BusinessError):
     message = "소셜 로그인 인증에 실패했습니다. 잠시 후 다시 시도해주세요."
 
 
-class UsernameTaken(BusinessError):
+class UsernameTakenError(BusinessError):
     code = "USERNAME_TAKEN"
     http_status = status.HTTP_409_CONFLICT
     message = "이미 사용 중인 아이디입니다."
 
 
-class EmailTaken(BusinessError):
+class EmailTakenError(BusinessError):
     code = "EMAIL_TAKEN"
     http_status = status.HTTP_409_CONFLICT
     message = "이미 사용 중인 이메일입니다."
 
 
-class IdentityRequired(BusinessError):
+class IdentityRequiredError(BusinessError):
     code = "IDENTITY_REQUIRED"
     http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
     message = "본인인증이 필요합니다."
 
 
-class ProductNotFound(BusinessError):
+class ProductNotFoundError(BusinessError):
     code = "PRODUCT_NOT_FOUND"
     http_status = status.HTTP_404_NOT_FOUND
     message = "상품을 찾을 수 없습니다."
 
 
-class CategoryNotFound(BusinessError):
+class ProductImageNotFoundError(BusinessError):
+    code = "PRODUCT_IMAGE_NOT_FOUND"
+    http_status = status.HTTP_404_NOT_FOUND
+    message = "이미지를 찾을 수 없습니다."
+
+
+class CategoryNotFoundError(BusinessError):
     code = "CATEGORY_NOT_FOUND"
     http_status = status.HTTP_404_NOT_FOUND
     message = "카테고리를 찾을 수 없습니다."
 
 
-class CategoryAlreadyExists(BusinessError):
+class CategoryAlreadyExistsError(BusinessError):
     code = "CATEGORY_ALREADY_EXISTS"
     http_status = status.HTTP_409_CONFLICT
     message = "이미 존재하는 카테고리 ID입니다."
 
 
-class ProductUnavailable(BusinessError):
+class ProductUnavailableError(BusinessError):
     """INACTIVE 또는 SOLD_OUT 상태 상품 — 주문 불가."""
 
     code = "PRODUCT_UNAVAILABLE"
@@ -149,133 +155,133 @@ class ProductUnavailable(BusinessError):
     message = "현재 주문할 수 없는 상품입니다."
 
 
-class OutOfStock(BusinessError):
+class OutOfStockError(BusinessError):
     code = "OUT_OF_STOCK"
     http_status = status.HTTP_400_BAD_REQUEST
     message = "재고가 부족합니다."
 
 
-class PriceChanged(BusinessError):
+class PriceChangedError(BusinessError):
     code = "PRICE_CHANGED"
     http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
     message = "상품 가격이 변경되었습니다."
 
 
-class PaymentFailed(BusinessError):
+class PaymentFailedError(BusinessError):
     code = "PAYMENT_FAILED"
     http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
     message = "결제가 실패했습니다."
 
 
-class OtpInvalid(BusinessError):
+class OtpInvalidError(BusinessError):
     code = "OTP_INVALID"
     http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
     message = "인증번호가 일치하지 않거나 만료되었습니다."
 
 
-class OtpRateLimited(BusinessError):
+class OtpRateLimitedError(BusinessError):
     code = "OTP_RATE_LIMITED"
     http_status = status.HTTP_429_TOO_MANY_REQUESTS
     message = "OTP 발송 한도를 초과했습니다."
 
 
-class RateLimited(BusinessError):
+class RateLimitedError(BusinessError):
     code = "RATE_LIMITED"
     http_status = status.HTTP_429_TOO_MANY_REQUESTS
     message = "요청 한도를 초과했습니다."
 
 
-class AddressNotFound(BusinessError):
+class AddressNotFoundError(BusinessError):
     code = "ADDRESS_NOT_FOUND"
     http_status = status.HTTP_404_NOT_FOUND
     message = "배송지를 찾을 수 없습니다."
 
 
-class AddressLimitExceeded(BusinessError):
+class AddressLimitExceededError(BusinessError):
     code = "ADDRESS_LIMIT_EXCEEDED"
     http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
     message = "배송지는 최대 10개까지 등록할 수 있습니다."
 
 
-class CartItemNotFound(BusinessError):
+class CartItemNotFoundError(BusinessError):
     code = "CART_ITEM_NOT_FOUND"
     http_status = status.HTTP_404_NOT_FOUND
     message = "장바구니 항목을 찾을 수 없습니다."
 
 
-class FavoriteNotFound(BusinessError):
+class FavoriteNotFoundError(BusinessError):
     code = "FAVORITE_NOT_FOUND"
     http_status = status.HTTP_404_NOT_FOUND
     message = "관심상품을 찾을 수 없습니다."
 
 
-class OrderNotFound(BusinessError):
+class OrderNotFoundError(BusinessError):
     code = "ORDER_NOT_FOUND"
     http_status = status.HTTP_404_NOT_FOUND
     message = "주문을 찾을 수 없습니다."
 
 
-class OrderCancelForbidden(BusinessError):
+class OrderCancelForbiddenError(BusinessError):
     code = "ORDER_CANCEL_FORBIDDEN"
     http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
     message = "현재 상태에서는 주문을 취소할 수 없습니다."
 
 
-class UserNotFound(BusinessError):
+class UserNotFoundError(BusinessError):
     code = "USER_NOT_FOUND"
     http_status = status.HTTP_404_NOT_FOUND
     message = "사용자를 찾을 수 없습니다."
 
 
-class InvalidOrderStatus(BusinessError):
+class InvalidOrderStatusError(BusinessError):
     code = "INVALID_ORDER_STATUS"
     http_status = status.HTTP_409_CONFLICT
     message = "현재 상태에서는 해당 작업을 수행할 수 없습니다."
 
 
-class RefundForbidden(BusinessError):
+class RefundForbiddenError(BusinessError):
     code = "REFUND_FORBIDDEN"
     http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
     message = "현재 상태에서는 환불을 요청할 수 없습니다."
 
 
-class ShipmentNotFound(BusinessError):
+class ShipmentNotFoundError(BusinessError):
     code = "SHIPMENT_NOT_FOUND"
     http_status = status.HTTP_404_NOT_FOUND
     message = "배송 정보를 찾을 수 없습니다."
 
 
-class InvalidVerificationCode(BusinessError):
+class InvalidVerificationCodeError(BusinessError):
     code = "INVALID_VERIFICATION_CODE"
     http_status = status.HTTP_400_BAD_REQUEST
     message = "인증 코드가 올바르지 않거나 만료되었습니다."
 
 
-class VerificationRateLimited(BusinessError):
+class VerificationRateLimitedError(BusinessError):
     code = "VERIFICATION_RATE_LIMITED"
     http_status = status.HTTP_429_TOO_MANY_REQUESTS
     message = "잠시 후 다시 시도해주세요. (1분에 1회)"
 
 
-class PermissionDenied(BusinessError):
+class PermissionDeniedError(BusinessError):
     code = "PERMISSION_DENIED"
     http_status = status.HTTP_403_FORBIDDEN
     message = "권한이 없습니다."
 
 
-class NoticeNotFound(BusinessError):
+class NoticeNotFoundError(BusinessError):
     code = "NOTICE_NOT_FOUND"
     http_status = status.HTTP_404_NOT_FOUND
     message = "공지사항을 찾을 수 없습니다."
 
 
-class FaqNotFound(BusinessError):
+class FaqNotFoundError(BusinessError):
     code = "FAQ_NOT_FOUND"
     http_status = status.HTTP_404_NOT_FOUND
     message = "FAQ를 찾을 수 없습니다."
 
 
-class ContactNotFound(BusinessError):
+class ContactNotFoundError(BusinessError):
     code = "CONTACT_NOT_FOUND"
     http_status = status.HTTP_404_NOT_FOUND
     message = "문의를 찾을 수 없습니다."

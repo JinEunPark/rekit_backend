@@ -12,7 +12,7 @@ from app.auth.adapters.naver_oauth import NaverOAuthAdapter
 from app.auth.adapters.oauth_factory import build_oauth_provider
 from app.auth.models import SocialProvider
 from app.core.config import Settings
-from app.core.exceptions import SocialProviderNotConfigured
+from app.core.exceptions import SocialProviderNotConfiguredError
 
 
 def _settings(**overrides: Any) -> Settings:
@@ -64,17 +64,17 @@ def test_factory_returns_google_adapter_for_google_provider() -> None:
 
 def test_factory_raises_when_kakao_config_missing() -> None:
     settings = _settings(kakao_client_id=None, kakao_redirect_uri=None)
-    with pytest.raises(SocialProviderNotConfigured, match="카카오 OAuth"):
+    with pytest.raises(SocialProviderNotConfiguredError, match="카카오 OAuth"):
         build_oauth_provider(SocialProvider.KAKAO, settings)
 
 
 def test_factory_raises_when_naver_config_missing() -> None:
     settings = _settings(naver_client_id="nid")  # secret/redirect 누락
-    with pytest.raises(SocialProviderNotConfigured, match="네이버 OAuth"):
+    with pytest.raises(SocialProviderNotConfiguredError, match="네이버 OAuth"):
         build_oauth_provider(SocialProvider.NAVER, settings)
 
 
 def test_factory_raises_when_google_config_missing() -> None:
     settings = _settings(google_client_id="gid")  # secret/redirect 누락
-    with pytest.raises(SocialProviderNotConfigured, match="구글 OAuth"):
+    with pytest.raises(SocialProviderNotConfiguredError, match="구글 OAuth"):
         build_oauth_provider(SocialProvider.GOOGLE, settings)

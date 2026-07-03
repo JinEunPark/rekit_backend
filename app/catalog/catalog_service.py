@@ -19,7 +19,7 @@ from app.catalog.catalog_schemas import (
 from app.catalog.catalog_utils import discount_pct as _discount_pct
 from app.catalog.catalog_utils import thumbnail_url as _thumbnail_url
 from app.catalog.models import Product, ProductImage
-from app.core.exceptions import ProductNotFound
+from app.core.exceptions import ProductNotFoundError
 from app.core.pagination import build_page_meta
 
 
@@ -37,7 +37,7 @@ class CatalogService:
     async def get_product(self, product_id: int) -> ProductDetailResponse:
         product = await self.repo.get_by_id(product_id)
         if product is None:
-            raise ProductNotFound()
+            raise ProductNotFoundError()
         return _to_detail_response(product)
 
     async def get_featured(self, limit: int = 4) -> list[ProductResponse]:

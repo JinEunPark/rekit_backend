@@ -18,7 +18,7 @@ from app.catalog.models import ConditionGrade, ProductStatus
 from app.core.pagination import PageMeta
 
 
-class ProductSort(str, enum.Enum):
+class ProductSort(enum.StrEnum):
     LATEST = "latest"
     PRICE_ASC = "price_asc"
     PRICE_DESC = "price_desc"

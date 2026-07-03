@@ -12,8 +12,8 @@ from app.cart.cart_schemas import (
     UpdateCartItemRequest,
 )
 from app.cart.models import CartItem
-from app.catalog.models import ProductStatus
-from app.core.exceptions import CartItemNotFound, OutOfStock, ProductNotFound
+from app.catalog.models import Product, ProductStatus
+from app.core.exceptions import CartItemNotFoundError, OutOfStockError, ProductNotFoundError
 
 # 화물택배 기준 안내값 — 실제 주문 생성 시 상품 치수/무게로 재계산
 _SHIPPING_FEE_ESTIMATE = 60_000
@@ -66,32 +66,32 @@ class CartService:
         """상품을 장바구니에 추가. 이미 있으면 수량 합산(upsert).
 
         Raises:
-            ProductNotFound (404): 상품이 존재하지 않거나 ACTIVE 상태가 아닐 때.
-            OutOfStock (422): 요청 수량이 재고를 초과할 때.
+            ProductNotFoundError (404): 상품이 존재하지 않거나 ACTIVE 상태가 아닐 때.
+            OutOfStockError (422): 요청 수량이 재고를 초과할 때.
         """
         existing = await self._repo.get_by_user_and_product(user_id, data.product_id)
 
         if existing is not None:
-            product = existing.product
+            product: Product | None = existing.product
             if product is None or product.status != ProductStatus.ACTIVE:
-                raise ProductNotFound()
+                raise ProductNotFoundError()
             new_quantity = existing.quantity + data.quantity
             if new_quantity > product.stock:
-                raise OutOfStock()
+                raise OutOfStockError()
             existing.quantity = new_quantity
             await self._repo.save(existing)
         else:
-            product = await self._repo.get_product(data.product_id)  # type: ignore[attr-defined]
+            product = await self._repo.get_product(data.product_id)
             if product is None or product.status != ProductStatus.ACTIVE:
-                raise ProductNotFound()
+                raise ProductNotFoundError()
             if data.quantity > product.stock:
-                raise OutOfStock()
+                raise OutOfStockError()
             new_item = CartItem(
                 user_id=user_id,
                 product_id=data.product_id,
                 quantity=data.quantity,
             )
-            new_item.product = product  # type: ignore[assignment]
+            new_item.product = product
             await self._repo.save(new_item)
 
         return await self._build_cart_response(user_id)
@@ -102,16 +102,16 @@ class CartService:
         """장바구니 항목 수량 수정.
 
         Raises:
-            CartItemNotFound (404): 항목이 없거나 다른 사용자 소유일 때.
-            OutOfStock (422): 수정 수량이 재고를 초과할 때.
+            CartItemNotFoundError (404): 항목이 없거나 다른 사용자 소유일 때.
+            OutOfStockError (422): 수정 수량이 재고를 초과할 때.
         """
         item = await self._repo.get_by_id(item_id)
         if item is None or item.user_id != user_id:
-            raise CartItemNotFound()
+            raise CartItemNotFoundError()
 
         product = item.product
         if data.quantity > product.stock:
-            raise OutOfStock()
+            raise OutOfStockError()
 
         item.quantity = data.quantity
         await self._repo.save(item)
@@ -121,11 +121,11 @@ class CartService:
         """장바구니 항목 단건 삭제.
 
         Raises:
-            CartItemNotFound (404): 항목이 없거나 다른 사용자 소유일 때.
+            CartItemNotFoundError (404): 항목이 없거나 다른 사용자 소유일 때.
         """
         item = await self._repo.get_by_id(item_id)
         if item is None or item.user_id != user_id:
-            raise CartItemNotFound()
+            raise CartItemNotFoundError()
         await self._repo.delete(item)
 
     async def bulk_remove(self, user_id: int, item_ids: list[int]) -> None:

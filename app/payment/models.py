@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from app.order.models import Order
 
 
-class PgProvider(str, enum.Enum):
+class PgProvider(enum.StrEnum):
     """결제 PG. MVP 는 TOSS 단일 계약."""
 
     TOSS = "TOSS"
@@ -19,7 +19,7 @@ class PgProvider(str, enum.Enum):
     NAVER = "NAVER"
 
 
-class PaymentMethod(str, enum.Enum):
+class PaymentMethod(enum.StrEnum):
     """결제 수단. 매출 분석에서 5종으로 집계된다.
 
     주문서 화면은 3개 그룹(신용카드/계좌이체/간편결제)으로 묶이며,
@@ -33,7 +33,7 @@ class PaymentMethod(str, enum.Enum):
     TOSS_PAY = "TOSS_PAY"
 
 
-class PaymentStatus(str, enum.Enum):
+class PaymentStatus(enum.StrEnum):
     """결제 상태. webhook 멱등성 처리의 기준."""
 
     READY = "READY"  # 결제창 발급, 사용자 입력 대기

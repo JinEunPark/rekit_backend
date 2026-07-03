@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from app.user.models import User
 
 
-class SocialProvider(str, enum.Enum):
+class SocialProvider(enum.StrEnum):
     """소셜 로그인 PG. lowercase 유지 — URL 경로 / OAuth client 설정과 그대로 매칭."""
 
     KAKAO = "kakao"
@@ -55,13 +55,16 @@ class SocialAccount(Base, TimestampMixin):
     email_at_link: Mapped[str | None] = mapped_column(
         String(255),
         nullable=True,
-        comment="연결 시점에 PG 가 알려준 이메일 (감사용 스냅샷). 사용자가 PG 측에서 변경해도 이 값은 고정",
+        comment=(
+            "연결 시점에 PG 가 알려준 이메일 (감사용 스냅샷). "
+            "사용자가 PG 측에서 변경해도 이 값은 고정"
+        ),
     )
 
     user: Mapped["User"] = relationship(back_populates="social_accounts")
 
 
-class IdentityProvider(str, enum.Enum):
+class IdentityProvider(enum.StrEnum):
     """본인인증 PG. MVP 는 TOSS 사용 (결제 PG 와 동일 계약)."""
 
     TOSS = "TOSS"
@@ -69,7 +72,7 @@ class IdentityProvider(str, enum.Enum):
     KCB = "KCB"
 
 
-class VerificationResult(str, enum.Enum):
+class VerificationResult(enum.StrEnum):
     """인증 결과. FAIL 도 시도 로그로 보존(분쟁 대응)."""
 
     SUCCESS = "SUCCESS"

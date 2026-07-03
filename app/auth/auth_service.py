@@ -33,12 +33,12 @@ from app.common.email.templates import render_verification_email
 from app.core.config import settings
 from app.core.database import async_session_factory
 from app.core.exceptions import (
-    EmailTaken,
-    InvalidCredentials,
-    InvalidVerificationCode,
-    SocialEmailRequired,
-    UsernameTaken,
-    VerificationRateLimited,
+    EmailTakenError,
+    InvalidCredentialsError,
+    InvalidVerificationCodeError,
+    SocialEmailRequiredError,
+    UsernameTakenError,
+    VerificationRateLimitedError,
 )
 from app.core.security import (
     create_access_token,
@@ -98,7 +98,7 @@ class AuthService:
             해야 한다 — find-password 로 임시 비번을 받은 사용자.
 
         Raises:
-            InvalidCredentials: 다음 3가지 케이스 모두 같은 예외로 통합한다.
+            InvalidCredentialsError: 다음 3가지 케이스 모두 같은 예외로 통합한다.
                 - 존재하지 않는 아이디
                 - 비밀번호 불일치
                 - is_active=False (탈퇴/정지)
@@ -106,10 +106,10 @@ class AuthService:
         """
         user = await self.repo.get_by_login_id(login_id)
         if user is None or not user.is_active:
-            raise InvalidCredentials()
+            raise InvalidCredentialsError()
 
         if not verify_password(password, user.password_hash):
-            raise InvalidCredentials()
+            raise InvalidCredentialsError()
 
         access, refresh = self._issue_tokens(user, remember=remember)
         return access, refresh, user.must_change_password
@@ -124,11 +124,11 @@ class AuthService:
         """6자리 인증 코드를 발급해 Redis 에 저장하고 이메일 발송 태스크를 큐잉. rate-limit: 60초.
 
         Raises:
-            VerificationRateLimited (429): 60초 이내 재요청.
+            VerificationRateLimitedError (429): 60초 이내 재요청.
         """
         locked = await self._redis.set(_VERIFY_RATE_KEY.format(email), "1", nx=True, ex=60)
         if locked is None:
-            raise VerificationRateLimited()
+            raise VerificationRateLimitedError()
 
         code = "".join(secrets.choice("0123456789") for _ in range(6))
         await self._redis.set(_VERIFY_CODE_KEY.format(email), code, ex=600)
@@ -144,11 +144,11 @@ class AuthService:
         """코드 검증 → verified_token(JWT) 반환. 성공 시 Redis 코드 삭제 (일회용).
 
         Raises:
-            InvalidVerificationCode (400): 코드 불일치 또는 만료.
+            InvalidVerificationCodeError (400): 코드 불일치 또는 만료.
         """
         stored = await self._redis.get(_VERIFY_CODE_KEY.format(email))
         if stored is None or stored != code:
-            raise InvalidVerificationCode()
+            raise InvalidVerificationCodeError()
 
         await self._redis.delete(_VERIFY_CODE_KEY.format(email))
         return create_email_verified_token(email=email)
@@ -164,16 +164,16 @@ class AuthService:
             (user, access_token, refresh_token).
 
         Raises:
-            TokenExpired (401): verified_token 만료/위조.
-            UsernameTaken (409): 동일 login_id 가 이미 존재.
-            EmailTaken (409): 동일 email 이 이미 존재.
+            TokenExpiredError (401): verified_token 만료/위조.
+            UsernameTakenError (409): 동일 login_id 가 이미 존재.
+            EmailTakenError (409): 동일 email 이 이미 존재.
         """
         email: str = decode_email_verified_token(req.verified_token)["email"]
 
         if await self.repo.exists_by_login_id(req.login_id):
-            raise UsernameTaken()
+            raise UsernameTakenError()
         if await self.repo.exists_by_email(email):
-            raise EmailTaken()
+            raise EmailTakenError()
 
         now = datetime.now(UTC)
         user = User(
@@ -270,7 +270,7 @@ class AuthService:
 
         user = await self.repo.get_by_id(int(payload["sub"]))
         if user is None or not user.is_active:
-            raise InvalidCredentials()
+            raise InvalidCredentialsError()
 
         access, refresh = self._issue_tokens(user, remember=False)
         return access, refresh, user.must_change_password
@@ -296,28 +296,28 @@ class AuthService:
         위험. 운영 시 PG 콘솔에서 "이메일 검증 후 동의" 옵션 활성화로 완화.
 
         Raises:
-            SocialOAuthFailed (502): PG 통신/응답 실패. 어댑터가 httpx 의 raw
+            SocialOAuthFailedError (502): PG 통신/응답 실패. 어댑터가 httpx 의 raw
                 예외를 도메인 예외로 변환해서 던져준다.
-            SocialEmailRequired (422): 프로필에 이메일 없음 (사용자가 PG 에서 동의 거부).
-            InvalidCredentials (401): 매칭된 사용자가 is_active=False.
+            SocialEmailRequiredError (422): 프로필에 이메일 없음 (사용자가 PG 에서 동의 거부).
+            InvalidCredentialsError (401): 매칭된 사용자가 is_active=False.
         """
         profile = await oauth.exchange_code(code, state)
 
         if profile.email is None:
-            raise SocialEmailRequired()
+            raise SocialEmailRequiredError()
 
         existing = await self.repo.get_social_account(provider, profile.social_id)
         if existing is not None:
             user = await self.repo.get_by_id(existing.user_id)
             if user is None or not user.is_active:
-                raise InvalidCredentials()
+                raise InvalidCredentialsError()
             return self._login_existing(user)
 
         normalized_email = profile.email.lower()
         user_by_email = await self.repo.get_by_email(normalized_email)
         if user_by_email is not None:
             if not user_by_email.is_active:
-                raise InvalidCredentials()
+                raise InvalidCredentialsError()
             await self.repo.add_social_account(
                 SocialAccount(
                     user_id=user_by_email.id,
@@ -378,11 +378,11 @@ class AuthService:
             (user, access_token, refresh_token).
 
         Raises:
-            UsernameTaken (409): login_id 중복.
-            EmailTaken (409): email 중복. 정상 흐름에선 social_login 단계에서
+            UsernameTakenError (409): login_id 중복.
+            EmailTakenError (409): email 중복. 정상 흐름에선 social_login 단계에서
                 이메일 매칭으로 자동 연결되니 여기 도달하지 않지만, race condition
                 (tempToken 발급 후 동일 이메일로 다른 가입이 끼어든 경우) 방어용.
-            TokenExpired (401): temp_token 만료/위조.
+            TokenExpiredError (401): temp_token 만료/위조.
         """
         payload = decode_social_signup_token(temp_token)
         provider_value: str = payload["provider"]
@@ -390,9 +390,9 @@ class AuthService:
         email: str = payload["email"]
 
         if await self.repo.exists_by_login_id(login_id):
-            raise UsernameTaken()
+            raise UsernameTakenError()
         if await self.repo.exists_by_email(email):
-            raise EmailTaken()
+            raise EmailTakenError()
 
         now = datetime.now(UTC)
         # password_hash 는 항상 hash 형태여야 NOT NULL 제약 통과. 사용자가 추측 불가한

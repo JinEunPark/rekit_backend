@@ -23,6 +23,7 @@ from app.address.address_repository import AddressRepository
 from app.address.address_service import AddressService
 from app.admin.dashboard_service import DashboardService
 from app.admin.sales_service import SalesService
+from app.auth.adapters.console_sms import ConsoleSmsSender
 from app.auth.adapters.oauth_factory import build_oauth_provider
 from app.auth.adapters.ports import OAuthProvider
 from app.auth.auth_repository import AuthRepository
@@ -33,28 +34,28 @@ from app.cart.cart_service import CartService
 from app.catalog.admin_catalog_service import AdminCatalogService
 from app.catalog.catalog_repository import CatalogRepository
 from app.catalog.catalog_service import CatalogService
-from app.auth.adapters.console_sms import ConsoleSmsSender
 from app.common.email import ConsoleEmailSender, EmailSender, GmailSmtpEmailSender
 from app.core.config import Settings, settings
 from app.core.database import async_session_factory
-from app.core.redis import get_redis
 from app.core.exceptions import (
-    AccountInactive,
-    PasswordChangeRequired,
-    PermissionDenied,
-    TokenExpired,
+    AccountInactiveError,
+    PasswordChangeRequiredError,
+    PermissionDeniedError,
+    TokenExpiredError,
 )
+from app.core.redis import get_redis
 from app.core.security import decode_token
 from app.favorites.favorites_repository import FavoritesRepository
 from app.favorites.favorites_service import FavoritesService
+from app.help.repository import HelpRepository
+from app.help.service import AdminHelpService, HelpService
 from app.order.admin_order_repository import AdminOrderRepository
 from app.order.admin_order_service import AdminOrderService
 from app.order.order_repository import OrderRepository
 from app.order.order_service import OrderService
+from app.payment.adapters.ports import PaymentGateway
 from app.payment.payment_repository import PaymentRepository
 from app.payment.payment_service import PaymentService
-from app.help.repository import HelpRepository
-from app.help.service import AdminHelpService, HelpService
 from app.user.admin_members_repository import AdminMembersRepository
 from app.user.admin_members_service import AdminMembersService
 from app.user.models import User, UserRole
@@ -185,16 +186,16 @@ async def get_current_user(
     """access JWT 검증 → User 반환.
 
     Raises:
-        TokenExpired (401): 토큰 만료/위조/refresh 토큰 오용 / sub 의 user 미존재.
-        AccountInactive (403): 토큰은 유효하지만 계정이 비활성(탈퇴/정지).
+        TokenExpiredError (401): 토큰 만료/위조/refresh 토큰 오용 / sub 의 user 미존재.
+        AccountInactiveError (403): 토큰은 유효하지만 계정이 비활성(탈퇴/정지).
     """
     payload = decode_token(credentials.credentials, expected_type="access")
     user = await repo.get_by_id(int(payload["sub"]))
     if user is None:
         # 토큰 발급 후 사용자가 삭제됐거나 sub 가 위조된 케이스. 정보 노출 최소화 위해 401.
-        raise TokenExpired(message="존재하지 않는 사용자")
+        raise TokenExpiredError(message="존재하지 않는 사용자")
     if not user.is_active:
-        raise AccountInactive()
+        raise AccountInactiveError()
     return user
 
 
@@ -212,16 +213,16 @@ async def get_active_user(
     - 그 외 모든 보호 endpoint                          → `get_active_user` 사용
     """
     if user.must_change_password:
-        raise PasswordChangeRequired()
+        raise PasswordChangeRequiredError()
     return user
 
 
 async def get_admin_user(
     user: User = Depends(get_active_user),
 ) -> User:
-    """ADMIN 역할 전용 엔드포인트 가드. 관리자가 아니면 403 PermissionDenied."""
+    """ADMIN 역할 전용 엔드포인트 가드. 관리자가 아니면 403 PermissionDeniedError."""
     if user.role != UserRole.ADMIN:
-        raise PermissionDenied()
+        raise PermissionDeniedError()
     return user
 
 
@@ -247,6 +248,7 @@ async def get_payment_service(
     session: AsyncSession = Depends(db_session),
     email_sender: EmailSender = Depends(get_email_sender),
 ) -> PaymentService:
+    gateway: PaymentGateway
     if settings.use_fake_pg:
         from app.payment.adapters.fake import FakePaymentGateway
 

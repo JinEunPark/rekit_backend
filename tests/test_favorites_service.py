@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.catalog.models import ConditionGrade, Product, ProductImage, ProductStatus
-from app.core.exceptions import FavoriteNotFound
+from app.core.exceptions import FavoriteNotFoundError
 from app.favorites.favorites_schemas import FavoriteToggleResponse
 from app.favorites.favorites_service import FavoritesService
 from app.favorites.models import Favorite
@@ -147,7 +147,7 @@ async def test_remove_favorite_success() -> None:
 
 
 async def test_remove_favorite_not_found_raises() -> None:
-    with pytest.raises(FavoriteNotFound):
+    with pytest.raises(FavoriteNotFoundError):
         await _make_service().remove_favorite(user_id=1, product_id=999)
 
 

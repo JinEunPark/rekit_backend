@@ -40,7 +40,9 @@ class AddressCreate(BaseModel):
     zipcode: str = Field(description="우편번호 5자리")
     address1: str = Field(min_length=1, max_length=255, description="기본 주소 (도로명/지번)")
     address2: str | None = Field(default=None, max_length=255, description="상세 주소 (동·호수)")
-    label: str | None = Field(default=None, max_length=_LABEL_MAX, description="배송지 별칭 (예: 집, 회사)")
+    label: str | None = Field(
+        default=None, max_length=_LABEL_MAX, description="배송지 별칭 (예: 집, 회사)"
+    )
     memo: str | None = Field(default=None, max_length=_MEMO_MAX, description="배송 메모")
     is_default: bool = Field(default=False, description="기본 배송지 여부")
 

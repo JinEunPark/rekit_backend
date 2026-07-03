@@ -2,11 +2,11 @@
 
 change_password:
 - 정상: password_hash 갱신 + must_change_password=False
-- 현재 비번 불일치: InvalidCredentials raise
+- 현재 비번 불일치: InvalidCredentialsError raise
 
 withdraw:
 - 비밀번호 확인 후 PII 전체 익명화 + 소셜 계정 삭제
-- 비번 불일치 시 InvalidCredentials raise
+- 비번 불일치 시 InvalidCredentialsError raise
 """
 
 from __future__ import annotations
@@ -15,12 +15,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.core.exceptions import InvalidCredentials
+from app.core.exceptions import InvalidCredentialsError
 from app.core.security import hash_password, verify_password
 from app.user.models import Gender, User, UserRole, UserStatus
 from app.user.user_schemas import UpdateProfileRequest
 from app.user.user_service import UserService
-
 
 # ── Fake repo ─────────────────────────────────────────────────────────────────
 
@@ -87,7 +86,7 @@ def test_change_password_raises_when_current_password_mismatch() -> None:
     service, _ = _make_service()
 
     # Act / Assert
-    with pytest.raises(InvalidCredentials):
+    with pytest.raises(InvalidCredentialsError):
         service.change_password(
             user=user, current_password="wrongpw1", new_password="new99zzz"
         )
@@ -189,11 +188,11 @@ async def test_withdraw_deletes_social_accounts() -> None:
 
 
 async def test_withdraw_raises_when_password_mismatch() -> None:
-    """비밀번호 불일치 시 InvalidCredentials — PII 변경 없이 탈퇴 차단."""
+    """비밀번호 불일치 시 InvalidCredentialsError — PII 변경 없이 탈퇴 차단."""
     user = _make_user(plain_password="abc12345")
     service, _ = _make_service()
 
-    with pytest.raises(InvalidCredentials):
+    with pytest.raises(InvalidCredentialsError):
         await service.withdraw(user=user, password="wrongpw1")
 
     assert user.is_active is True

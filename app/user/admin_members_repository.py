@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, NamedTuple
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import Subquery, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.order.models import Order, OrderStatus
@@ -25,7 +25,7 @@ class AdminMembersRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    def _order_agg_subquery(self):
+    def _order_agg_subquery(self) -> Subquery:
         return (
             select(
                 Order.user_id,

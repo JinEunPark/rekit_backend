@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from app.cart.models import CartItem
 
 
-class ConditionGrade(str, enum.Enum):
+class ConditionGrade(enum.StrEnum):
     """상태 등급 — 사진/안내 카드 색상이 이 값으로 결정된다."""
 
     A = "A"  # 거의 새 것 (mint)
@@ -18,7 +18,7 @@ class ConditionGrade(str, enum.Enum):
     C = "C"  # 흠집 많음, 동작 OK (orange)
 
 
-class ProductStatus(str, enum.Enum):
+class ProductStatus(enum.StrEnum):
     """상품 노출/판매 상태."""
 
     ACTIVE = "ACTIVE"  # 판매중 — 목록/검색 노출

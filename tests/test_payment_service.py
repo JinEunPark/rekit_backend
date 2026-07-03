@@ -8,8 +8,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from fastapi import BackgroundTasks
 
-from app.core.exceptions import OrderNotFound, PaymentFailed
+from app.common.email import EmailSender
+from app.core.exceptions import OrderNotFoundError, PaymentFailedError
 from app.order.models import Order, OrderStatus
 from app.payment.adapters.ports import PaymentGateway, TossConfirmResult
 from app.payment.models import Payment, PaymentMethod, PaymentStatus, PgProvider
@@ -18,9 +20,6 @@ from app.payment.payment_schemas import (
     PaymentInitRequest,
     TossWebhookPayload,
 )
-from fastapi import BackgroundTasks
-
-from app.common.email import EmailSender
 from app.payment.payment_service import PaymentService
 
 
@@ -96,7 +95,7 @@ class _FakeGateway:
         self, *, payment_key: str, order_id: str, amount: int
     ) -> TossConfirmResult:
         if self.should_fail:
-            raise PaymentFailed("PG 확인 실패")
+            raise PaymentFailedError("PG 확인 실패")
         return TossConfirmResult(
             method="카드",
             pg_tid=payment_key,
@@ -191,7 +190,7 @@ async def test_init_payment_success() -> None:
 async def test_init_payment_order_not_found() -> None:
     service = _make_service()
 
-    with pytest.raises(OrderNotFound):
+    with pytest.raises(OrderNotFoundError):
         await service.init_payment(
             user_id=1,
             req=PaymentInitRequest(order_number="RK-NONE", method=PaymentMethod.CARD),
@@ -202,7 +201,7 @@ async def test_init_payment_wrong_user_raises() -> None:
     order = make_order(user_id=1)
     service = _make_service(orders=[order])
 
-    with pytest.raises(OrderNotFound):
+    with pytest.raises(OrderNotFoundError):
         await service.init_payment(
             user_id=99,
             req=PaymentInitRequest(order_number="RK-2606200001", method=PaymentMethod.CARD),
@@ -213,7 +212,7 @@ async def test_init_payment_already_paid_raises() -> None:
     order = make_order(status=OrderStatus.PAID)
     service = _make_service(orders=[order])
 
-    with pytest.raises(PaymentFailed):
+    with pytest.raises(PaymentFailedError):
         await service.init_payment(
             user_id=1,
             req=PaymentInitRequest(order_number="RK-2606200001", method=PaymentMethod.CARD),
@@ -247,7 +246,7 @@ async def test_confirm_payment_amount_mismatch_raises() -> None:
     payment = make_payment(order_id=1)
     service = _make_service(orders=[order], payments=[payment])
 
-    with pytest.raises(PaymentFailed):
+    with pytest.raises(PaymentFailedError):
         await service.confirm_payment(
             PaymentConfirmRequest(
                 payment_key="k", order_id="RK-2606200001", amount=999_999
@@ -263,7 +262,7 @@ async def test_confirm_payment_gateway_fails() -> None:
         orders=[order], payments=[payment], gateway=_FakeGateway(should_fail=True)
     )
 
-    with pytest.raises(PaymentFailed):
+    with pytest.raises(PaymentFailedError):
         await service.confirm_payment(
             PaymentConfirmRequest(
                 payment_key="k", order_id="RK-2606200001", amount=300_000
@@ -378,7 +377,7 @@ async def test_payment_email_subject_contains_order_number() -> None:
     assert "RK-2606200001" in sender.records[0]["subject"]
 
 
-async def test_payment_email_body_card_일시불() -> None:
+async def test_payment_email_body_card_lump_sum() -> None:
     """카드 일시불 결제 시 본문에 카드사·끝번호·일시불이 포함된다."""
     from app.payment.payment_service import _send_payment_confirmation_email
 

@@ -28,10 +28,10 @@ from app.catalog.admin_catalog_router import router as admin_catalog_router
 from app.catalog.admin_category_router import router as admin_category_router
 from app.catalog.catalog_router import router as catalog_router
 from app.common.uploads import router as uploads_router
-from app.help.router import router as help_router
-from app.help.admin_router import router as admin_help_router
 from app.core.config import settings
 from app.favorites.favorites_router import router as favorites_router
+from app.help.admin_router import router as admin_help_router
+from app.help.router import router as help_router
 from app.order.admin_order_router import router as admin_order_router
 from app.order.order_router import router as order_router
 from app.payment.payment_router import router as payment_router

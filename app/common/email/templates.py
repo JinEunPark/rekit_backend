@@ -33,7 +33,8 @@ _VERIFICATION_HTML = """\
         </svg>
       </td>
       <td valign="middle">
-        <span style="font-size:21px;font-weight:800;letter-spacing:-0.04em;color:#1A1A17;">rekit</span>
+        <span style="font-size:21px;font-weight:800;letter-spacing:-0.04em;
+                     color:#1A1A17;">rekit</span>
       </td>
     </tr>
     </table>
@@ -42,7 +43,8 @@ _VERIFICATION_HTML = """\
 
   <!-- Card -->
   <table width="100%" cellpadding="0" cellspacing="0" border="0"
-         style="max-width:560px;background:#ffffff;border:1px solid #E8E8EA;border-radius:14px;overflow:hidden;">
+         style="max-width:560px;background:#ffffff;border:1px solid #E8E8EA;
+                border-radius:14px;overflow:hidden;">
 
     <!-- Accent bar -->
     <tr><td height="4" style="background:#4FA88B;font-size:0;line-height:0;">&nbsp;</td></tr>
@@ -124,16 +126,21 @@ _CONTACT_CONFIRM_HTML = """\
              font-family:-apple-system,'Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#FAFAFA;">
 <tr><td align="center" style="padding:40px 16px 56px;">
-  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;background:#ffffff;border:1px solid #E8E8EA;border-radius:14px;overflow:hidden;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="max-width:560px;background:#ffffff;border:1px solid #E8E8EA;
+                border-radius:14px;overflow:hidden;">
     <tr><td height="4" style="background:#4FA88B;font-size:0;line-height:0;">&nbsp;</td></tr>
     <tr><td style="padding:44px 48px 40px;">
-      <p style="font-size:22px;font-weight:700;color:#1A1A17;letter-spacing:-0.02em;margin:0 0 14px;">문의가 접수되었습니다</p>
+      <p style="font-size:22px;font-weight:700;color:#1A1A17;letter-spacing:-0.02em;
+                margin:0 0 14px;">문의가 접수되었습니다</p>
       <p style="font-size:15px;color:#5C5C55;line-height:1.7;margin:0 0 24px;">
         안녕하세요, <strong>{name}</strong>님.<br>
         아래 문의가 정상적으로 접수되었습니다.<br>
         영업일 기준 1~2일 내에 답변드리겠습니다.
       </p>
-      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F4F4F5;border-radius:10px;padding:20px 24px;margin-bottom:32px;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="background:#F4F4F5;border-radius:10px;padding:20px 24px;
+                    margin-bottom:32px;">
       <tr><td>
         <p style="font-size:13px;color:#8E8E85;margin:0 0 6px;">문의 제목</p>
         <p style="font-size:15px;color:#1A1A17;font-weight:600;margin:0;">{title}</p>
@@ -171,11 +178,16 @@ _CONTACT_NOTIFY_HTML = """\
              font-family:-apple-system,'Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#FAFAFA;">
 <tr><td align="center" style="padding:40px 16px 56px;">
-  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;background:#ffffff;border:1px solid #E8E8EA;border-radius:14px;overflow:hidden;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="max-width:560px;background:#ffffff;border:1px solid #E8E8EA;
+                border-radius:14px;overflow:hidden;">
     <tr><td height="4" style="background:#E87A4F;font-size:0;line-height:0;">&nbsp;</td></tr>
     <tr><td style="padding:44px 48px 40px;">
-      <p style="font-size:22px;font-weight:700;color:#1A1A17;letter-spacing:-0.02em;margin:0 0 24px;">[관리자] 새 문의가 접수되었습니다</p>
-      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F4F4F5;border-radius:10px;padding:20px 24px;margin-bottom:24px;">
+      <p style="font-size:22px;font-weight:700;color:#1A1A17;letter-spacing:-0.02em;
+                margin:0 0 24px;">[관리자] 새 문의가 접수되었습니다</p>
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="background:#F4F4F5;border-radius:10px;padding:20px 24px;
+                    margin-bottom:24px;">
       <tr><td>
         <p style="font-size:13px;color:#8E8E85;margin:0 0 4px;">이름</p>
         <p style="font-size:14px;color:#1A1A17;margin:0 0 14px;">{name}</p>

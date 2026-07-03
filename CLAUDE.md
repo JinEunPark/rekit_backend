@@ -99,6 +99,23 @@ app/
 3. **Refactor**: 다른 페이지네이션 헬퍼 (`page_meta`) 도 같은 파일에 정리, 이름 일관화
 4. 다음 Red 사이클: `test_cursor_params_rejects_limit_over_max` ...
 
+### 8. 작업 완료 전 필수 게이트 (정적 검사)
+
+pytest 만 그린이고 lint/타입 오류는 방치되는 게 가장 흔한 기술부채 경로다
+(실제 사례: mypy 19건 + ruff 95건이 아무도 모르게 쌓였다가 한 번에 터짐).
+**기능/버그 수정을 완료로 표시하기 전에 아래 3개를 전부 실행하고 전부 깨끗해야 한다** —
+변경한 파일만이 아니라 `app` 전체 기준.
+
+```bash
+.venv/bin/pytest -v                # 회귀 — 실패 0건
+.venv/bin/ruff check app tests     # lint — 오류 0건
+.venv/bin/mypy app                 # 타입 — 오류 0건
+```
+
+- `# type: ignore` 를 추가할 땐 구체적 에러 코드를 명시한다 (`# type: ignore[attr-defined]`,
+  코드 없는 `# type: ignore` 금지). 그 원인이 리팩터링 등으로 사라지면 **같은 커밋에서 제거**한다 —
+  방치하면 `unused-ignore` 로 계속 쌓인다.
+
 ## 자주 쓰는 명령
 
 | 작업 | 명령 |
@@ -118,6 +135,10 @@ app/
 
 - **Ruff** — `pyproject.toml` 의 룰셋 따름 (E, F, I, N, UP, B, SIM, RUF)
 - **Type hints** — 모든 함수 시그니처에 명시. `mypy --strict` 통과 목표
+  - 제네릭 컨테이너는 항상 타입 인자 명시: `dict[str, Any]`, `list[str]` — bare `dict`/`list` 금지
+- **예외 클래스 명명** — 반드시 `~Error` 접미사 (`ProductNotFoundError`). `ProductNotFound` 처럼
+  접미사 없는 이름 금지 (ruff `N818`)
+- **Enum** — `class Foo(str, enum.Enum)` 대신 `class Foo(enum.StrEnum)` 사용 (Python 3.11+, ruff `UP042`)
 - **Docstring** — 클래스 / 모듈 / 비자명한 함수에. 한국어 OK
 - **Comment** — WHY 만 작성. WHAT 은 코드와 이름이 말하게 함
 - **Import 순서** — stdlib → 외부 라이브러리 → 로컬 (`from app...`). Ruff 가 자동 정렬

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.catalog.catalog_utils import discount_pct as _discount_pct
 from app.catalog.catalog_utils import thumbnail_url as _thumbnail_url
-from app.core.exceptions import FavoriteNotFound
+from app.core.exceptions import FavoriteNotFoundError
 from app.favorites.favorites_repository import FavoritesRepository
 from app.favorites.favorites_schemas import FavoriteProductItem, FavoriteToggleResponse
 from app.favorites.models import Favorite
@@ -30,7 +30,7 @@ class FavoritesService:
     ) -> FavoriteToggleResponse:
         fav = await self._repo.get_by_user_and_product(user_id, product_id)
         if fav is None:
-            raise FavoriteNotFound()
+            raise FavoriteNotFoundError()
         await self._repo.delete(fav)
         return FavoriteToggleResponse(product_id=product_id, is_favorite=False)
 

@@ -71,6 +71,13 @@ class AdminProductImagesReplace(BaseModel):
     images: list[AdminImageItem] = Field(default_factory=list, max_length=10)
 
 
+class AdminProductImageUpdate(BaseModel):
+    """PATCH /admin/products/{id}/images/{image_id} — 보내지 않은 필드는 유지."""
+
+    url: str | None = Field(default=None, min_length=1, max_length=500)
+    label: str | None = None
+
+
 class AdminProductListParams(BaseModel):
     status: ProductStatus | None = None
     q: str | None = None

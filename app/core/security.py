@@ -1,11 +1,12 @@
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import bcrypt
 from jose import ExpiredSignatureError, JWTError, jwt
 
 from app.core.config import settings
-from app.core.exceptions import TokenExpired
+from app.core.exceptions import TokenExpiredError
 
 
 def hash_password(plain: str) -> str:
@@ -19,11 +20,11 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_access_token(
     sub: str,
-    claims: dict | None = None,
+    claims: dict[str, Any] | None = None,
     expires_in: timedelta | None = None,
 ) -> str:
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     exp = now + (expires_in or timedelta(minutes=settings.access_token_expire_minutes))
     payload = {
@@ -48,7 +49,7 @@ def create_refresh_token(
     - refresh 는 신원 재발급 용도이므로 role 등 권한 정보는 access 에만 박는다.
     - 권한이 바뀌어도 access 만료(짧음) 후 새로 발급될 때 즉시 반영된다.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     exp = now + (expires_in or timedelta(days=settings.refresh_token_expire_days))
     payload = {
         "sub": sub,
@@ -59,16 +60,16 @@ def create_refresh_token(
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def decode_token(token: str, expected_type: str = "access") -> dict:
+def decode_token(token: str, expected_type: str = "access") -> dict[str, Any]:
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except ExpiredSignatureError:
-        raise TokenExpired() from None
+        raise TokenExpiredError() from None
     except JWTError as e:
-        raise TokenExpired(message="유효하지 않은 토큰") from e
+        raise TokenExpiredError(message="유효하지 않은 토큰") from e
 
     if payload.get("type") != expected_type:    # refresh 토큰을 access 자리에 못 씀
-        raise TokenExpired(message=f"토큰 종류 불일치: {payload.get('type')}")
+        raise TokenExpiredError(message=f"토큰 종류 불일치: {payload.get('type')}")
     return payload
 
 
@@ -88,7 +89,7 @@ def create_social_signup_token(
     name: str | None,
     expires_in: timedelta | None = None,
 ) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     exp = now + (
         expires_in
         or timedelta(minutes=settings.social_signup_token_expire_minutes)
@@ -105,7 +106,7 @@ def create_social_signup_token(
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def decode_social_signup_token(token: str) -> dict:
+def decode_social_signup_token(token: str) -> dict[str, Any]:
     """create_social_signup_token 으로 발급한 토큰 검증 + payload 반환."""
     return decode_token(token, expected_type=_SOCIAL_SIGNUP_TOKEN_TYPE)
 
@@ -122,7 +123,7 @@ def create_email_verified_token(
     email: str,
     expires_in: timedelta | None = None,
 ) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     exp = now + (expires_in or timedelta(minutes=15))
     payload = {
         "email": email,
@@ -133,6 +134,6 @@ def create_email_verified_token(
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def decode_email_verified_token(token: str) -> dict:
+def decode_email_verified_token(token: str) -> dict[str, Any]:
     """create_email_verified_token 으로 발급한 토큰 검증 + payload 반환."""
     return decode_token(token, expected_type=_EMAIL_VERIFIED_TOKEN_TYPE)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.core.exceptions import UserNotFound
+from app.core.exceptions import UserNotFoundError
 from app.core.pagination import build_page_meta
 from app.user.admin_members_repository import AdminMembersRepository, MemberRow
 from app.user.admin_members_schemas import (
@@ -71,7 +71,7 @@ class AdminMembersService:
     async def get_member(self, member_id: int) -> AdminMemberDetail:
         row = await self._repo.get_by_id(member_id)
         if row is None:
-            raise UserNotFound()
+            raise UserNotFoundError()
         return _to_member_detail(row)
 
     async def update_status(
@@ -79,7 +79,7 @@ class AdminMembersService:
     ) -> AdminMemberDetail:
         user = await self._repo.get_user(member_id)
         if user is None:
-            raise UserNotFound()
+            raise UserNotFoundError()
         user.status = body.status
         user.is_active = body.status == UserStatus.ACTIVE
         row = await self._repo.get_by_id(member_id)

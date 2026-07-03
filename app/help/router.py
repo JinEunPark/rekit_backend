@@ -43,7 +43,9 @@ async def get_notice(
 
 @router.get("/faqs", response_model=FaqListResponse, summary="FAQ 목록")
 async def list_faqs(
-    category: Annotated[str | None, Query(description="카테고리 필터 (예: 주문, 배송, 결제, 회원, 기타)")] = None,
+    category: Annotated[
+        str | None, Query(description="카테고리 필터 (예: 주문, 배송, 결제, 회원, 기타)")
+    ] = None,
     service: HelpService = Depends(get_help_service),
 ) -> FaqListResponse:
     return await service.list_faqs(category)

@@ -10,6 +10,7 @@ from app.catalog.admin_catalog_schemas import (
     AdminProductCreate,
     AdminProductDetailResponse,
     AdminProductImagesReplace,
+    AdminProductImageUpdate,
     AdminProductListParams,
     AdminProductListResponse,
     AdminProductUpdate,
@@ -100,6 +101,28 @@ async def replace_images(
     - PRODUCT_NOT_FOUND (404): 상품 없음
     """
     return await service.replace_images(product_id, body)
+
+
+@router.patch(
+    "/{product_id}/images/{image_id}",
+    response_model=AdminProductDetailResponse,
+    status_code=status.HTTP_200_OK,
+    summary="상품 이미지 단건 수정",
+)
+async def update_image(
+    body: AdminProductImageUpdate,
+    product_id: int = Path(description="상품 PK"),
+    image_id: int = Path(description="이미지 PK"),
+    _: User = Depends(get_admin_user),
+    service: AdminCatalogService = Depends(get_admin_catalog_service),
+) -> AdminProductDetailResponse:
+    """이미지 1개의 url/label 만 부분 수정 (전체 배열 교체 없이).
+
+    Errors:
+    - PRODUCT_NOT_FOUND (404): 상품 없음
+    - PRODUCT_IMAGE_NOT_FOUND (404): 이미지가 없거나 해당 상품 소유가 아님
+    """
+    return await service.update_image(product_id, image_id, body)
 
 
 @router.delete(

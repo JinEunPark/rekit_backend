@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from app.user.models import User
 
 
-class ContactStatus(str, enum.Enum):
+class ContactStatus(enum.StrEnum):
     PENDING = "PENDING"
     ANSWERED = "ANSWERED"
 
@@ -43,7 +43,10 @@ class Faq(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(Identity(always=False), primary_key=True)
     category: Mapped[str] = mapped_column(
-        String(50), nullable=False, index=True, comment="카테고리 (예: 주문, 배송, 결제, 회원, 기타)"
+        String(50),
+        nullable=False,
+        index=True,
+        comment="카테고리 (예: 주문, 배송, 결제, 회원, 기타)",
     )
     question: Mapped[str] = mapped_column(String(300), nullable=False)
     answer: Mapped[str] = mapped_column(Text, nullable=False)

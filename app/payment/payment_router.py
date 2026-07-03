@@ -11,7 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 
 from app.core.deps import get_active_user, get_payment_service
-from app.core.exceptions import PaymentFailed
+from app.core.exceptions import PaymentFailedError
 from app.payment.payment_schemas import (
     PaymentConfirmRequest,
     PaymentConfirmResponse,
@@ -88,7 +88,7 @@ async def toss_webhook(
     signature = request.headers.get("TossPayments-Signature", "")
 
     if not service.verify_webhook(raw_body, signature):
-        raise PaymentFailed("웹훅 서명 검증 실패")
+        raise PaymentFailedError("웹훅 서명 검증 실패")
 
     await service.handle_webhook(body)
     return {"status": "ok"}

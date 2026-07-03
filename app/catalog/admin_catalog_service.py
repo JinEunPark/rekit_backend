@@ -10,6 +10,7 @@ from app.catalog.admin_catalog_schemas import (
     AdminProductDetailResponse,
     AdminProductImageResponse,
     AdminProductImagesReplace,
+    AdminProductImageUpdate,
     AdminProductListParams,
     AdminProductListResponse,
     AdminProductUpdate,
@@ -17,7 +18,12 @@ from app.catalog.admin_catalog_schemas import (
 from app.catalog.catalog_repository import CatalogRepository
 from app.catalog.catalog_utils import discount_pct as _discount_pct
 from app.catalog.models import Product, ProductCategoryMetaItem, ProductImage, ProductStatus
-from app.core.exceptions import CategoryAlreadyExists, CategoryNotFound, ProductNotFound
+from app.core.exceptions import (
+    CategoryAlreadyExistsError,
+    CategoryNotFoundError,
+    ProductImageNotFoundError,
+    ProductNotFoundError,
+)
 from app.core.pagination import build_page_meta
 
 
@@ -63,7 +69,7 @@ class AdminCatalogService:
     async def get_product(self, product_id: int) -> AdminProductDetailResponse:
         product = await self._repo.get_by_id(product_id)
         if product is None:
-            raise ProductNotFound()
+            raise ProductNotFoundError()
         return _to_detail(product)
 
     async def update_product(
@@ -71,7 +77,7 @@ class AdminCatalogService:
     ) -> AdminProductDetailResponse:
         product = await self._repo.get_by_id(product_id)
         if product is None:
-            raise ProductNotFound()
+            raise ProductNotFoundError()
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(product, key, value)
         return _to_detail(product)
@@ -81,7 +87,7 @@ class AdminCatalogService:
     ) -> AdminProductDetailResponse:
         product = await self._repo.get_by_id(product_id)
         if product is None:
-            raise ProductNotFound()
+            raise ProductNotFoundError()
         images = [
             ProductImage(product_id=product.id, url=item.url, sort_order=i, label=item.label)
             for i, item in enumerate(data.images)
@@ -89,10 +95,23 @@ class AdminCatalogService:
         await self._repo.replace_images(product, images)
         return _to_detail(product)
 
+    async def update_image(
+        self, product_id: int, image_id: int, data: AdminProductImageUpdate
+    ) -> AdminProductDetailResponse:
+        product = await self._repo.get_by_id(product_id)
+        if product is None:
+            raise ProductNotFoundError()
+        image = next((img for img in product.images if img.id == image_id), None)
+        if image is None:
+            raise ProductImageNotFoundError()
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(image, key, value)
+        return _to_detail(product)
+
     async def delete_product(self, product_id: int) -> None:
         product = await self._repo.get_by_id(product_id)
         if product is None:
-            raise ProductNotFound()
+            raise ProductNotFoundError()
         product.status = ProductStatus.INACTIVE
 
     # ── 카테고리 CRUD ──────────────────────────────────────────
@@ -104,7 +123,7 @@ class AdminCatalogService:
     async def create_category(self, data: AdminCategoryCreate) -> AdminCategoryResponse:
         existing = await self._repo.get_category_by_id(data.id)
         if existing is not None:
-            raise CategoryAlreadyExists()
+            raise CategoryAlreadyExistsError()
         cat = ProductCategoryMetaItem(
             id=data.id, title=data.title, icon=data.icon, sort_order=data.sort_order
         )
@@ -116,7 +135,7 @@ class AdminCatalogService:
     ) -> AdminCategoryResponse:
         cat = await self._repo.get_category_by_id(category_id)
         if cat is None:
-            raise CategoryNotFound()
+            raise CategoryNotFoundError()
         for key, value in data.model_dump(exclude_unset=True).items():
             setattr(cat, key, value)
         return AdminCategoryResponse.model_validate(cat)
@@ -124,7 +143,7 @@ class AdminCatalogService:
     async def delete_category(self, category_id: str) -> None:
         cat = await self._repo.get_category_by_id(category_id)
         if cat is None:
-            raise CategoryNotFound()
+            raise CategoryNotFoundError()
         await self._repo.delete_category(cat)
 
 

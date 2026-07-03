@@ -4,10 +4,10 @@ DB 없이 서비스 로직을 검증한다:
 - 빈 장바구니 조회
 - 신규 상품 담기
 - 같은 상품 재담기 → 수량 합산
-- INACTIVE 상품 담기 → ProductNotFound
-- 재고 부족 담기 → OutOfStock
+- INACTIVE 상품 담기 → ProductNotFoundError
+- 재고 부족 담기 → OutOfStockError
 - 수량 수정
-- 타인 항목 수정 → CartItemNotFound
+- 타인 항목 수정 → CartItemNotFoundError
 - 단건 삭제
 - 금액 계산 (subtotal, items_total, total)
 """
@@ -30,7 +30,7 @@ from app.catalog.models import (
     ProductImage,
     ProductStatus,
 )
-from app.core.exceptions import CartItemNotFound, OutOfStock, ProductNotFound
+from app.core.exceptions import CartItemNotFoundError, OutOfStockError, ProductNotFoundError
 
 # ── 팩토리 ──────────────────────────────────────────────────────
 
@@ -193,47 +193,47 @@ async def test_add_item_increments_existing() -> None:
 
 
 async def test_add_item_inactive_product_raises() -> None:
-    """INACTIVE 상품 담기 → ProductNotFound."""
+    """INACTIVE 상품 담기 → ProductNotFoundError."""
     product = make_product(product_id=1, status=ProductStatus.INACTIVE)
     service = _make_service(products=[product])
 
-    with pytest.raises(ProductNotFound):
+    with pytest.raises(ProductNotFoundError):
         await service.add_item(user_id=1, data=AddToCartRequest(product_id=1, quantity=1))
 
 
 async def test_add_item_sold_out_product_raises() -> None:
-    """SOLD_OUT 상품 담기 → ProductNotFound."""
+    """SOLD_OUT 상품 담기 → ProductNotFoundError."""
     product = make_product(product_id=1, status=ProductStatus.SOLD_OUT)
     service = _make_service(products=[product])
 
-    with pytest.raises(ProductNotFound):
+    with pytest.raises(ProductNotFoundError):
         await service.add_item(user_id=1, data=AddToCartRequest(product_id=1, quantity=1))
 
 
 async def test_add_item_nonexistent_product_raises() -> None:
-    """존재하지 않는 상품 담기 → ProductNotFound."""
+    """존재하지 않는 상품 담기 → ProductNotFoundError."""
     service = _make_service(products=[])
 
-    with pytest.raises(ProductNotFound):
+    with pytest.raises(ProductNotFoundError):
         await service.add_item(user_id=1, data=AddToCartRequest(product_id=999, quantity=1))
 
 
 async def test_add_item_out_of_stock_raises() -> None:
-    """재고(2) 보다 많은 수량(3) 담기 → OutOfStock."""
+    """재고(2) 보다 많은 수량(3) 담기 → OutOfStockError."""
     product = make_product(product_id=1, stock=2)
     service = _make_service(products=[product])
 
-    with pytest.raises(OutOfStock):
+    with pytest.raises(OutOfStockError):
         await service.add_item(user_id=1, data=AddToCartRequest(product_id=1, quantity=3))
 
 
 async def test_add_item_existing_exceeds_stock_raises() -> None:
-    """기존 수량(3) + 추가 수량(2) > 재고(4) → OutOfStock."""
+    """기존 수량(3) + 추가 수량(2) > 재고(4) → OutOfStockError."""
     product = make_product(product_id=1, stock=4)
     existing = make_cart_item(item_id=1, user_id=1, product=product, quantity=3)
     service = _make_service(items=[existing], products=[product])
 
-    with pytest.raises(OutOfStock):
+    with pytest.raises(OutOfStockError):
         await service.add_item(user_id=1, data=AddToCartRequest(product_id=1, quantity=2))
 
 
@@ -254,34 +254,34 @@ async def test_update_item_quantity() -> None:
 
 
 async def test_update_item_wrong_owner_raises() -> None:
-    """타인(user_id=2) 항목 수정 → CartItemNotFound."""
+    """타인(user_id=2) 항목 수정 → CartItemNotFoundError."""
     product = make_product(product_id=1, stock=10)
     item = make_cart_item(item_id=1, user_id=2, product=product, quantity=1)
     service = _make_service(items=[item], products=[product])
 
-    with pytest.raises(CartItemNotFound):
+    with pytest.raises(CartItemNotFoundError):
         await service.update_item(
             user_id=1, item_id=1, data=UpdateCartItemRequest(quantity=3)
         )
 
 
 async def test_update_item_not_found_raises() -> None:
-    """존재하지 않는 항목 수정 → CartItemNotFound."""
+    """존재하지 않는 항목 수정 → CartItemNotFoundError."""
     service = _make_service()
 
-    with pytest.raises(CartItemNotFound):
+    with pytest.raises(CartItemNotFoundError):
         await service.update_item(
             user_id=1, item_id=999, data=UpdateCartItemRequest(quantity=2)
         )
 
 
 async def test_update_item_out_of_stock_raises() -> None:
-    """수정 수량이 재고 초과 → OutOfStock."""
+    """수정 수량이 재고 초과 → OutOfStockError."""
     product = make_product(product_id=1, stock=3)
     item = make_cart_item(item_id=1, user_id=1, product=product, quantity=1)
     service = _make_service(items=[item], products=[product])
 
-    with pytest.raises(OutOfStock):
+    with pytest.raises(OutOfStockError):
         await service.update_item(
             user_id=1, item_id=1, data=UpdateCartItemRequest(quantity=5)
         )
@@ -303,12 +303,12 @@ async def test_remove_item() -> None:
 
 
 async def test_remove_item_wrong_owner_raises() -> None:
-    """타인 항목 삭제 시도 → CartItemNotFound."""
+    """타인 항목 삭제 시도 → CartItemNotFoundError."""
     product = make_product(product_id=1)
     item = make_cart_item(item_id=1, user_id=2, product=product)
     service = _make_service(items=[item])
 
-    with pytest.raises(CartItemNotFound):
+    with pytest.raises(CartItemNotFoundError):
         await service.remove_item(user_id=1, item_id=1)
 
 

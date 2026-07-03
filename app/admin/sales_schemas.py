@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel
 
 from app.payment.models import PaymentMethod
@@ -16,7 +18,7 @@ class SalesSummary(BaseModel):
 
 class SalesTimeSeries(BaseModel):
     granularity: str
-    data: list[dict]
+    data: list[dict[str, Any]]
 
 
 class PaymentMethodStat(BaseModel):

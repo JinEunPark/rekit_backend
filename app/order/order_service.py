@@ -12,17 +12,18 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from app.address.models import Address
 from app.catalog.models import ProductStatus
 from app.core.exceptions import (
-    AddressNotFound,
-    IdentityRequired,
-    OrderCancelForbidden,
-    OrderNotFound,
-    OutOfStock,
-    PermissionDenied,
-    ProductUnavailable,
-    RefundForbidden,
-    ShipmentNotFound,
+    AddressNotFoundError,
+    IdentityRequiredError,
+    OrderCancelForbiddenError,
+    OrderNotFoundError,
+    OutOfStockError,
+    PermissionDeniedError,
+    ProductUnavailableError,
+    RefundForbiddenError,
+    ShipmentNotFoundError,
 )
 from app.core.pagination import build_page_meta
 from app.core.shipping import calc_shipping, is_direct_delivery_available
@@ -57,9 +58,9 @@ class OrderService:
         direct_available = is_direct_delivery_available(address.zipcode)
 
         if req.shipping_method == ShipmentMethod.DIRECT and not direct_available:
-            # DIRECT 불가 지역에서 DIRECT 선택 → OrderCancelForbidden 재활용
+            # DIRECT 불가 지역에서 DIRECT 선택 → OrderCancelForbiddenError 재활용
             # (별도 DirectDeliveryUnavailable 예외가 없으므로 기존 예외 사용)
-            raise OrderCancelForbidden("직배송 불가 지역입니다.")
+            raise OrderCancelForbiddenError("직배송 불가 지역입니다.")
 
         shipping_fee, discount_amount = calc_shipping(req.shipping_method)
 
@@ -67,7 +68,7 @@ class OrderService:
         for item_req in req.items:
             product = await self._repo.get_product(item_req.product_id)
             if product is None or product.status != ProductStatus.ACTIVE:
-                raise ProductUnavailable()
+                raise ProductUnavailableError()
             items_total += product.price * item_req.quantity
 
         total_amount = items_total + shipping_fee - discount_amount
@@ -91,22 +92,23 @@ class OrderService:
     ) -> OrderResponse:
         """주문을 생성하고 재고를 차감한 뒤 OrderResponse 를 반환한다."""
         if not identity_verified:
-            raise IdentityRequired()
+            raise IdentityRequiredError()
 
         address = await self._get_address_for_user(user_id, req.address_id)
 
-        if req.shipping_method == ShipmentMethod.DIRECT:
-            if not is_direct_delivery_available(address.zipcode):
-                raise OrderCancelForbidden("직배송 불가 지역입니다.")
+        if req.shipping_method == ShipmentMethod.DIRECT and not is_direct_delivery_available(
+            address.zipcode
+        ):
+            raise OrderCancelForbiddenError("직배송 불가 지역입니다.")
 
         product_ids = [i.product_id for i in req.items]
         product_map = await self._repo.get_products_with_lock(product_ids)
         for item_req in req.items:
             product = product_map.get(item_req.product_id)
             if product is None or product.status != ProductStatus.ACTIVE:
-                raise ProductUnavailable()
+                raise ProductUnavailableError()
             if product.stock < item_req.quantity:
-                raise OutOfStock()
+                raise OutOfStockError()
 
         shipping_fee, discount_amount = calc_shipping(req.shipping_method)
 
@@ -168,7 +170,7 @@ class OrderService:
     # ── 단건 조회 ────────────────────────────────────────────────────
 
     async def get_order(self, user_id: int, order_number: str) -> OrderResponse:
-        """order_number 로 단건 조회. 소유권 불일치는 OrderNotFound 로 처리(정보 노출 방지)."""
+        """order_number 로 단건 조회. 소유권 불일치는 OrderNotFoundError 로 처리(정보 노출 방지)."""
         order = await self._get_order_for_user(user_id, order_number)
         return _to_order_response(order)
 
@@ -178,9 +180,9 @@ class OrderService:
         """order_number 의 배송 정보 반환. 소유권 불일치 및 배송 정보 미존재는 각각 404."""
         order = await self._repo.get_by_order_number_with_shipment(order_number)
         if order is None or order.user_id != user_id:
-            raise OrderNotFound()
+            raise OrderNotFoundError()
         if order.shipment is None:
-            raise ShipmentNotFound()
+            raise ShipmentNotFoundError()
         return ShipmentResponse.model_validate(order.shipment)
 
     # ── 환불 요청 ────────────────────────────────────────────────────
@@ -193,7 +195,7 @@ class OrderService:
         order = await self._get_order_for_user(user_id, order_number)
 
         if order.status != OrderStatus.DELIVERED:
-            raise RefundForbidden()
+            raise RefundForbiddenError()
 
         order.status = OrderStatus.REFUNDED
         order.cancelled_at = datetime.now(UTC)
@@ -210,7 +212,7 @@ class OrderService:
         order = await self._get_order_for_user(user_id, order_number)
 
         if order.status not in _CANCELLABLE_STATUSES:
-            raise OrderCancelForbidden()
+            raise OrderCancelForbiddenError()
 
         order.status = OrderStatus.CANCELLED
         order.cancelled_at = datetime.now(UTC)
@@ -219,20 +221,20 @@ class OrderService:
 
     # ── 내부 헬퍼 ────────────────────────────────────────────────────
 
-    async def _get_address_for_user(self, user_id: int, address_id: int):  # type: ignore[return]
+    async def _get_address_for_user(self, user_id: int, address_id: int) -> Address:
         """배송지 존재(404) → 소유권(403) 순서로 검증 후 Address 반환."""
         address = await self._repo.get_address_by_id(address_id)
         if address is None:
-            raise AddressNotFound()
+            raise AddressNotFoundError()
         if address.user_id != user_id:
-            raise PermissionDenied()
+            raise PermissionDeniedError()
         return address
 
     async def _get_order_for_user(self, user_id: int, order_number: str) -> Order:
-        """order_number 로 주문 조회 + 소유권 검증. 실패 시 OrderNotFound."""
+        """order_number 로 주문 조회 + 소유권 검증. 실패 시 OrderNotFoundError."""
         order = await self._repo.get_by_order_number(order_number)
         if order is None or order.user_id != user_id:
-            raise OrderNotFound()
+            raise OrderNotFoundError()
         return order
 
 

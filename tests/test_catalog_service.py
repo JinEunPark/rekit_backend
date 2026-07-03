@@ -7,7 +7,7 @@ DB 없이 fake repo + in-memory Product 객체로 도메인 로직 검증.
 - thumbnail_url: images[0].url, 이미지 없으면 None
 - discount_pct: original_price 기반 계산, 없으면 None
 - get_product: 상세 + 이미지 목록
-- ProductNotFound: 없는 상품 조회 시 raise
+- ProductNotFoundError: 없는 상품 조회 시 raise
 - get_featured: ACTIVE 최신 N건
 - get_categories: DB 기반 동적 카테고리, sort_order 순
 """
@@ -27,7 +27,7 @@ from app.catalog.models import (
     ProductImage,
     ProductStatus,
 )
-from app.core.exceptions import ProductNotFound
+from app.core.exceptions import ProductNotFoundError
 
 # ── 팩토리 ──────────────────────────────────────────────────
 
@@ -391,7 +391,7 @@ async def test_get_product_returns_detail() -> None:
 async def test_get_product_raises_not_found() -> None:
     service = _make_service([])
 
-    with pytest.raises(ProductNotFound):
+    with pytest.raises(ProductNotFoundError):
         await service.get_product(999)
 
 

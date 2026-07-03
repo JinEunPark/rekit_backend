@@ -14,14 +14,14 @@ if TYPE_CHECKING:
     from app.order.models import Order
 
 
-class UserRole(str, enum.Enum):
+class UserRole(enum.StrEnum):
     """사용자 권한 등급. 관리자 라우터는 ADMIN 만 통과시킨다."""
 
     USER = "USER"
     ADMIN = "ADMIN"
 
 
-class UserStatus(str, enum.Enum):
+class UserStatus(enum.StrEnum):
     """계정 상태. BANNED 는 로그인 차단, DORMANT 는 1년 무접속 휴면, WITHDRAWN 은 자발적 탈퇴."""
 
     ACTIVE = "ACTIVE"
@@ -30,7 +30,7 @@ class UserStatus(str, enum.Enum):
     WITHDRAWN = "WITHDRAWN"
 
 
-class Gender(str, enum.Enum):
+class Gender(enum.StrEnum):
     """본인인증 결과로만 채워지는 성별. 회원가입 단계에서는 받지 않음."""
 
     MALE = "MALE"

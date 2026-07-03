@@ -62,7 +62,7 @@ class GoogleOAuthAdapter:
                 self.redirect_uri,
             )
             res.raise_for_status()
-        return res.json()["access_token"]
+        return str(res.json()["access_token"])
 
     async def _fetch_profile(self, client: httpx.AsyncClient, access_token: str) -> SocialProfile:
         res = await client.get(

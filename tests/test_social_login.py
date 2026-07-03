@@ -3,9 +3,9 @@
 DB 없이 fake repo + fake OAuth provider 로 도메인 로직 검증.
 - 기존 SocialAccount 매칭 → 즉시 로그인
 - 미매칭 → needsSignUp + tempToken
-- 이메일 동의 누락 → SocialEmailRequired
+- 이메일 동의 누락 → SocialEmailRequiredError
 - social_sign_up: tempToken → User + SocialAccount 생성 + 토큰
-- 중복 login_id / email → UsernameTaken / EmailTaken
+- 중복 login_id / email → UsernameTakenError / EmailTakenError
 """
 
 from __future__ import annotations
@@ -18,12 +18,12 @@ from app.auth.auth_service import AuthService
 from app.auth.models import SocialAccount, SocialProvider
 from app.common.email import ConsoleEmailSender
 from app.core.exceptions import (
-    EmailTaken,
-    InvalidCredentials,
-    SocialEmailRequired,
-    SocialOAuthFailed,
-    TokenExpired,
-    UsernameTaken,
+    EmailTakenError,
+    InvalidCredentialsError,
+    SocialEmailRequiredError,
+    SocialOAuthFailedError,
+    TokenExpiredError,
+    UsernameTakenError,
 )
 from app.core.security import (
     create_social_signup_token,
@@ -231,7 +231,7 @@ async def test_social_login_raises_when_email_match_user_inactive() -> None:
     )
     service = _make_service(repo)
 
-    with pytest.raises(InvalidCredentials):
+    with pytest.raises(InvalidCredentialsError):
         await service.social_login(SocialProvider.GOOGLE, oauth, code="x")
 
 
@@ -243,16 +243,16 @@ async def test_social_login_raises_when_email_missing() -> None:
     )
     service = _make_service(repo)
 
-    with pytest.raises(SocialEmailRequired):
+    with pytest.raises(SocialEmailRequiredError):
         await service.social_login(SocialProvider.KAKAO, oauth, code="c")
 
 
-# httpx 에러 → SocialOAuthFailed 변환 책임은 어댑터 측 (translate_oauth_error 헬퍼)
+# httpx 에러 → SocialOAuthFailedError 변환 책임은 어댑터 측 (translate_oauth_error 헬퍼)
 # 으로 이동. 따라서 service 단위가 아니라 helper 단위로 검증한다.
 
 
 def test_translate_oauth_status_error_maps_to_social_oauth_failed() -> None:
-    """PG token endpoint 4xx 응답 → SocialOAuthFailed (status code 메시지 포함)."""
+    """PG token endpoint 4xx 응답 → SocialOAuthFailedError (status code 메시지 포함)."""
     from app.auth.adapters._oauth_helpers import translate_oauth_error
 
     req = httpx.Request("POST", "https://pg.example/token")
@@ -261,20 +261,20 @@ def test_translate_oauth_status_error_maps_to_social_oauth_failed() -> None:
 
     out = translate_oauth_error(err, provider="kakao")
 
-    assert isinstance(out, SocialOAuthFailed)
+    assert isinstance(out, SocialOAuthFailedError)
     assert "401" in out.message
     assert "kakao" in out.message
 
 
 def test_translate_oauth_network_error_maps_to_social_oauth_failed() -> None:
-    """네트워크 레이어 실패 (DNS, timeout) → SocialOAuthFailed."""
+    """네트워크 레이어 실패 (DNS, timeout) → SocialOAuthFailedError."""
     from app.auth.adapters._oauth_helpers import translate_oauth_error
 
     err = httpx.ConnectTimeout("timeout")
 
     out = translate_oauth_error(err, provider="google")
 
-    assert isinstance(out, SocialOAuthFailed)
+    assert isinstance(out, SocialOAuthFailedError)
     assert "google" in out.message
 
 
@@ -295,7 +295,7 @@ async def test_social_login_raises_invalid_credentials_when_linked_user_inactive
     )
     service = _make_service(repo)
 
-    with pytest.raises(InvalidCredentials):
+    with pytest.raises(InvalidCredentialsError):
         await service.social_login(SocialProvider.GOOGLE, oauth, code="c")
 
 
@@ -344,7 +344,7 @@ async def test_social_sign_up_rejects_duplicate_login_id() -> None:
         provider="naver", social_id="n1", email="new@example.com", name=None
     )
 
-    with pytest.raises(UsernameTaken):
+    with pytest.raises(UsernameTakenError):
         await service.social_sign_up(
             temp_token=temp,
             login_id="taken",
@@ -363,7 +363,7 @@ async def test_social_sign_up_rejects_duplicate_email() -> None:
         provider="google", social_id="g1", email="dup@example.com", name=None
     )
 
-    with pytest.raises(EmailTaken):
+    with pytest.raises(EmailTakenError):
         await service.social_sign_up(
             temp_token=temp,
             login_id="newuser",
@@ -373,11 +373,11 @@ async def test_social_sign_up_rejects_duplicate_email() -> None:
 
 
 async def test_social_sign_up_rejects_expired_token() -> None:
-    """잘못된/위조 tempToken — TokenExpired."""
+    """잘못된/위조 tempToken — TokenExpiredError."""
     repo = _FakeAuthRepo()
     service = _make_service(repo)
 
-    with pytest.raises(TokenExpired):
+    with pytest.raises(TokenExpiredError):
         await service.social_sign_up(
             temp_token="invalid.jwt.string",
             login_id="newuser",
@@ -404,5 +404,5 @@ def test_decode_social_signup_token_rejects_other_token_types() -> None:
     from app.core.security import create_access_token
 
     access = create_access_token(sub="1", claims={})
-    with pytest.raises(TokenExpired):
+    with pytest.raises(TokenExpiredError):
         decode_social_signup_token(access)

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.core.exceptions import ContactNotFound, FaqNotFound, NoticeNotFound
+from app.core.exceptions import ContactNotFoundError, FaqNotFoundError, NoticeNotFoundError
 from app.help.models import Contact, ContactStatus, Faq, Notice
 from app.help.schemas import (
     AdminContactStatusUpdate,
@@ -21,7 +21,6 @@ from app.help.schemas import (
     ContactRequest,
 )
 from app.help.service import AdminHelpService, HelpService
-
 
 # ── Fake 인프라 ────────────────────────────────────────────────────────
 
@@ -149,7 +148,9 @@ def _make_notice(*, title="공지", content="내용", is_pinned=False, is_publis
     return n
 
 
-def _make_faq(*, category="주문", question="Q?", answer="A.", sort_order=0, is_published=True) -> Faq:
+def _make_faq(
+    *, category="주문", question="Q?", answer="A.", sort_order=0, is_published=True
+) -> Faq:
     f = Faq()
     f.id = None  # type: ignore[assignment]
     f.category = category
@@ -188,20 +189,20 @@ class TestHelpServiceNotice:
 
     @pytest.mark.asyncio
     async def test_get_notice_not_found(self):
-        """존재하지 않는 ID 조회 시 NoticeNotFound."""
+        """존재하지 않는 ID 조회 시 NoticeNotFoundError."""
         service, _, __ = _make_help_service()
 
-        with pytest.raises(NoticeNotFound):
+        with pytest.raises(NoticeNotFoundError):
             await service.get_notice(999)
 
     @pytest.mark.asyncio
     async def test_get_notice_unpublished_raises(self):
-        """비게시 공지 단건 조회 시 NoticeNotFound (공개 API 보호)."""
+        """비게시 공지 단건 조회 시 NoticeNotFoundError (공개 API 보호)."""
         service, repo, _ = _make_help_service()
         notice = _make_notice(is_published=False)
         await repo.save_notice(notice)
 
-        with pytest.raises(NoticeNotFound):
+        with pytest.raises(NoticeNotFoundError):
             await service.get_notice(notice.id)
 
 
@@ -309,7 +310,9 @@ class TestAdminHelpServiceNotice:
     async def test_create_notice(self):
         """공지사항 생성 후 ID가 부여된다."""
         service, _ = _make_admin_service()
-        body = AdminNoticeCreate(title="새 공지", content="내용", is_pinned=False, is_published=True)
+        body = AdminNoticeCreate(
+            title="새 공지", content="내용", is_pinned=False, is_published=True
+        )
 
         result = await service.create_notice(body)
 
@@ -330,10 +333,10 @@ class TestAdminHelpServiceNotice:
 
     @pytest.mark.asyncio
     async def test_update_notice_not_found(self):
-        """존재하지 않는 공지 수정 시 NoticeNotFound."""
+        """존재하지 않는 공지 수정 시 NoticeNotFoundError."""
         service, _ = _make_admin_service()
 
-        with pytest.raises(NoticeNotFound):
+        with pytest.raises(NoticeNotFoundError):
             await service.update_notice(999, AdminNoticeUpdate(title="수정"))
 
     @pytest.mark.asyncio
@@ -349,10 +352,10 @@ class TestAdminHelpServiceNotice:
 
     @pytest.mark.asyncio
     async def test_delete_notice_not_found(self):
-        """존재하지 않는 공지 삭제 시 NoticeNotFound."""
+        """존재하지 않는 공지 삭제 시 NoticeNotFoundError."""
         service, _ = _make_admin_service()
 
-        with pytest.raises(NoticeNotFound):
+        with pytest.raises(NoticeNotFoundError):
             await service.delete_notice(999)
 
     @pytest.mark.asyncio
@@ -381,10 +384,10 @@ class TestAdminHelpServiceFaq:
 
     @pytest.mark.asyncio
     async def test_update_faq_not_found(self):
-        """존재하지 않는 FAQ 수정 시 FaqNotFound."""
+        """존재하지 않는 FAQ 수정 시 FaqNotFoundError."""
         service, _ = _make_admin_service()
 
-        with pytest.raises(FaqNotFound):
+        with pytest.raises(FaqNotFoundError):
             await service.update_faq(999, AdminFaqUpdate(question="변경"))
 
     @pytest.mark.asyncio
@@ -415,10 +418,10 @@ class TestAdminHelpServiceContact:
 
     @pytest.mark.asyncio
     async def test_get_contact_not_found(self):
-        """존재하지 않는 문의 조회 시 ContactNotFound."""
+        """존재하지 않는 문의 조회 시 ContactNotFoundError."""
         service, _ = _make_admin_service()
 
-        with pytest.raises(ContactNotFound):
+        with pytest.raises(ContactNotFoundError):
             await service.get_contact(999)
 
     @pytest.mark.asyncio

@@ -6,7 +6,11 @@ import csv
 import io
 from datetime import UTC, datetime
 
-from app.core.exceptions import InvalidOrderStatus, OrderCancelForbidden, OrderNotFound
+from app.core.exceptions import (
+    InvalidOrderStatusError,
+    OrderCancelForbiddenError,
+    OrderNotFoundError,
+)
 from app.core.pagination import build_page_meta
 from app.order.admin_order_repository import AdminOrderRepository
 from app.order.admin_order_schemas import (
@@ -52,7 +56,7 @@ class AdminOrderService:
     async def get_order(self, order_number: str) -> AdminOrderDetail:
         order = await self._repo.get_by_order_number(order_number)
         if order is None:
-            raise OrderNotFound()
+            raise OrderNotFoundError()
         return _to_detail(order)
 
     async def input_shipment(
@@ -60,9 +64,9 @@ class AdminOrderService:
     ) -> AdminOrderDetail:
         order = await self._repo.get_order_for_update(order_number)
         if order is None:
-            raise OrderNotFound()
+            raise OrderNotFoundError()
         if order.status not in {OrderStatus.PAID, OrderStatus.PREPARING}:
-            raise InvalidOrderStatus("송장은 결제완료/준비중 상태에서만 입력 가능합니다.")
+            raise InvalidOrderStatusError("송장은 결제완료/준비중 상태에서만 입력 가능합니다.")
         await self._repo.create_or_update_shipment(order, body.carrier, body.tracking_number)
         order.status = OrderStatus.SHIPPING
         return await self.get_order(order_number)
@@ -72,9 +76,9 @@ class AdminOrderService:
     ) -> AdminOrderDetail:
         order = await self._repo.get_order_for_update(order_number)
         if order is None:
-            raise OrderNotFound()
+            raise OrderNotFoundError()
         if body.status not in _MANUAL_SETTABLE:
-            raise InvalidOrderStatus(
+            raise InvalidOrderStatusError(
                 f"수동 변경 가능 상태: {[s.value for s in _MANUAL_SETTABLE]}"
             )
         order.status = body.status
@@ -85,9 +89,9 @@ class AdminOrderService:
     ) -> AdminOrderDetail:
         order = await self._repo.get_order_for_update(order_number)
         if order is None:
-            raise OrderNotFound()
+            raise OrderNotFoundError()
         if order.status not in _CANCELLABLE:
-            raise OrderCancelForbidden()
+            raise OrderCancelForbiddenError()
         order.status = OrderStatus.CANCELLED
         order.cancelled_at = datetime.now(UTC)
         return await self.get_order(order_number)
@@ -96,7 +100,9 @@ class AdminOrderService:
         orders, _ = await self._repo.get_list(AdminOrderListParams(size=10000))
         buf = io.StringIO()
         writer = csv.writer(buf)
-        writer.writerow(["주문번호", "주문일시", "주문자", "연락처", "상품", "금액", "상태", "배송방식"])
+        writer.writerow(
+            ["주문번호", "주문일시", "주문자", "연락처", "상품", "금액", "상태", "배송방식"]
+        )
         for o in orders:
             title = o.items[0].product_title_snapshot if o.items else ""
             writer.writerow([

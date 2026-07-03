@@ -15,15 +15,15 @@ import pytest
 from app.address.models import Address
 from app.catalog.models import ConditionGrade, Product, ProductStatus
 from app.core.exceptions import (
-    AddressNotFound,
-    IdentityRequired,
-    OrderCancelForbidden,
-    OrderNotFound,
-    OutOfStock,
-    PermissionDenied,
-    ProductUnavailable,
-    RefundForbidden,
-    ShipmentNotFound,
+    AddressNotFoundError,
+    IdentityRequiredError,
+    OrderCancelForbiddenError,
+    OrderNotFoundError,
+    OutOfStockError,
+    PermissionDeniedError,
+    ProductUnavailableError,
+    RefundForbiddenError,
+    ShipmentNotFoundError,
 )
 from app.order.models import Order, OrderStatus
 from app.order.order_schemas import (
@@ -272,11 +272,11 @@ class TestGetQuote:
             address_id=1,
             shipping_method=ShipmentMethod.DIRECT,
         )
-        with pytest.raises(OrderCancelForbidden):
+        with pytest.raises(OrderCancelForbiddenError):
             await service.get_quote(user_id=1, req=req)
 
     async def test_get_quote_address_not_found(self) -> None:
-        """존재하지 않는 address_id → AddressNotFound (404)."""
+        """존재하지 않는 address_id → AddressNotFoundError (404)."""
         product = make_product()
         service = _make_service(products=[product], addresses=[])
 
@@ -285,11 +285,11 @@ class TestGetQuote:
             address_id=99,
             shipping_method=ShipmentMethod.PARCEL,
         )
-        with pytest.raises(AddressNotFound):
+        with pytest.raises(AddressNotFoundError):
             await service.get_quote(user_id=1, req=req)
 
     async def test_get_quote_address_not_owned_returns_403(self) -> None:
-        """address 존재하지만 다른 user 소유 → PermissionDenied (403)."""
+        """address 존재하지만 다른 user 소유 → PermissionDeniedError (403)."""
         product = make_product()
         address = make_address(user_id=99)
         service = _make_service(products=[product], addresses=[address])
@@ -299,11 +299,11 @@ class TestGetQuote:
             address_id=1,
             shipping_method=ShipmentMethod.PARCEL,
         )
-        with pytest.raises(PermissionDenied):
+        with pytest.raises(PermissionDeniedError):
             await service.get_quote(user_id=1, req=req)
 
     async def test_get_quote_inactive_product_raises_product_unavailable(self) -> None:
-        """견적 시 INACTIVE 상품 → ProductUnavailable (400)."""
+        """견적 시 INACTIVE 상품 → ProductUnavailableError (400)."""
         product = make_product(status=ProductStatus.INACTIVE)
         address = make_address()
         service = _make_service(products=[product], addresses=[address])
@@ -313,7 +313,7 @@ class TestGetQuote:
             address_id=1,
             shipping_method=ShipmentMethod.PARCEL,
         )
-        with pytest.raises(ProductUnavailable):
+        with pytest.raises(ProductUnavailableError):
             await service.get_quote(user_id=1, req=req)
 
 
@@ -322,7 +322,7 @@ class TestGetQuote:
 
 class TestCreateOrder:
     async def test_create_order_requires_identity(self) -> None:
-        """identity_verified=False → IdentityRequired."""
+        """identity_verified=False → IdentityRequiredError."""
         product = make_product()
         address = make_address()
         service = _make_service(products=[product], addresses=[address])
@@ -332,11 +332,11 @@ class TestCreateOrder:
             address_id=1,
             shipping_method=ShipmentMethod.PARCEL,
         )
-        with pytest.raises(IdentityRequired):
+        with pytest.raises(IdentityRequiredError):
             await service.create_order(user_id=1, req=req, identity_verified=False)
 
     async def test_create_order_out_of_stock(self) -> None:
-        """stock=0 → OutOfStock."""
+        """stock=0 → OutOfStockError."""
         product = make_product(stock=0)
         address = make_address()
         service = _make_service(products=[product], addresses=[address])
@@ -346,7 +346,7 @@ class TestCreateOrder:
             address_id=1,
             shipping_method=ShipmentMethod.PARCEL,
         )
-        with pytest.raises(OutOfStock):
+        with pytest.raises(OutOfStockError):
             await service.create_order(user_id=1, req=req, identity_verified=True)
 
     async def test_create_order_success(self) -> None:
@@ -391,7 +391,7 @@ class TestCreateOrder:
         assert repo._products[1].stock == 2
 
     async def test_create_order_address_not_found(self) -> None:
-        """존재하지 않는 address_id → AddressNotFound (404)."""
+        """존재하지 않는 address_id → AddressNotFoundError (404)."""
         product = make_product()
         service = _make_service(products=[product], addresses=[])
 
@@ -400,11 +400,11 @@ class TestCreateOrder:
             address_id=99,
             shipping_method=ShipmentMethod.PARCEL,
         )
-        with pytest.raises(AddressNotFound):
+        with pytest.raises(AddressNotFoundError):
             await service.create_order(user_id=1, req=req, identity_verified=True)
 
     async def test_create_order_address_not_owned_returns_403(self) -> None:
-        """address 존재하지만 다른 user_id 소유 → PermissionDenied (403)."""
+        """address 존재하지만 다른 user_id 소유 → PermissionDeniedError (403)."""
         product = make_product()
         address = make_address(user_id=99)  # 다른 사용자 소유
         service = _make_service(products=[product], addresses=[address])
@@ -414,11 +414,11 @@ class TestCreateOrder:
             address_id=1,
             shipping_method=ShipmentMethod.PARCEL,
         )
-        with pytest.raises(PermissionDenied):
+        with pytest.raises(PermissionDeniedError):
             await service.create_order(user_id=1, req=req, identity_verified=True)
 
     async def test_create_order_inactive_product_raises_product_unavailable(self) -> None:
-        """INACTIVE 상품 → ProductUnavailable (400)."""
+        """INACTIVE 상품 → ProductUnavailableError (400)."""
         product = make_product(status=ProductStatus.INACTIVE)
         address = make_address()
         service = _make_service(products=[product], addresses=[address])
@@ -428,11 +428,11 @@ class TestCreateOrder:
             address_id=1,
             shipping_method=ShipmentMethod.PARCEL,
         )
-        with pytest.raises(ProductUnavailable):
+        with pytest.raises(ProductUnavailableError):
             await service.create_order(user_id=1, req=req, identity_verified=True)
 
     async def test_create_order_sold_out_product_raises_product_unavailable(self) -> None:
-        """SOLD_OUT 상품 → ProductUnavailable (400)."""
+        """SOLD_OUT 상품 → ProductUnavailableError (400)."""
         product = make_product(status=ProductStatus.SOLD_OUT, stock=0)
         address = make_address()
         service = _make_service(products=[product], addresses=[address])
@@ -442,7 +442,7 @@ class TestCreateOrder:
             address_id=1,
             shipping_method=ShipmentMethod.PARCEL,
         )
-        with pytest.raises(ProductUnavailable):
+        with pytest.raises(ProductUnavailableError):
             await service.create_order(user_id=1, req=req, identity_verified=True)
 
     async def test_create_order_stores_brand_snapshot(self) -> None:
@@ -490,7 +490,7 @@ class TestCreateOrder:
         assert result is not None
 
     async def test_create_order_stock_insufficient_raises(self) -> None:
-        """요청 수량 > 재고 → OutOfStock."""
+        """요청 수량 > 재고 → OutOfStockError."""
         product = make_product(stock=1)
         address = make_address()
         service = _make_service(products=[product], addresses=[address])
@@ -500,7 +500,7 @@ class TestCreateOrder:
             address_id=1,
             shipping_method=ShipmentMethod.PARCEL,
         )
-        with pytest.raises(OutOfStock):
+        with pytest.raises(OutOfStockError):
             await service.create_order(user_id=1, req=req, identity_verified=True)
 
 
@@ -537,35 +537,35 @@ class TestCancelOrder:
         assert result.status == OrderStatus.CANCELLED
 
     async def test_cancel_order_forbidden(self) -> None:
-        """SHIPPING 상태 → OrderCancelForbidden."""
+        """SHIPPING 상태 → OrderCancelForbiddenError."""
         order = make_order(status=OrderStatus.SHIPPING)
         service = _make_service(orders=[order])
 
-        with pytest.raises(OrderCancelForbidden):
+        with pytest.raises(OrderCancelForbiddenError):
             await service.cancel_order(user_id=1, order_number=order.order_number)
 
     async def test_cancel_order_delivered_forbidden(self) -> None:
-        """DELIVERED 상태 → OrderCancelForbidden."""
+        """DELIVERED 상태 → OrderCancelForbiddenError."""
         order = make_order(status=OrderStatus.DELIVERED)
         service = _make_service(orders=[order])
 
-        with pytest.raises(OrderCancelForbidden):
+        with pytest.raises(OrderCancelForbiddenError):
             await service.cancel_order(user_id=1, order_number=order.order_number)
 
     async def test_cancel_order_cancelled_forbidden(self) -> None:
-        """이미 CANCELLED 상태 → OrderCancelForbidden."""
+        """이미 CANCELLED 상태 → OrderCancelForbiddenError."""
         order = make_order(status=OrderStatus.CANCELLED)
         service = _make_service(orders=[order])
 
-        with pytest.raises(OrderCancelForbidden):
+        with pytest.raises(OrderCancelForbiddenError):
             await service.cancel_order(user_id=1, order_number=order.order_number)
 
     async def test_cancel_order_refunded_forbidden(self) -> None:
-        """REFUNDED 상태 → OrderCancelForbidden."""
+        """REFUNDED 상태 → OrderCancelForbiddenError."""
         order = make_order(status=OrderStatus.REFUNDED)
         service = _make_service(orders=[order])
 
-        with pytest.raises(OrderCancelForbidden):
+        with pytest.raises(OrderCancelForbiddenError):
             await service.cancel_order(user_id=1, order_number=order.order_number)
 
 
@@ -618,18 +618,18 @@ class TestListOrders:
 
 class TestGetOrder:
     async def test_get_order_not_found(self) -> None:
-        """없는 order_number → OrderNotFound."""
+        """없는 order_number → OrderNotFoundError."""
         service = _make_service(orders=[])
 
-        with pytest.raises(OrderNotFound):
+        with pytest.raises(OrderNotFoundError):
             await service.get_order(user_id=1, order_number="RK-NOTEXIST")
 
     async def test_get_order_wrong_owner(self) -> None:
-        """타인의 주문 조회 → OrderNotFound (정보 노출 방지)."""
+        """타인의 주문 조회 → OrderNotFoundError (정보 노출 방지)."""
         order = make_order(user_id=2)
         service = _make_service(orders=[order])
 
-        with pytest.raises(OrderNotFound):
+        with pytest.raises(OrderNotFoundError):
             await service.get_order(user_id=1, order_number=order.order_number)
 
     async def test_get_order_success(self) -> None:
@@ -666,27 +666,27 @@ class TestGetShipment:
         assert result.tracking_number == "123456789"
 
     async def test_get_shipment_order_not_found(self) -> None:
-        """없는 order_number → OrderNotFound."""
+        """없는 order_number → OrderNotFoundError."""
         service = _make_service(orders=[])
 
-        with pytest.raises(OrderNotFound):
+        with pytest.raises(OrderNotFoundError):
             await service.get_shipment(user_id=1, order_number="RK-NOTEXIST")
 
     async def test_get_shipment_wrong_owner(self) -> None:
-        """타인 주문 조회 → OrderNotFound."""
+        """타인 주문 조회 → OrderNotFoundError."""
         order = make_order(order_id=1, user_id=2)
         shipment = make_shipment(order_id=1)
         service = _make_service(orders=[order], shipments=[shipment])
 
-        with pytest.raises(OrderNotFound):
+        with pytest.raises(OrderNotFoundError):
             await service.get_shipment(user_id=1, order_number=order.order_number)
 
     async def test_get_shipment_not_created_yet(self) -> None:
-        """주문은 있지만 배송 정보 미생성 → ShipmentNotFound."""
+        """주문은 있지만 배송 정보 미생성 → ShipmentNotFoundError."""
         order = make_order(order_id=1, user_id=1)
         service = _make_service(orders=[order], shipments=[])
 
-        with pytest.raises(ShipmentNotFound):
+        with pytest.raises(ShipmentNotFoundError):
             await service.get_shipment(user_id=1, order_number=order.order_number)
 
 
@@ -705,7 +705,7 @@ class TestRequestRefund:
         assert result.cancelled_at is not None
 
     async def test_request_refund_non_delivered_forbidden(self) -> None:
-        """DELIVERED 가 아닌 상태 → RefundForbidden."""
+        """DELIVERED 가 아닌 상태 → RefundForbiddenError."""
         for bad_status in (
             OrderStatus.PENDING,
             OrderStatus.PAID,
@@ -717,20 +717,20 @@ class TestRequestRefund:
             order.order_number = f"RK-TEST{bad_status.value}"
             service = _make_service(orders=[order])
 
-            with pytest.raises(RefundForbidden):
+            with pytest.raises(RefundForbiddenError):
                 await service.request_refund(user_id=1, order_number=order.order_number)
 
     async def test_request_refund_order_not_found(self) -> None:
-        """없는 order_number → OrderNotFound."""
+        """없는 order_number → OrderNotFoundError."""
         service = _make_service(orders=[])
 
-        with pytest.raises(OrderNotFound):
+        with pytest.raises(OrderNotFoundError):
             await service.request_refund(user_id=1, order_number="RK-NOTEXIST")
 
     async def test_request_refund_wrong_owner(self) -> None:
-        """타인 주문 환불 요청 → OrderNotFound."""
+        """타인 주문 환불 요청 → OrderNotFoundError."""
         order = make_order(order_id=1, user_id=2, status=OrderStatus.DELIVERED)
         service = _make_service(orders=[order])
 
-        with pytest.raises(OrderNotFound):
+        with pytest.raises(OrderNotFoundError):
             await service.request_refund(user_id=1, order_number=order.order_number)

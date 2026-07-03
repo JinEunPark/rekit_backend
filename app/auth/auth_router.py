@@ -37,7 +37,7 @@ from app.auth.auth_service import AuthService
 from app.auth.models import SocialProvider
 from app.core.config import settings
 from app.core.deps import get_auth_service, get_oauth_provider
-from app.core.exceptions import TokenExpired
+from app.core.exceptions import TokenExpiredError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -81,7 +81,7 @@ async def send_email_verification(
     """6자리 인증 코드를 해당 이메일로 발송한다. rate-limit: 1분에 1회.
 
     Errors:
-    - VerificationRateLimited (429): 60초 이내 재요청.
+    - VerificationRateLimitedError (429): 60초 이내 재요청.
     """
     await service.send_email_verification_code(body.email, background_tasks)
 
@@ -102,7 +102,7 @@ async def verify_email_code(
     반환된 verifiedToken 을 회원가입 요청의 verifiedToken 필드로 사용한다.
 
     Errors:
-    - InvalidVerificationCode (400): 코드 불일치 또는 만료.
+    - InvalidVerificationCodeError (400): 코드 불일치 또는 만료.
     """
     token = await service.verify_email_code(body.email, body.code)
     return VerifyCodeResponse(verified_token=token)
@@ -130,9 +130,9 @@ async def sign_up(
     - refresh_token: HttpOnly 쿠키
 
     Errors:
-    - TokenExpired (401): verifiedToken 만료/위조.
-    - UsernameTaken (409): login_id 중복.
-    - EmailTaken (409): email 중복.
+    - TokenExpiredError (401): verifiedToken 만료/위조.
+    - UsernameTakenError (409): login_id 중복.
+    - EmailTakenError (409): email 중복.
     - VALIDATION_ERROR (422): 입력값 검증 실패.
     """
     _, access, refresh = await service.sign_up(body)
@@ -236,7 +236,7 @@ async def sign_in(
     - access_token: JSON body
     - refresh_token: HttpOnly 쿠키 (Set-Cookie)
 
-    실패 시 service 가 InvalidCredentials 를 raise → exception_handler 가
+    실패 시 service 가 InvalidCredentialsError 를 raise → exception_handler 가
     401 + INVALID_CREDENTIALS 표준 포맷으로 자동 변환.
     """
     access, refresh, must_change = await service.sign_in(
@@ -273,7 +273,7 @@ async def refresh(
     - default=None 이면 쿠키가 없을 때 422 대신 None 으로 들어옴 → 직접 401 처리.
     """
     if refresh_token is None:
-        raise TokenExpired(message="refresh 쿠키가 없습니다.")
+        raise TokenExpiredError(message="refresh 쿠키가 없습니다.")
 
     new_access, new_refresh, must_change = await service.refresh_token(refresh_token)
     _set_refresh_cookie(response, new_refresh, settings.refresh_token_expire_days)
@@ -323,9 +323,9 @@ async def social_callback(
     - 신규: needsSignUp=true + tempToken/email/suggestedName
 
     Errors → exception_handler:
-    - SocialEmailRequired (422): 이메일 동의 누락 — PG 측에서 다시 동의 후 재시도.
-    - SocialProviderNotConfigured (503): 해당 provider 의 .env 설정 누락.
-    - InvalidCredentials (401): 비활성 사용자.
+    - SocialEmailRequiredError (422): 이메일 동의 누락 — PG 측에서 다시 동의 후 재시도.
+    - SocialProviderNotConfiguredError (503): 해당 provider 의 .env 설정 누락.
+    - InvalidCredentialsError (401): 비활성 사용자.
     """
     result = await service.social_login(provider, oauth, body.code, body.state)
 
@@ -371,9 +371,9 @@ async def social_sign_up(
     가능. 사용자는 login_id / 표시이름 / 약관만 입력. 가입 후 즉시 로그인 토큰 응답.
 
     Errors:
-    - UsernameTaken (409) / EmailTaken (409): 입력 login_id 또는 tempToken 의
+    - UsernameTakenError (409) / EmailTakenError (409): 입력 login_id 또는 tempToken 의
       email 이 이미 사용 중.
-    - TokenExpired (401): tempToken 만료/위조.
+    - TokenExpiredError (401): tempToken 만료/위조.
     - 검증 실패 (422): login_id 형식, 약관 미동의.
     """
     _, access, refresh = await service.social_sign_up(

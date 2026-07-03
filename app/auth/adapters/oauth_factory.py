@@ -12,14 +12,14 @@ from app.auth.adapters.naver_oauth import NaverOAuthAdapter
 from app.auth.adapters.ports import OAuthProvider
 from app.auth.models import SocialProvider
 from app.core.config import Settings
-from app.core.exceptions import SocialProviderNotConfigured
+from app.core.exceptions import SocialProviderNotConfiguredError
 
 
 def build_oauth_provider(provider: SocialProvider, settings_obj: Settings) -> OAuthProvider:
     """provider 별 어댑터 생성. config 누락 시 명시적 에러."""
     if provider is SocialProvider.KAKAO:
         if not (settings_obj.kakao_client_id and settings_obj.kakao_redirect_uri):
-            raise SocialProviderNotConfigured(
+            raise SocialProviderNotConfiguredError(
                 message="카카오 OAuth 설정 누락 (KAKAO_CLIENT_ID / KAKAO_REDIRECT_URI)"
             )
         return KakaoOAuthAdapter(
@@ -39,7 +39,7 @@ def build_oauth_provider(provider: SocialProvider, settings_obj: Settings) -> OA
             if not v
         ]
         if missing:
-            raise SocialProviderNotConfigured(
+            raise SocialProviderNotConfiguredError(
                 message=f"네이버 OAuth 설정 누락: {', '.join(missing)}"
             )
         return NaverOAuthAdapter(
@@ -59,7 +59,7 @@ def build_oauth_provider(provider: SocialProvider, settings_obj: Settings) -> OA
             if not v
         ]
         if missing:
-            raise SocialProviderNotConfigured(
+            raise SocialProviderNotConfiguredError(
                 message=f"구글 OAuth 설정 누락: {', '.join(missing)}"
             )
         return GoogleOAuthAdapter(

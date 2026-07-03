@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.address.address_repository import AddressRepository
 from app.address.address_schemas import AddressCreate, AddressUpdate
 from app.address.models import Address
-from app.core.exceptions import AddressLimitExceeded, AddressNotFound
+from app.core.exceptions import AddressLimitExceededError, AddressNotFoundError
 
 MAX_ADDRESSES_PER_USER = 10
 
@@ -20,7 +20,7 @@ class AddressService:
     async def create_address(self, user_id: int, data: AddressCreate) -> Address:
         count = await self._repo.count_by_user_id(user_id)
         if count >= MAX_ADDRESSES_PER_USER:
-            raise AddressLimitExceeded()
+            raise AddressLimitExceededError()
         if data.is_default:
             await self._repo.clear_default(user_id)
         address = Address(user_id=user_id, **data.model_dump())
@@ -31,7 +31,7 @@ class AddressService:
     ) -> Address:
         address = await self._repo.get_by_user_and_id(user_id, address_id)
         if address is None:
-            raise AddressNotFound()
+            raise AddressNotFoundError()
         update_fields = data.model_dump(exclude_unset=True)
         if update_fields.get("is_default"):
             await self._repo.clear_default(user_id)
@@ -42,5 +42,5 @@ class AddressService:
     async def delete_address(self, user_id: int, address_id: int) -> None:
         address = await self._repo.get_by_user_and_id(user_id, address_id)
         if address is None:
-            raise AddressNotFound()
+            raise AddressNotFoundError()
         await self._repo.delete(address)

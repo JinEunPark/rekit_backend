@@ -15,6 +15,7 @@ from typing import cast
 import pytest
 from fastapi import BackgroundTasks
 
+from app.auth.auth_schemas import SignUpRequest
 from app.auth.auth_service import (
     AuthService,
     _bg_apply_temp_password,
@@ -22,12 +23,11 @@ from app.auth.auth_service import (
 )
 from app.common.email import ConsoleEmailSender
 from app.core.exceptions import (
-    EmailTaken,
-    InvalidCredentials,
-    TokenExpired,
-    UsernameTaken,
+    EmailTakenError,
+    InvalidCredentialsError,
+    TokenExpiredError,
+    UsernameTakenError,
 )
-from app.auth.auth_schemas import SignUpRequest
 from app.core.security import (
     create_access_token,
     create_email_verified_token,
@@ -119,24 +119,24 @@ def _sign_up_req(email: str = "new@example.com", **overrides: object) -> SignUpR
 
 
 async def test_sign_in_with_unknown_login_id_raises_invalid_credentials() -> None:
-    """존재하지 않는 아이디 → InvalidCredentials."""
+    """존재하지 않는 아이디 → InvalidCredentialsError."""
     service = _make_service(_FakeAuthRepo())
-    with pytest.raises(InvalidCredentials):
+    with pytest.raises(InvalidCredentialsError):
         await service.sign_in(login_id="nobody", password="any")
 
 
 async def test_sign_in_with_wrong_password_raises_invalid_credentials() -> None:
-    """비밀번호 불일치 → InvalidCredentials (아이디 존재 여부 노출 X)."""
+    """비밀번호 불일치 → InvalidCredentialsError (아이디 존재 여부 노출 X)."""
     user = _make_user(password="correct-pw")
     service = _make_service(_FakeAuthRepo(user=user))
-    with pytest.raises(InvalidCredentials):
+    with pytest.raises(InvalidCredentialsError):
         await service.sign_in(login_id=user.login_id, password="wrong-pw")
 
 
 async def test_sign_in_with_inactive_user_raises_invalid_credentials() -> None:
     user = _make_user(is_active=False)
     service = _make_service(_FakeAuthRepo(user=user))
-    with pytest.raises(InvalidCredentials):
+    with pytest.raises(InvalidCredentialsError):
         await service.sign_in(login_id=user.login_id, password="correct-pw")
 
 
@@ -218,7 +218,7 @@ async def test_sign_up_rejects_duplicate_login_id() -> None:
     existing = _make_user(login_id="taken")
     service = _make_service(_FakeAuthRepo(user=existing))
 
-    with pytest.raises(UsernameTaken):
+    with pytest.raises(UsernameTakenError):
         await service.sign_up(_sign_up_req(loginId="taken"))
 
 
@@ -226,7 +226,7 @@ async def test_sign_up_rejects_duplicate_email() -> None:
     existing = _make_user(login_id="other", email="dup@example.com")
     service = _make_service(_FakeAuthRepo(user=existing))
 
-    with pytest.raises(EmailTaken):
+    with pytest.raises(EmailTakenError):
         await service.sign_up(_sign_up_req(email="dup@example.com"))
 
 
@@ -251,7 +251,7 @@ async def test_refresh_token_with_expired_token_raises_token_expired() -> None:
     user = _make_user()
     service = _make_service(_FakeAuthRepo(user=user))
     expired = create_refresh_token(sub="1", expires_in=timedelta(seconds=-10))
-    with pytest.raises(TokenExpired):
+    with pytest.raises(TokenExpiredError):
         await service.refresh_token(expired)
 
 
@@ -260,14 +260,14 @@ async def test_refresh_token_rejects_access_token() -> None:
     user = _make_user()
     service = _make_service(_FakeAuthRepo(user=user))
     access = create_access_token(sub="1", claims={})
-    with pytest.raises(TokenExpired):
+    with pytest.raises(TokenExpiredError):
         await service.refresh_token(access)
 
 
 async def test_refresh_token_with_unknown_user_raises_invalid_credentials() -> None:
     service = _make_service(_FakeAuthRepo())
     valid = create_refresh_token(sub="999")
-    with pytest.raises(InvalidCredentials):
+    with pytest.raises(InvalidCredentialsError):
         await service.refresh_token(valid)
 
 
@@ -275,7 +275,7 @@ async def test_refresh_token_with_inactive_user_raises_invalid_credentials() -> 
     user = _make_user(is_active=False)
     service = _make_service(_FakeAuthRepo(user=user))
     valid = create_refresh_token(sub="1")
-    with pytest.raises(InvalidCredentials):
+    with pytest.raises(InvalidCredentialsError):
         await service.refresh_token(valid)
 
 

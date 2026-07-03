@@ -5,14 +5,8 @@ from __future__ import annotations
 from fastapi import BackgroundTasks
 
 from app.common.email import EmailSender
-from app.core.exceptions import OrderNotFound, PaymentFailed
+from app.core.exceptions import OrderNotFoundError, PaymentFailedError
 from app.order.models import OrderStatus
-
-_EVENT_PAYMENT_STATUS_CHANGED = "PAYMENT_STATUS_CHANGED"
-_TOSS_DONE = "DONE"
-_TOSS_CANCELED = "CANCELED"
-_TOSS_PARTIAL_CANCELED = "PARTIAL_CANCELED"
-_TOSS_ABORTED = "ABORTED"
 from app.payment.adapters.ports import PaymentGateway, TossConfirmResult
 from app.payment.models import Payment, PaymentStatus, PgProvider
 from app.payment.payment_repository import PaymentRepository
@@ -23,6 +17,12 @@ from app.payment.payment_schemas import (
     PaymentInitResponse,
     TossWebhookPayload,
 )
+
+_EVENT_PAYMENT_STATUS_CHANGED = "PAYMENT_STATUS_CHANGED"
+_TOSS_DONE = "DONE"
+_TOSS_CANCELED = "CANCELED"
+_TOSS_PARTIAL_CANCELED = "PARTIAL_CANCELED"
+_TOSS_ABORTED = "ABORTED"
 
 
 class PaymentService:
@@ -49,16 +49,16 @@ class PaymentService:
         """결제창 열기 전 초기화.
 
         1. order_number 로 주문 조회 + 소유권 확인
-        2. PENDING 상태 확인 (이미 PAID/CANCELLED 이면 PaymentFailed)
+        2. PENDING 상태 확인 (이미 PAID/CANCELLED 이면 PaymentFailedError)
         3. Payment(status=READY) 생성 + save
         4. PaymentInitResponse 반환
         """
         order = await self._repo.get_order_by_number(req.order_number)
         if order is None or order.user_id != user_id:
-            raise OrderNotFound()
+            raise OrderNotFoundError()
 
         if order.status != OrderStatus.PENDING:
-            raise PaymentFailed(f"주문 상태가 PENDING 이 아닙니다: {order.status}")
+            raise PaymentFailedError(f"주문 상태가 PENDING 이 아닙니다: {order.status}")
 
         payment = Payment(
             order_id=order.id,
@@ -88,7 +88,7 @@ class PaymentService:
         """프론트 토스 성공 콜백 후 서버↔PG 최종 검증.
 
         1. order_number(=req.order_id) 로 주문 조회
-        2. READY 상태 Payment 조회 (없으면 PaymentFailed)
+        2. READY 상태 Payment 조회 (없으면 PaymentFailedError)
         3. amount == order.total_amount 검증
         4. gateway.confirm 호출
         5. payment PAID 전환 + order PAID 전환
@@ -96,7 +96,7 @@ class PaymentService:
         """
         order = await self._repo.get_order_by_number(req.order_id)
         if order is None:
-            raise OrderNotFound()
+            raise OrderNotFoundError()
 
         # READY 상태 결제 찾기
         payments = await self._repo.get_by_order_id(order.id)
@@ -104,10 +104,10 @@ class PaymentService:
             (p for p in payments if p.status == PaymentStatus.READY), None
         )
         if ready_payment is None:
-            raise PaymentFailed("결제 준비 중인 결제 건이 없습니다.")
+            raise PaymentFailedError("결제 준비 중인 결제 건이 없습니다.")
 
         if req.amount != order.total_amount:
-            raise PaymentFailed(
+            raise PaymentFailedError(
                 f"결제 금액 불일치: 요청 {req.amount}원 ≠ 주문 {order.total_amount}원"
             )
 
@@ -152,7 +152,7 @@ class PaymentService:
         eventType "PAYMENT_STATUS_CHANGED" 만 처리.
         data.status 에 따라 PAID/CANCELLED/FAILED 전환.
         """
-        if payload.eventType != _EVENT_PAYMENT_STATUS_CHANGED:
+        if payload.event_type != _EVENT_PAYMENT_STATUS_CHANGED:
             return
 
         data = payload.data

@@ -13,7 +13,7 @@ import hmac
 import httpx
 
 from app.core.config import settings
-from app.core.exceptions import PaymentFailed
+from app.core.exceptions import PaymentFailedError
 from app.payment.adapters.ports import TossConfirmResult
 
 _TOSS_CONFIRM_URL = "https://api.tosspayments.com/v1/payments/confirm"
@@ -31,7 +31,7 @@ class TossPaymentGateway:
     ) -> TossConfirmResult:
         secret_key = getattr(settings, "toss_secret_key", "") or ""
         if not secret_key:
-            raise PaymentFailed("Toss secret key가 설정되지 않았습니다.")
+            raise PaymentFailedError("Toss secret key가 설정되지 않았습니다.")
 
         encoded = base64.b64encode(f"{secret_key}:".encode()).decode()
         headers = {
@@ -47,7 +47,7 @@ class TossPaymentGateway:
             resp = await client.post(_TOSS_CONFIRM_URL, json=payload, headers=headers)
 
         if resp.status_code != 200:
-            raise PaymentFailed(f"Toss confirm 실패: {resp.status_code}")
+            raise PaymentFailedError(f"Toss confirm 실패: {resp.status_code}")
 
         data = resp.json()
         card = data.get("card") or {}

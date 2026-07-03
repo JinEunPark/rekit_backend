@@ -20,6 +20,7 @@ from app.catalog.admin_catalog_schemas import (
     AdminImageItem,
     AdminProductCreate,
     AdminProductImagesReplace,
+    AdminProductImageUpdate,
     AdminProductListParams,
     AdminProductUpdate,
 )
@@ -30,7 +31,7 @@ from app.catalog.models import (
     ProductImage,
     ProductStatus,
 )
-from app.core.exceptions import ProductNotFound
+from app.core.exceptions import ProductImageNotFoundError, ProductNotFoundError
 
 # ── 팩토리 ──────────────────────────────────────────────────
 
@@ -285,10 +286,10 @@ async def test_get_product_success() -> None:
 
 
 async def test_get_product_not_found() -> None:
-    """존재하지 않는 ID → ProductNotFound 예외."""
+    """존재하지 않는 ID → ProductNotFoundError 예외."""
     service, _ = _make_service([])
 
-    with pytest.raises(ProductNotFound):
+    with pytest.raises(ProductNotFoundError):
         await service.get_product(999)
 
 
@@ -308,10 +309,10 @@ async def test_update_product_partial() -> None:
 
 
 async def test_update_product_not_found() -> None:
-    """존재하지 않는 ID 업데이트 → ProductNotFound 예외."""
+    """존재하지 않는 ID 업데이트 → ProductNotFoundError 예외."""
     service, _ = _make_service([])
 
-    with pytest.raises(ProductNotFound):
+    with pytest.raises(ProductNotFoundError):
         await service.update_product(999, AdminProductUpdate(title="제목"))
 
 
@@ -332,10 +333,10 @@ async def test_delete_product_soft_delete() -> None:
 
 
 async def test_delete_product_not_found() -> None:
-    """존재하지 않는 ID 삭제 → ProductNotFound 예외."""
+    """존재하지 않는 ID 삭제 → ProductNotFoundError 예외."""
     service, _ = _make_service([])
 
-    with pytest.raises(ProductNotFound):
+    with pytest.raises(ProductNotFoundError):
         await service.delete_product(999)
 
 
@@ -428,8 +429,77 @@ async def test_replace_images_empty_clears_all() -> None:
 
 
 async def test_replace_images_product_not_found() -> None:
-    """존재하지 않는 상품 ID → ProductNotFound 예외."""
+    """존재하지 않는 상품 ID → ProductNotFoundError 예외."""
     service, _ = _make_service([])
 
-    with pytest.raises(ProductNotFound):
+    with pytest.raises(ProductNotFoundError):
         await service.replace_images(999, AdminProductImagesReplace(images=[]))
+
+
+# ── update_image ─────────────────────────────────────────────
+
+
+async def test_update_image_product_not_found() -> None:
+    """존재하지 않는 상품 ID → ProductNotFoundError 예외."""
+    service, _ = _make_service([])
+
+    with pytest.raises(ProductNotFoundError):
+        await service.update_image(999, 1, AdminProductImageUpdate(url="https://cdn.example.com/new.jpg"))
+
+
+async def test_update_image_not_found() -> None:
+    """상품은 있지만 image_id 가 해당 상품 소유가 아니거나 없음 → ProductImageNotFoundError 예외."""
+    product = make_product(product_id=1, images=[make_image(image_id=1)])
+    service, _ = _make_service([product])
+
+    with pytest.raises(ProductImageNotFoundError):
+        await service.update_image(1, 999, AdminProductImageUpdate(url="https://cdn.example.com/new.jpg"))
+
+
+async def test_update_image_replaces_url_only() -> None:
+    """url 만 전송 → url 만 변경되고 label 은 유지."""
+    product = make_product(
+        product_id=1,
+        images=[make_image(image_id=1, url="https://cdn.example.com/old.jpg", label="FRONT")],
+    )
+    service, _ = _make_service([product])
+
+    result = await service.update_image(
+        1, 1, AdminProductImageUpdate(url="https://cdn.example.com/new.jpg")
+    )
+
+    assert result.images[0].url == "https://cdn.example.com/new.jpg"
+    assert result.images[0].label == "FRONT"
+
+
+async def test_update_image_replaces_label_only() -> None:
+    """label 만 전송 → label 만 변경되고 url 은 유지."""
+    product = make_product(
+        product_id=1,
+        images=[make_image(image_id=1, url="https://cdn.example.com/front.jpg", label="FRONT")],
+    )
+    service, _ = _make_service([product])
+
+    result = await service.update_image(1, 1, AdminProductImageUpdate(label="SIDE"))
+
+    assert result.images[0].url == "https://cdn.example.com/front.jpg"
+    assert result.images[0].label == "SIDE"
+
+
+async def test_update_image_does_not_affect_other_images() -> None:
+    """대상 이미지만 변경되고 같은 상품의 다른 이미지는 그대로."""
+    product = make_product(
+        product_id=1,
+        images=[
+            make_image(image_id=1, url="https://cdn.example.com/a.jpg", sort_order=0),
+            make_image(image_id=2, url="https://cdn.example.com/b.jpg", sort_order=1),
+        ],
+    )
+    service, _ = _make_service([product])
+
+    result = await service.update_image(
+        1, 2, AdminProductImageUpdate(url="https://cdn.example.com/b-new.jpg")
+    )
+
+    assert result.images[0].url == "https://cdn.example.com/a.jpg"
+    assert result.images[1].url == "https://cdn.example.com/b-new.jpg"

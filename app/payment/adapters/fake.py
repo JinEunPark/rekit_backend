@@ -5,7 +5,7 @@ USE_FAKE_PG=true 환경변수로 활성화. 운영 환경에서는 절대 사용
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.payment.adapters.ports import PaymentGateway, TossConfirmResult
 
@@ -23,7 +23,7 @@ class FakePaymentGateway:
         return TossConfirmResult(
             method="CARD",
             pg_tid=payment_key,
-            paid_at=datetime.now(timezone.utc),
+            paid_at=datetime.now(UTC),
             card_company="개발카드",
             card_last4="0000",
             installment_months=0,
@@ -35,4 +35,4 @@ class FakePaymentGateway:
 
 
 # Protocol 정합성 체크 (import 시점에 검증)
-_: PaymentGateway = FakePaymentGateway()  # type: ignore[assignment]
+_: PaymentGateway = FakePaymentGateway()

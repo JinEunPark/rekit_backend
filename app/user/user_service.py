@@ -16,7 +16,7 @@ import secrets
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from app.core.exceptions import InvalidCredentials, OtpInvalid, OtpRateLimited
+from app.core.exceptions import InvalidCredentialsError, OtpInvalidError, OtpRateLimitedError
 from app.core.security import hash_password, verify_password
 from app.user.models import User, UserStatus
 from app.user.user_repository import UserRepository
@@ -54,7 +54,7 @@ class UserService:
 
     def _assert_password(self, raw: str, hashed: str) -> None:
         if not verify_password(raw, hashed):
-            raise InvalidCredentials()
+            raise InvalidCredentialsError()
 
     async def withdraw(self, *, user: User, password: str) -> None:
         """비밀번호 확인 후 PII 전체 익명화 + 소셜 계정 삭제.
@@ -82,7 +82,7 @@ class UserService:
         """6자리 OTP 를 생성해 Redis 에 저장하고 SMS 발송. rate-limit: 60초.
 
         Raises:
-            OtpRateLimited (429): 60초 이내 재요청.
+            OtpRateLimitedError (429): 60초 이내 재요청.
         """
         assert self._redis is not None and self._sms_sender is not None
 
@@ -90,7 +90,7 @@ class UserService:
             _PHONE_OTP_RATE_KEY.format(phone), "1", nx=True, ex=_PHONE_OTP_RATE_TTL
         )
         if locked is None:
-            raise OtpRateLimited()
+            raise OtpRateLimitedError()
 
         code = "".join(secrets.choice("0123456789") for _ in range(6))
         await self._redis.set(_PHONE_OTP_KEY.format(phone), code, ex=_PHONE_OTP_TTL)
@@ -100,13 +100,13 @@ class UserService:
         """OTP 검증 후 phone / phone_verified_at 업데이트.
 
         Raises:
-            OtpInvalid (422): 코드 불일치 또는 만료.
+            OtpInvalidError (422): 코드 불일치 또는 만료.
         """
         assert self._redis is not None
 
         stored = await self._redis.get(_PHONE_OTP_KEY.format(phone))
         if stored != code:
-            raise OtpInvalid()
+            raise OtpInvalidError()
 
         await self._redis.delete(_PHONE_OTP_KEY.format(phone))
         user.phone = phone
@@ -122,7 +122,7 @@ class UserService:
         """현재 비번 검증 후 새 비번으로 갱신. 임시 비번 강제 변경도 이 메서드로.
 
         Raises:
-            InvalidCredentials (401): 현재 비번이 일치하지 않을 때.
+            InvalidCredentialsError (401): 현재 비번이 일치하지 않을 때.
 
         Side effects:
             - user.password_hash 갱신 (bcrypt re-hash)

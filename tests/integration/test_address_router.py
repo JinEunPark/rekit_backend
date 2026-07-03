@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from app.address.address_schemas import AddressCreate, AddressUpdate
 from app.address.models import Address
 from app.core.deps import get_active_user, get_address_service
-from app.core.exceptions import AddressLimitExceeded, AddressNotFound
+from app.core.exceptions import AddressLimitExceededError, AddressNotFoundError
 from app.main import app
 from tests.conftest import make_user
 
@@ -43,7 +43,7 @@ class _FakeService:
 
     async def create_address(self, user_id: int, data: AddressCreate) -> Address:
         if len(self._addresses) >= 10:
-            raise AddressLimitExceeded()
+            raise AddressLimitExceededError()
         addr = _make_addr(len(self._addresses) + 1, is_default=data.is_default)
         self._addresses.append(addr)
         return addr
@@ -52,14 +52,14 @@ class _FakeService:
         for addr in self._addresses:
             if addr.id == address_id:
                 return addr
-        raise AddressNotFound()
+        raise AddressNotFoundError()
 
     async def delete_address(self, user_id: int, address_id: int) -> None:
         for addr in self._addresses:
             if addr.id == address_id:
                 self._addresses.remove(addr)
                 return
-        raise AddressNotFound()
+        raise AddressNotFoundError()
 
 
 _FAKE_USER = make_user()

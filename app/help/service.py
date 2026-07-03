@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from app.common.email.ports import EmailSender
 from app.common.email.templates import render_contact_confirm_email, render_contact_notify_email
 from app.core.config import settings
-from app.core.exceptions import ContactNotFound, FaqNotFound, NoticeNotFound
+from app.core.exceptions import ContactNotFoundError, FaqNotFoundError, NoticeNotFoundError
 from app.core.pagination import build_page_meta
 from app.help.models import Contact, ContactStatus, Faq, Notice
 from app.help.repository import HelpRepository
@@ -53,7 +53,7 @@ class HelpService:
     async def get_notice(self, notice_id: int) -> NoticeDetail:
         notice = await self._repo.get_notice(notice_id)
         if notice is None or not notice.is_published:
-            raise NoticeNotFound()
+            raise NoticeNotFoundError()
         return NoticeDetail.model_validate(notice)
 
     # ── FAQ ──────────────────────────────────────────────────────────
@@ -83,7 +83,10 @@ class HelpService:
             self._email_sender.send(
                 to=req.email,
                 subject="[rekit] 문의가 접수되었습니다",
-                body=f"안녕하세요 {req.name}님, 문의가 접수되었습니다. 영업일 기준 1~2일 내 답변드리겠습니다.",
+                body=(
+                    f"안녕하세요 {req.name}님, 문의가 접수되었습니다. "
+                    "영업일 기준 1~2일 내 답변드리겠습니다."
+                ),
                 html_body=render_contact_confirm_email(name=req.name, title=req.title),
             )
         ]
@@ -93,7 +96,10 @@ class HelpService:
                 self._email_sender.send(
                     to=admin_email,
                     subject=f"[rekit 문의] {req.title}",
-                    body=f"문의자: {req.name} ({req.email})\n제목: {req.title}\n내용: {req.content}",
+                    body=(
+                        f"문의자: {req.name} ({req.email})\n"
+                        f"제목: {req.title}\n내용: {req.content}"
+                    ),
                     html_body=render_contact_notify_email(
                         name=req.name,
                         email=req.email,
@@ -134,7 +140,7 @@ class AdminHelpService:
     async def update_notice(self, notice_id: int, body: AdminNoticeUpdate) -> AdminNoticeResponse:
         notice = await self._repo.get_notice(notice_id)
         if notice is None:
-            raise NoticeNotFound()
+            raise NoticeNotFoundError()
         for k, v in body.model_dump(exclude_unset=True).items():
             setattr(notice, k, v)
         await self._repo.save_notice(notice)
@@ -143,7 +149,7 @@ class AdminHelpService:
     async def delete_notice(self, notice_id: int) -> None:
         notice = await self._repo.get_notice(notice_id)
         if notice is None:
-            raise NoticeNotFound()
+            raise NoticeNotFoundError()
         await self._repo.delete_notice(notice)
 
     # ── FAQ ──────────────────────────────────────────────────────────
@@ -171,7 +177,7 @@ class AdminHelpService:
     async def update_faq(self, faq_id: int, body: AdminFaqUpdate) -> AdminFaqResponse:
         faq = await self._repo.get_faq(faq_id)
         if faq is None:
-            raise FaqNotFound()
+            raise FaqNotFoundError()
         for k, v in body.model_dump(exclude_unset=True).items():
             setattr(faq, k, v)
         await self._repo.save_faq(faq)
@@ -180,7 +186,7 @@ class AdminHelpService:
     async def delete_faq(self, faq_id: int) -> None:
         faq = await self._repo.get_faq(faq_id)
         if faq is None:
-            raise FaqNotFound()
+            raise FaqNotFoundError()
         await self._repo.delete_faq(faq)
 
     # ── 문의 관리 ────────────────────────────────────────────────────
@@ -197,7 +203,7 @@ class AdminHelpService:
     async def get_contact(self, contact_id: int) -> AdminContactDetail:
         contact = await self._repo.get_contact(contact_id)
         if contact is None:
-            raise ContactNotFound()
+            raise ContactNotFoundError()
         return AdminContactDetail.model_validate(contact)
 
     async def update_contact_status(
@@ -205,7 +211,7 @@ class AdminHelpService:
     ) -> AdminContactDetail:
         contact = await self._repo.get_contact(contact_id)
         if contact is None:
-            raise ContactNotFound()
+            raise ContactNotFoundError()
         contact.status = body.status
         if body.status == ContactStatus.ANSWERED:
             contact.answered_at = datetime.now(UTC)

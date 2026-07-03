@@ -12,7 +12,7 @@ import pytest
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.core.deps import get_current_user
-from app.core.exceptions import AccountInactive, TokenExpired
+from app.core.exceptions import AccountInactiveError, TokenExpiredError
 from app.core.security import create_access_token
 from app.user.models import User, UserRole
 
@@ -69,7 +69,7 @@ async def test_get_current_user_raises_token_expired_when_user_not_found() -> No
     token = create_access_token(sub="99", claims={"role": "USER"})
 
     # Act / Assert
-    with pytest.raises(TokenExpired):
+    with pytest.raises(TokenExpiredError):
         await get_current_user(credentials=_bearer(token), repo=repo)  # type: ignore[arg-type]
 
 
@@ -82,7 +82,7 @@ async def test_get_current_user_raises_account_inactive_for_disabled_user() -> N
     token = create_access_token(sub="7", claims={"role": "USER"})
 
     # Act / Assert
-    with pytest.raises(AccountInactive):
+    with pytest.raises(AccountInactiveError):
         await get_current_user(credentials=_bearer(token), repo=repo)  # type: ignore[arg-type]
 
 
@@ -97,7 +97,7 @@ async def test_get_current_user_rejects_refresh_token() -> None:
     refresh = create_refresh_token(sub="1")
 
     # Act / Assert
-    with pytest.raises(TokenExpired):
+    with pytest.raises(TokenExpiredError):
         await get_current_user(credentials=_bearer(refresh), repo=repo)  # type: ignore[arg-type]
 
 
@@ -105,7 +105,7 @@ def test_account_inactive_is_403_with_proper_code() -> None:
     """예외 클래스 자체 검증."""
     from fastapi import status
 
-    exc = AccountInactive()
+    exc = AccountInactiveError()
     assert exc.code == "ACCOUNT_INACTIVE"
     assert exc.http_status == status.HTTP_403_FORBIDDEN
     assert isinstance(exc.message, str) and exc.message

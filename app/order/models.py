@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from app.user.models import User
 
 
-class OrderStatus(str, enum.Enum):
+class OrderStatus(enum.StrEnum):
     """주문 상태 흐름:
 
     PENDING → PAID → PREPARING → SHIPPING → DELIVERED

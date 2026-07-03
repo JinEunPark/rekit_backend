@@ -1,7 +1,7 @@
 """get_active_user 인증 가드 단위 테스트.
 
 get_current_user 결과 + must_change_password=False 검증.
-- True 면 PasswordChangeRequired (403, 임시 비번 발급 직후 사용자)
+- True 면 PasswordChangeRequiredError (403, 임시 비번 발급 직후 사용자)
 - False 면 user 그대로 반환
 
 비번 변경 endpoint (POST /users/me/password) 만 get_current_user 를 직접 사용.
@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.core.deps import get_active_user
-from app.core.exceptions import PasswordChangeRequired
+from app.core.exceptions import PasswordChangeRequiredError
 from app.user.models import User, UserRole
 
 
@@ -54,7 +54,7 @@ async def test_get_active_user_raises_when_must_change_password_true() -> None:
     user = _make_user(must_change=True)
 
     # Act / Assert
-    with pytest.raises(PasswordChangeRequired):
+    with pytest.raises(PasswordChangeRequiredError):
         await get_active_user(user=user)
 
 
@@ -62,7 +62,7 @@ def test_password_change_required_is_403_with_proper_code() -> None:
     """예외 클래스 메타 검증."""
     from fastapi import status
 
-    exc = PasswordChangeRequired()
+    exc = PasswordChangeRequiredError()
     assert exc.code == "PASSWORD_CHANGE_REQUIRED"
     assert exc.http_status == status.HTTP_403_FORBIDDEN
     assert isinstance(exc.message, str) and exc.message

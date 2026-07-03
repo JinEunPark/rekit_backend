@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from app.order.models import Order
 
 
-class ShipmentMethod(str, enum.Enum):
+class ShipmentMethod(enum.StrEnum):
     """배송 방식. 무게/사이즈/지역에 따라 다르게 선택된다."""
 
     PARCEL = "PARCEL"  # 일반 택배 (소형 가전: 전자레인지/청소기 등)
@@ -19,7 +19,7 @@ class ShipmentMethod(str, enum.Enum):
     DIRECT = "DIRECT"  # 직접 배송 (서울/경기 한정, 철거 차량으로 운반)
 
 
-class ShipmentStatus(str, enum.Enum):
+class ShipmentStatus(enum.StrEnum):
     """배송 상태. 송장 입력 시 IN_TRANSIT 자동 전환, 추적 API 가 DELIVERED 갱신."""
 
     PREPARING = "PREPARING"  # 송장 미입력

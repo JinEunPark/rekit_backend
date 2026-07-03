@@ -12,7 +12,7 @@ import pytest
 from app.address.address_schemas import AddressCreate, AddressUpdate
 from app.address.address_service import MAX_ADDRESSES_PER_USER, AddressService
 from app.address.models import Address
-from app.core.exceptions import AddressLimitExceeded, AddressNotFound
+from app.core.exceptions import AddressLimitExceededError, AddressNotFoundError
 
 # ── 테스트 헬퍼 ───────────────────────────────────────
 
@@ -113,7 +113,7 @@ class TestCreateAddress:
     async def test_create_at_limit_raises_address_limit_exceeded(self) -> None:
         service = AddressService(_make_repo(count=MAX_ADDRESSES_PER_USER))
 
-        with pytest.raises(AddressLimitExceeded):
+        with pytest.raises(AddressLimitExceededError):
             await service.create_address(1, _create_data())
 
     @pytest.mark.asyncio
@@ -133,7 +133,7 @@ class TestUpdateAddress:
     async def test_update_not_found_raises_address_not_found(self) -> None:
         service = AddressService(_make_repo(found=None))
 
-        with pytest.raises(AddressNotFound):
+        with pytest.raises(AddressNotFoundError):
             await service.update_address(1, 99, AddressUpdate())
 
     @pytest.mark.asyncio
@@ -187,7 +187,7 @@ class TestDeleteAddress:
     async def test_delete_not_found_raises_address_not_found(self) -> None:
         service = AddressService(_make_repo(found=None))
 
-        with pytest.raises(AddressNotFound):
+        with pytest.raises(AddressNotFoundError):
             await service.delete_address(1, 99)
 
     @pytest.mark.asyncio

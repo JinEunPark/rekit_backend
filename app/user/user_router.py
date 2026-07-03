@@ -89,7 +89,7 @@ async def send_phone_verification(
     """6자리 OTP를 SMS로 발송. 60초 이내 재요청 시 429.
 
     Errors:
-    - OtpRateLimited (429): 60초 이내 재요청.
+    - OtpRateLimitedError (429): 60초 이내 재요청.
     """
     await service.send_phone_verification(phone=body.phone)
 
@@ -107,7 +107,7 @@ async def verify_phone(
     """OTP 검증 후 user.phone / phone_verified_at 업데이트.
 
     Errors:
-    - OtpInvalid (422): 코드 불일치 또는 만료(5분).
+    - OtpInvalidError (422): 코드 불일치 또는 만료(5분).
     """
     await service.verify_phone(user=user, phone=body.phone, code=body.code)
 
@@ -128,7 +128,7 @@ async def change_password(
     여도 이 endpoint 만은 호출 가능 — 변경 후 자동으로 False 로 풀린다 (Phase E 가드).
 
     Errors → exception_handler 가 표준 포맷으로 변환:
-    - InvalidCredentials (401, INVALID_CREDENTIALS): 현재 비번 불일치
+    - InvalidCredentialsError (401, INVALID_CREDENTIALS): 현재 비번 불일치
     - 검증 실패 (422, VALIDATION_ERROR): 새 비번 정책 위반
     - 토큰 만료/누락 (401, TOKEN_EXPIRED)
     """

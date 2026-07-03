@@ -64,7 +64,7 @@ class KakaoOAuthAdapter:
                 self.redirect_uri,
             )
             res.raise_for_status()
-        return res.json()["access_token"]
+        return str(res.json()["access_token"])
 
     async def _fetch_profile(self, client: httpx.AsyncClient, access_token: str) -> SocialProfile:
         res = await client.get(
@@ -76,7 +76,8 @@ class KakaoOAuthAdapter:
 
         social_id = str(body["id"])  # kakao 의 id 는 long, string 으로 통일
         kakao_account = body.get("kakao_account") or {}
-        email: str | None = kakao_account.get("email") if kakao_account.get("email_valid", True) else None
+        email_valid = kakao_account.get("email_valid", True)
+        email: str | None = kakao_account.get("email") if email_valid else None
         profile = kakao_account.get("profile") or {}
         name: str | None = profile.get("nickname")
 

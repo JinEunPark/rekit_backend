@@ -6,11 +6,10 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.core.exceptions import OtpInvalid, OtpRateLimited
+from app.core.exceptions import OtpInvalidError, OtpRateLimitedError
 from app.core.security import hash_password
 from app.user.models import Gender, User, UserRole
 from app.user.user_service import UserService
-
 
 # ── Fakes ────────────────────────────────────────────────────────────────────
 
@@ -51,7 +50,7 @@ class _FakeRedis:
         return self._store.get(key)
 
     async def delete(self, key: str) -> int:
-        return self._store.pop(key, None) and 1 or 0
+        return (self._store.pop(key, None) and 1) or 0
 
 
 # ── 팩토리 ────────────────────────────────────────────────────────────────────
@@ -102,12 +101,12 @@ async def test_send_stores_otp_in_redis_and_sends_sms() -> None:
 
 
 async def test_send_rate_limit_blocks_second_request() -> None:
-    """60초 이내 재요청은 OtpRateLimited 를 raise 한다."""
+    """60초 이내 재요청은 OtpRateLimitedError 를 raise 한다."""
     service, _, _ = _make_service()
 
     await service.send_phone_verification(phone="01012345678")
 
-    with pytest.raises(OtpRateLimited):
+    with pytest.raises(OtpRateLimitedError):
         await service.send_phone_verification(phone="01012345678")
 
 
@@ -138,13 +137,13 @@ async def test_verify_phone_deletes_otp_after_success() -> None:
 
 
 async def test_verify_phone_raises_on_wrong_code() -> None:
-    """코드 불일치 시 OtpInvalid — user 는 변경되지 않는다."""
+    """코드 불일치 시 OtpInvalidError — user 는 변경되지 않는다."""
     service, _, redis = _make_service()
     user = _make_user()
     original_phone = user.phone
     await redis.set("sms:verify:01099998888", "123456")
 
-    with pytest.raises(OtpInvalid):
+    with pytest.raises(OtpInvalidError):
         await service.verify_phone(user=user, phone="01099998888", code="999999")
 
     assert user.phone == original_phone
@@ -152,9 +151,9 @@ async def test_verify_phone_raises_on_wrong_code() -> None:
 
 
 async def test_verify_phone_raises_when_otp_expired() -> None:
-    """Redis 에 키가 없으면(만료) OtpInvalid."""
+    """Redis 에 키가 없으면(만료) OtpInvalidError."""
     service, _, _ = _make_service()
     user = _make_user()
 
-    with pytest.raises(OtpInvalid):
+    with pytest.raises(OtpInvalidError):
         await service.verify_phone(user=user, phone="01099998888", code="123456")

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.core.exceptions import TokenExpired
+from app.core.exceptions import TokenExpiredError
 from app.core.security import (
     create_access_token,
     decode_token,
@@ -88,7 +88,7 @@ def test_expired_token_raises_token_expired() -> None:
     token = create_access_token(
         sub="42", claims={}, expires_in=timedelta(seconds=-10)
     )
-    with pytest.raises(TokenExpired):
+    with pytest.raises(TokenExpiredError):
         decode_token(token)
 
 
@@ -96,13 +96,13 @@ def test_tampered_signature_raises() -> None:
     """JWT 끝 3자(서명 일부) 변조 시 거부."""
     token = create_access_token(sub="42", claims={})
     tampered = token[:-3] + "XXX"
-    with pytest.raises(TokenExpired):
+    with pytest.raises(TokenExpiredError):
         decode_token(tampered)
 
 
 def test_garbage_token_raises() -> None:
     """JWT 형식이 아예 아닌 문자열도 안전하게 거부."""
-    with pytest.raises(TokenExpired):
+    with pytest.raises(TokenExpiredError):
         decode_token("not.a.jwt")
 
 
@@ -147,5 +147,5 @@ def test_create_token_user_cannot_override_type() -> None:
 def test_decode_token_rejects_wrong_type() -> None:
     """expected_type 이 다르면 거부 — refresh 토큰을 access 자리에 못 씀."""
     token = create_access_token(sub="42", claims={})
-    with pytest.raises(TokenExpired):
+    with pytest.raises(TokenExpiredError):
         decode_token(token, expected_type="refresh")

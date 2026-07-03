@@ -16,14 +16,16 @@ from typing import Any
 import pytest
 from fastapi import BackgroundTasks
 
-from app.auth.auth_repository import AuthRepository
 from app.auth.auth_schemas import SignUpRequest
 from app.auth.auth_service import AuthService
 from app.common.email import EmailSender
-from app.core.exceptions import InvalidVerificationCode, UsernameTaken, VerificationRateLimited
+from app.core.exceptions import (
+    InvalidVerificationCodeError,
+    UsernameTakenError,
+    VerificationRateLimitedError,
+)
 from app.core.security import create_email_verified_token
 from tests.conftest import FakeRedis
-
 
 # ── Fake EmailSender ───────────────────────────────────────────────
 
@@ -124,13 +126,13 @@ async def test_send_code_sets_rate_limit_key() -> None:
 
 
 async def test_send_code_rate_limited_within_60s() -> None:
-    """rate-limit 키가 살아있는 동안 재발송 시 VerificationRateLimited 를 올린다."""
-    svc, redis, _ = _make_service()
+    """rate-limit 키가 살아있는 동안 재발송 시 VerificationRateLimitedError 를 올린다."""
+    svc, _redis, _ = _make_service()
     bg = BackgroundTasks()
 
     await svc.send_email_verification_code("user@example.com", bg)
 
-    with pytest.raises(VerificationRateLimited):
+    with pytest.raises(VerificationRateLimitedError):
         await svc.send_email_verification_code("user@example.com", bg)
 
 
@@ -162,19 +164,19 @@ async def test_verify_correct_code_token_contains_email() -> None:
 
 
 async def test_verify_wrong_code_raises() -> None:
-    """틀린 코드 입력 → InvalidVerificationCode."""
+    """틀린 코드 입력 → InvalidVerificationCodeError."""
     svc, redis, _ = _make_service()
     await redis.set("email:verify:user@example.com", "123456")
 
-    with pytest.raises(InvalidVerificationCode):
+    with pytest.raises(InvalidVerificationCodeError):
         await svc.verify_email_code("user@example.com", "000000")
 
 
 async def test_verify_missing_code_raises() -> None:
-    """Redis 에 코드 없음(만료/미발송) → InvalidVerificationCode."""
+    """Redis 에 코드 없음(만료/미발송) → InvalidVerificationCodeError."""
     svc, _, _ = _make_service()
 
-    with pytest.raises(InvalidVerificationCode):
+    with pytest.raises(InvalidVerificationCodeError):
         await svc.verify_email_code("user@example.com", "123456")
 
 
@@ -213,8 +215,8 @@ async def test_sign_up_uses_email_from_verified_token() -> None:
 
 
 async def test_sign_up_with_expired_verified_token_raises() -> None:
-    """만료된 verified_token 으로 가입 시도 → TokenExpired."""
-    from app.core.exceptions import TokenExpired
+    """만료된 verified_token 으로 가입 시도 → TokenExpiredError."""
+    from app.core.exceptions import TokenExpiredError
 
     svc, _, _ = _make_service()
     expired_token = create_email_verified_token(
@@ -222,7 +224,7 @@ async def test_sign_up_with_expired_verified_token_raises() -> None:
         expires_in=timedelta(seconds=-1),
     )
 
-    with pytest.raises(TokenExpired):
+    with pytest.raises(TokenExpiredError):
         await svc.sign_up(
             SignUpRequest.model_validate(
                 {
@@ -238,9 +240,10 @@ async def test_sign_up_with_expired_verified_token_raises() -> None:
 
 
 async def test_sign_up_duplicate_login_id_raises() -> None:
-    """verified_token 이 유효해도 login_id 중복 시 UsernameTaken."""
-    from app.user.models import User, UserRole
+    """verified_token 이 유효해도 login_id 중복 시 UsernameTakenError."""
     from datetime import UTC, datetime
+
+    from app.user.models import User, UserRole
 
     repo = _FakeAuthRepo()
     existing = User(
@@ -258,7 +261,7 @@ async def test_sign_up_duplicate_login_id_raises() -> None:
     svc, _, _ = _make_service(repo=repo)
     token = create_email_verified_token(email="new@example.com")
 
-    with pytest.raises(UsernameTaken):
+    with pytest.raises(UsernameTakenError):
         await svc.sign_up(
             SignUpRequest.model_validate(
                 {
