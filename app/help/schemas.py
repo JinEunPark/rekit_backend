@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.pagination import PageMeta
 from app.help.models import ContactStatus
@@ -119,11 +119,31 @@ class AdminFaqUpdate(BaseModel):
 
 
 class ContactRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=50)
-    email: EmailStr
-    phone: str | None = Field(default=None, pattern=r"^01[016789]\d{7,8}$")
     title: str = Field(min_length=2, max_length=200)
     content: str = Field(min_length=10, max_length=3000)
+
+
+class ContactListItem(_OrmBase):
+    id: int
+    title: str
+    status: ContactStatus
+    answered_at: datetime | None
+    created_at: datetime
+
+
+class ContactDetail(_OrmBase):
+    id: int
+    title: str
+    content: str
+    status: ContactStatus
+    answered_at: datetime | None
+    answer_content: str | None
+    created_at: datetime
+
+
+class ContactListResponse(BaseModel):
+    items: list[ContactListItem]
+    meta: PageMeta
 
 
 class AdminContactListItem(_OrmBase):
@@ -140,11 +160,11 @@ class AdminContactDetail(_OrmBase):
     user_id: int | None
     name: str
     email: str
-    phone: str | None
     title: str
     content: str
     status: ContactStatus
     answered_at: datetime | None
+    answer_content: str | None
     created_at: datetime
 
 
@@ -155,3 +175,7 @@ class AdminContactListResponse(BaseModel):
 
 class AdminContactStatusUpdate(BaseModel):
     status: ContactStatus
+
+
+class AdminContactAnswerRequest(BaseModel):
+    answer: str = Field(min_length=1, max_length=3000)

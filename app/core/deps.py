@@ -299,5 +299,6 @@ async def get_help_service(
 
 async def get_admin_help_service(
     session: AsyncSession = Depends(db_session),
+    email_sender: EmailSender = Depends(get_email_sender),
 ) -> AdminHelpService:
-    return AdminHelpService(HelpRepository(session))
+    return AdminHelpService(HelpRepository(session), email_sender)

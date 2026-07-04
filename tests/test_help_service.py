@@ -13,6 +13,7 @@ import pytest
 from app.core.exceptions import ContactNotFoundError, FaqNotFoundError, NoticeNotFoundError
 from app.help.models import Contact, ContactStatus, Faq, Notice
 from app.help.schemas import (
+    AdminContactAnswerRequest,
     AdminContactStatusUpdate,
     AdminFaqCreate,
     AdminFaqUpdate,
@@ -103,8 +104,12 @@ class _FakeHelpRepo:
         self._faqs.pop(faq.id, None)
 
     # Contact
-    async def get_contact_list(self, page, size, *, status=None):
-        items = [c for c in self._contacts.values() if status is None or c.status == status]
+    async def get_contact_list(self, page, size, *, status=None, user_id=None):
+        items = [
+            c for c in self._contacts.values()
+            if (status is None or c.status == status)
+            and (user_id is None or c.user_id == user_id)
+        ]
         items.sort(key=lambda c: c.id, reverse=True)
         total = len(items)
         start = (page - 1) * size
@@ -112,6 +117,12 @@ class _FakeHelpRepo:
 
     async def get_contact(self, contact_id):
         return self._contacts.get(contact_id)
+
+    async def get_contact_for_user(self, contact_id, user_id):
+        contact = self._contacts.get(contact_id)
+        if contact is None or contact.user_id != user_id:
+            return None
+        return contact
 
     async def save_contact(self, contact):
         if contact.id is None:
@@ -131,9 +142,10 @@ def _make_help_service() -> tuple[HelpService, _FakeHelpRepo, _FakeEmailSender]:
     return HelpService(repo, email), repo, email  # type: ignore[arg-type]
 
 
-def _make_admin_service() -> tuple[AdminHelpService, _FakeHelpRepo]:
+def _make_admin_service() -> tuple[AdminHelpService, _FakeHelpRepo, _FakeEmailSender]:
     repo = _FakeHelpRepo()
-    return AdminHelpService(repo), repo  # type: ignore[arg-type]
+    email = _FakeEmailSender()
+    return AdminHelpService(repo, email), repo, email  # type: ignore[arg-type]
 
 
 # ── 픽스처 헬퍼 ──────────────────────────────────────────────────────
@@ -245,62 +257,104 @@ class TestHelpServiceFaq:
 class TestHelpServiceContact:
     @pytest.mark.asyncio
     async def test_submit_contact_saves_to_db(self):
-        """문의 접수 시 Contact 레코드가 저장된다."""
+        """문의 접수 시 Contact 레코드가 저장되고 로그인 사용자 정보가 채워진다."""
         service, repo, _ = _make_help_service()
-        req = ContactRequest(
-            name="홍길동", email="hong@example.com",
-            title="문의합니다", content="자세한 내용입니다."
-        )
+        req = ContactRequest(title="문의합니다", content="자세한 내용입니다.")
 
-        await service.submit_contact(req)
+        await service.submit_contact(
+            req, user_id=1, name="홍길동", email="hong@example.com"
+        )
 
         assert len(repo._contacts) == 1
         saved = next(iter(repo._contacts.values()))
         assert saved.name == "홍길동"
+        assert saved.email == "hong@example.com"
+        assert saved.user_id == 1
         assert saved.status == ContactStatus.PENDING
 
     @pytest.mark.asyncio
     async def test_submit_contact_sends_confirm_email(self):
-        """문의 접수 시 고객에게 접수 확인 이메일이 발송된다."""
+        """문의 접수 시 로그인 사용자 이메일로 접수 확인 이메일이 발송된다."""
         service, _, email_sender = _make_help_service()
-        req = ContactRequest(
-            name="홍길동", email="hong@example.com",
-            title="문의제목", content="문의 내용을 상세히 입력합니다."
-        )
+        req = ContactRequest(title="문의제목", content="문의 내용을 상세히 입력합니다.")
 
-        await service.submit_contact(req)
+        await service.submit_contact(
+            req, user_id=1, name="홍길동", email="hong@example.com"
+        )
 
         confirm_mails = [m for m in email_sender.sent if m[0] == "hong@example.com"]
         assert len(confirm_mails) == 1
         assert "접수" in confirm_mails[0][1]
 
     @pytest.mark.asyncio
-    async def test_submit_contact_with_user_id(self):
-        """로그인 사용자 문의 시 user_id가 저장된다."""
-        service, repo, _ = _make_help_service()
-        req = ContactRequest(
-            name="회원", email="user@example.com",
-            title="회원 문의", content="회원으로 문의합니다."
-        )
-
-        await service.submit_contact(req, user_id=42)
-
-        saved = next(iter(repo._contacts.values()))
-        assert saved.user_id == 42
-
-    @pytest.mark.asyncio
     async def test_submit_contact_status_is_pending(self):
         """신규 문의 상태는 PENDING이다."""
         service, repo, _ = _make_help_service()
-        req = ContactRequest(
-            name="테스터", email="test@example.com",
-            title="상태 확인", content="초기 상태 확인용 문의입니다."
-        )
+        req = ContactRequest(title="상태 확인", content="초기 상태 확인용 문의입니다.")
 
-        await service.submit_contact(req)
+        await service.submit_contact(
+            req, user_id=1, name="테스터", email="test@example.com"
+        )
 
         saved = next(iter(repo._contacts.values()))
         assert saved.status == ContactStatus.PENDING
+
+    @pytest.mark.asyncio
+    async def test_list_my_contacts_only_returns_own(self):
+        """본인 문의만 목록에 포함된다."""
+        service, _, __ = _make_help_service()
+        await service.submit_contact(
+            ContactRequest(title="내 문의1", content="내용을 채워봅니다."),
+            user_id=1, name="A", email="a@example.com",
+        )
+        await service.submit_contact(
+            ContactRequest(title="내 문의2", content="내용을 채워봅니다."),
+            user_id=1, name="A", email="a@example.com",
+        )
+        await service.submit_contact(
+            ContactRequest(title="다른 사람 문의", content="내용을 채워봅니다."),
+            user_id=2, name="B", email="b@example.com",
+        )
+
+        result = await service.list_my_contacts(1, 1, 20)
+
+        assert result.meta.total == 2
+        assert all(c.title != "다른 사람 문의" for c in result.items)
+
+    @pytest.mark.asyncio
+    async def test_get_my_contact_returns_detail(self):
+        """본인 문의 상세를 조회한다."""
+        service, repo, _ = _make_help_service()
+        await service.submit_contact(
+            ContactRequest(title="상세 조회용", content="상세 조회 테스트 내용."),
+            user_id=1, name="A", email="a@example.com",
+        )
+        contact = next(iter(repo._contacts.values()))
+
+        result = await service.get_my_contact(1, contact.id)
+
+        assert result.title == "상세 조회용"
+
+    @pytest.mark.asyncio
+    async def test_get_my_contact_of_other_user_raises_not_found(self):
+        """다른 사용자의 문의는 ContactNotFoundError로 응답한다 (존재 여부 비노출)."""
+        service, repo, _ = _make_help_service()
+        await service.submit_contact(
+            ContactRequest(title="B의 문의", content="B가 작성한 문의 내용."),
+            user_id=2, name="B", email="b@example.com",
+        )
+        contact = next(iter(repo._contacts.values()))
+
+        with pytest.raises(ContactNotFoundError):
+            await service.get_my_contact(1, contact.id)
+
+    @pytest.mark.asyncio
+    async def test_get_my_contact_not_found(self):
+        """존재하지 않는 문의 ID 조회 시 ContactNotFoundError."""
+        service, _, __ = _make_help_service()
+
+        with pytest.raises(ContactNotFoundError):
+            await service.get_my_contact(1, 999)
 
 
 # ── AdminHelpService 테스트 ──────────────────────────────────────────
@@ -309,7 +363,7 @@ class TestAdminHelpServiceNotice:
     @pytest.mark.asyncio
     async def test_create_notice(self):
         """공지사항 생성 후 ID가 부여된다."""
-        service, _ = _make_admin_service()
+        service, _, __ = _make_admin_service()
         body = AdminNoticeCreate(
             title="새 공지", content="내용", is_pinned=False, is_published=True
         )
@@ -322,7 +376,7 @@ class TestAdminHelpServiceNotice:
     @pytest.mark.asyncio
     async def test_update_notice_partial(self):
         """PATCH는 전달된 필드만 변경한다."""
-        service, repo = _make_admin_service()
+        service, repo, _ = _make_admin_service()
         notice = _make_notice(title="원본", is_pinned=False)
         await repo.save_notice(notice)
 
@@ -334,7 +388,7 @@ class TestAdminHelpServiceNotice:
     @pytest.mark.asyncio
     async def test_update_notice_not_found(self):
         """존재하지 않는 공지 수정 시 NoticeNotFoundError."""
-        service, _ = _make_admin_service()
+        service, _, __ = _make_admin_service()
 
         with pytest.raises(NoticeNotFoundError):
             await service.update_notice(999, AdminNoticeUpdate(title="수정"))
@@ -342,7 +396,7 @@ class TestAdminHelpServiceNotice:
     @pytest.mark.asyncio
     async def test_delete_notice(self):
         """삭제 후 repo에서 제거된다."""
-        service, repo = _make_admin_service()
+        service, repo, _ = _make_admin_service()
         notice = _make_notice()
         await repo.save_notice(notice)
 
@@ -353,7 +407,7 @@ class TestAdminHelpServiceNotice:
     @pytest.mark.asyncio
     async def test_delete_notice_not_found(self):
         """존재하지 않는 공지 삭제 시 NoticeNotFoundError."""
-        service, _ = _make_admin_service()
+        service, _, __ = _make_admin_service()
 
         with pytest.raises(NoticeNotFoundError):
             await service.delete_notice(999)
@@ -361,7 +415,7 @@ class TestAdminHelpServiceNotice:
     @pytest.mark.asyncio
     async def test_list_notices_includes_unpublished(self):
         """어드민 목록은 비게시 포함 전체 반환."""
-        service, repo = _make_admin_service()
+        service, repo, _ = _make_admin_service()
         await repo.save_notice(_make_notice(is_published=True))
         await repo.save_notice(_make_notice(is_published=False))
 
@@ -374,7 +428,7 @@ class TestAdminHelpServiceFaq:
     @pytest.mark.asyncio
     async def test_create_faq(self):
         """FAQ 생성."""
-        service, _ = _make_admin_service()
+        service, _, __ = _make_admin_service()
         body = AdminFaqCreate(category="결제", question="Q?", answer="A.", sort_order=1)
 
         result = await service.create_faq(body)
@@ -385,7 +439,7 @@ class TestAdminHelpServiceFaq:
     @pytest.mark.asyncio
     async def test_update_faq_not_found(self):
         """존재하지 않는 FAQ 수정 시 FaqNotFoundError."""
-        service, _ = _make_admin_service()
+        service, _, __ = _make_admin_service()
 
         with pytest.raises(FaqNotFoundError):
             await service.update_faq(999, AdminFaqUpdate(question="변경"))
@@ -393,7 +447,7 @@ class TestAdminHelpServiceFaq:
     @pytest.mark.asyncio
     async def test_delete_faq(self):
         """FAQ 삭제 후 repo에서 제거된다."""
-        service, repo = _make_admin_service()
+        service, repo, _ = _make_admin_service()
         faq = _make_faq()
         await repo.save_faq(faq)
 
@@ -409,17 +463,17 @@ class TestAdminHelpServiceContact:
         c.user_id = None
         c.name = "홍길동"
         c.email = "hong@example.com"
-        c.phone = None
         c.title = "문의"
         c.content = "내용"
         c.status = ContactStatus.PENDING
         c.answered_at = None
+        c.answer_content = None
         return c
 
     @pytest.mark.asyncio
     async def test_get_contact_not_found(self):
         """존재하지 않는 문의 조회 시 ContactNotFoundError."""
-        service, _ = _make_admin_service()
+        service, _, __ = _make_admin_service()
 
         with pytest.raises(ContactNotFoundError):
             await service.get_contact(999)
@@ -427,7 +481,7 @@ class TestAdminHelpServiceContact:
     @pytest.mark.asyncio
     async def test_update_status_to_answered(self):
         """ANSWERED로 변경 시 answered_at이 채워진다."""
-        service, repo = _make_admin_service()
+        service, repo, _ = _make_admin_service()
         contact = self._make_contact()
         await repo.save_contact(contact)
 
@@ -441,7 +495,7 @@ class TestAdminHelpServiceContact:
     @pytest.mark.asyncio
     async def test_update_status_to_pending_clears_answered_at(self):
         """PENDING으로 되돌리면 answered_at이 None으로 초기화된다."""
-        service, repo = _make_admin_service()
+        service, repo, _ = _make_admin_service()
         contact = self._make_contact()
         contact.answered_at = datetime.now(UTC)
         contact.status = ContactStatus.ANSWERED
@@ -456,7 +510,7 @@ class TestAdminHelpServiceContact:
     @pytest.mark.asyncio
     async def test_list_contacts_status_filter(self):
         """status 필터 적용 시 해당 상태 문의만 반환."""
-        service, repo = _make_admin_service()
+        service, repo, _ = _make_admin_service()
         pending = self._make_contact()
         answered = self._make_contact()
         answered.status = ContactStatus.ANSWERED
@@ -467,3 +521,41 @@ class TestAdminHelpServiceContact:
 
         assert result.meta.total == 1
         assert result.items[0].status == ContactStatus.PENDING
+
+    @pytest.mark.asyncio
+    async def test_answer_contact_saves_content_and_marks_answered(self):
+        """답변 등록 시 answer_content 저장, status ANSWERED, answered_at 채워진다."""
+        service, repo, _ = _make_admin_service()
+        contact = self._make_contact()
+        await repo.save_contact(contact)
+
+        result = await service.answer_contact(
+            contact.id, AdminContactAnswerRequest(answer="답변 내용입니다.")
+        )
+
+        assert result.answer_content == "답변 내용입니다."
+        assert result.status == ContactStatus.ANSWERED
+        assert result.answered_at is not None
+
+    @pytest.mark.asyncio
+    async def test_answer_contact_sends_email_to_customer(self):
+        """답변 등록 시 문의자 이메일로 답변 완료 메일이 발송된다."""
+        service, repo, email_sender = _make_admin_service()
+        contact = self._make_contact()
+        await repo.save_contact(contact)
+
+        await service.answer_contact(
+            contact.id, AdminContactAnswerRequest(answer="답변 내용입니다.")
+        )
+
+        answer_mails = [m for m in email_sender.sent if m[0] == "hong@example.com"]
+        assert len(answer_mails) == 1
+        assert "답변" in answer_mails[0][1]
+
+    @pytest.mark.asyncio
+    async def test_answer_contact_not_found(self):
+        """존재하지 않는 문의에 답변 시 ContactNotFoundError."""
+        service, _, __ = _make_admin_service()
+
+        with pytest.raises(ContactNotFoundError):
+            await service.answer_contact(999, AdminContactAnswerRequest(answer="답변"))

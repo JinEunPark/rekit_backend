@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from app.core.deps import get_admin_help_service, get_admin_user
 from app.help.models import ContactStatus
 from app.help.schemas import (
+    AdminContactAnswerRequest,
     AdminContactDetail,
     AdminContactListResponse,
     AdminContactStatusUpdate,
@@ -175,3 +176,16 @@ async def update_contact_status(
     service: AdminHelpService = Depends(get_admin_help_service),
 ) -> AdminContactDetail:
     return await service.update_contact_status(contact_id, body)
+
+
+@router.patch(
+    "/admin/contacts/{contact_id}/answer",
+    response_model=AdminContactDetail,
+    summary="문의 답변 등록 (답변 저장 + ANSWERED 전환 + 고객 메일 발송)",
+)
+async def answer_contact(
+    contact_id: int,
+    body: AdminContactAnswerRequest,
+    service: AdminHelpService = Depends(get_admin_help_service),
+) -> AdminContactDetail:
+    return await service.answer_contact(contact_id, body)

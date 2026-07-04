@@ -17,7 +17,29 @@
       "Bash(.venv/bin/pytest tests/test_auth_service.py::test_find_login_id_queues_bg_task_when_user_exists tests/test_social_login.py::test_social_login_returns_tokens_when_social_account_exists -v --tb=long)",
       "Bash(npm run type-check)",
       "Bash(.venv/bin/pytest *)",
-      "Bash(.venv/bin/mypy *)"
+      "Bash(.venv/bin/mypy *)",
+      "Bash(python3 -)",
+      "Bash(.venv/bin/alembic downgrade *)",
+      "Bash(.venv/bin/mypy app/help)",
+      "Bash(python3 -c \"print\\(len\\('문의 테스트'\\)\\)\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8000/health)",
+      "Bash(curl -s -i -X OPTIONS http://localhost:8000/api/v1/admin/dashboard/sales-chart?days=7 -H 'Origin: http://localhost:5173' -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: authorization')",
+      "Bash(curl -s -i http://localhost:8000/api/v1/admin/dashboard/sales-chart?days=7 -H 'Origin: http://localhost:5173')",
+      "Bash(.venv/bin/python3 -)",
+      "Bash(curl -s -i http://localhost:8000/api/v1/admin/dashboard/sales-chart?days=7 -H 'Origin: http://localhost:5173' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiQURNSU4iLCJzdWIiOiIxOCIsImlhdCI6MTc4MzEzNzg1NSwiZXhwIjoxNzgzMTM5NjU1LCJ0eXBlIjoiYWNjZXNzIn0.SYq4OEKgCUGWXnt3WAVWvHNqQZm6b8pc3Eu8O7sRCMo')",
+      "Bash(curl -s http://localhost:8000/api/v1/admin/dashboard/sales-chart?days=7 -H 'Origin: http://localhost:5173' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiQURNSU4iLCJzdWIiOiIxOCIsImlhdCI6MTc4MzEzNzg1NSwiZXhwIjoxNzgzMTM5NjU1LCJ0eXBlIjoiYWNjZXNzIn0.SYq4OEKgCUGWXnt3WAVWvHNqQZm6b8pc3Eu8O7sRCMo')",
+      "Bash(.venv/bin:.venv/bin/ruff check *)",
+      "Bash(.venv/bin/ruff check *)",
+      "Bash(curl -s \"http://localhost:8000/api/v1/help/faqs\")",
+      "Bash(curl -s -i -X POST http://localhost:8000/api/v1/help/contacts -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiVVNFUiIsInN1YiI6IjEyIiwiaWF0IjoxNzgzMTM5MDgwLCJleHAiOjE3ODMxNDA4ODAsInR5cGUiOiJhY2Nlc3MifQ.fKqp_A44rH4d9KvvbJaiz91ioadDItOAalORXOBC2to' -H 'Content-Type: application/json' -d '{\"title\":\"테스트 문의 제목입니다\",\"content\":\"실제 동작 확인용 문의 내용입니다.\"}')",
+      "Bash(curl -s -i -X POST http://localhost:8000/api/v1/help/contacts -H 'Content-Type: application/json' -d '{\"title\":\"비로그인 문의\",\"content\":\"이건 실패해야 합니다.\"}')",
+      "Bash(.venv/bin/python3 -c ' *)",
+      "Bash(curl -s http://localhost:8000/api/v1/help/contacts -H 'Authorization: Bearer __TRACKED_VAR__')",
+      "Bash(curl -s -X PATCH http://localhost:8000/api/v1/admin/contacts/9/answer -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiQURNSU4iLCJzdWIiOiIxOCIsImlhdCI6MTc4MzEzNzg1NSwiZXhwIjoxNzgzMTM5NjU1LCJ0eXBlIjoiYWNjZXNzIn0.SYq4OEKgCUGWXnt3WAVWvHNqQZm6b8pc3Eu8O7sRCMo' -H 'Content-Type: application/json' -d '{\"answer\":\"리팩터 후 정상 동작 확인용 답변입니다.\"}')",
+      "Bash(curl -s -X PATCH http://localhost:8000/api/v1/admin/contacts/9/answer -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiQURNSU4iLCJzdWIiOiIxOCIsImlhdCI6MTc4MzE0MDE3OSwiZXhwIjoxNzgzMTQxOTc5LCJ0eXBlIjoiYWNjZXNzIn0.rUitVfbIBPOA7cztKS1wP2fya3gF2je3Yp5yRBjUhQs' -H 'Content-Type: application/json' -d '{\"answer\":\"리팩터 후 정상 동작 확인용 답변입니다.\"}')",
+      "Bash(curl -s http://localhost:8000/api/v1/help/contacts/9 -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiVVNFUiIsInN1YiI6IjEyIiwiaWF0IjoxNzgzMTM5MDgwLCJleHAiOjE3ODMxNDA4ODAsInR5cGUiOiJhY2Nlc3MifQ.fKqp_A44rH4d9KvvbJaiz91ioadDItOAalORXOBC2to')",
+      "Bash(curl -s -i -X POST http://localhost:8000/api/v1/help/contacts -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiVVNFUiIsInN1YiI6IjEyIiwiaWF0IjoxNzgzMTM5MDgwLCJleHAiOjE3ODMxNDA4ODAsInR5cGUiOiJhY2Nlc3MifQ.fKqp_A44rH4d9KvvbJaiz91ioadDItOAalORXOBC2to' -H 'Content-Type: application/json' -d '{\"title\":\"phone 제거 확인용 문의\",\"content\":\"phone 필드 제거 후 정상 동작 확인.\"}')",
+      "Bash(python3 -c \"import json; json.load\\(open\\('/Volumes/A/web_projects/rekle_backend/.claude/settings.json'\\)\\); print\\('valid JSON'\\)\")"
     ]
   }
 }

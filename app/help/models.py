@@ -57,7 +57,7 @@ class Faq(Base, TimestampMixin):
 
 
 class Contact(Base, TimestampMixin):
-    """1:1 문의. 비로그인 사용자도 접수 가능 (user_id nullable)."""
+    """1:1 문의. 로그인 회원만 접수 가능 — user_id/name/email 은 회원 프로필 기준으로 채워진다."""
 
     __tablename__ = "contacts"
 
@@ -66,11 +66,10 @@ class Contact(Base, TimestampMixin):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
-        comment="문의 회원 FK — 비로그인 시 NULL",
+        comment="문의 회원 FK — 탈퇴 시 SET NULL",
     )
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     email: Mapped[str] = mapped_column(String(200), nullable=False, comment="답변 수신 이메일")
-    phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[ContactStatus] = mapped_column(
@@ -80,6 +79,9 @@ class Contact(Base, TimestampMixin):
     )
     answered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, comment="답변 완료 시각"
+    )
+    answer_content: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="관리자 답변 내용"
     )
 
     user: Mapped[User | None] = relationship("User", lazy="noload")

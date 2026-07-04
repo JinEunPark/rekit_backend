@@ -112,15 +112,17 @@ def render_verification_email(code: str) -> str:
     return _VERIFICATION_HTML.format(code=code)
 
 
-# ── 문의 접수 확인 (고객용) ──────────────────────────────────────────
+# ── 문의 이메일 공용 카드 레이아웃 ────────────────────────────────────
+# 접수확인/관리자알림/답변완료 3종 메일이 액센트색·제목·본문만 다르고
+# 나머지 head/카드/footer 마크업은 동일하므로 여기서 한 번만 정의한다.
 
-_CONTACT_CONFIRM_HTML = """\
+_CARD_WRAPPER_HTML = """\
 <!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>rekit 문의 접수 확인</title>
+<title>{page_title}</title>
 </head>
 <body style="margin:0;padding:0;background:#FAFAFA;
              font-family:-apple-system,'Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif;">
@@ -129,8 +131,33 @@ _CONTACT_CONFIRM_HTML = """\
   <table width="100%" cellpadding="0" cellspacing="0" border="0"
          style="max-width:560px;background:#ffffff;border:1px solid #E8E8EA;
                 border-radius:14px;overflow:hidden;">
-    <tr><td height="4" style="background:#4FA88B;font-size:0;line-height:0;">&nbsp;</td></tr>
+    <tr><td height="4" style="background:{accent};font-size:0;line-height:0;">&nbsp;</td></tr>
     <tr><td style="padding:44px 48px 40px;">
+{body}
+    </td></tr>
+    <tr><td style="padding:20px 48px 24px;background:#F4F4F5;border-top:1px solid #E8E8EA;">
+      <p style="font-size:12px;color:#B5B5AB;line-height:1.7;margin:0;">
+        &copy; 2025 rekit. 폐업 가전 직거래 플랫폼.
+      </p>
+    </td></tr>
+  </table>
+</td></tr>
+</table>
+</body>
+</html>
+"""
+
+_ACCENT_TEAL = "#4FA88B"
+_ACCENT_ORANGE = "#E87A4F"
+
+
+def _wrap_card(*, accent: str, page_title: str, body: str) -> str:
+    return _CARD_WRAPPER_HTML.format(accent=accent, page_title=page_title, body=body)
+
+
+# ── 문의 접수 확인 (고객용) ──────────────────────────────────────────
+
+_CONTACT_CONFIRM_BODY = """\
       <p style="font-size:22px;font-weight:700;color:#1A1A17;letter-spacing:-0.02em;
                 margin:0 0 14px;">문의가 접수되었습니다</p>
       <p style="font-size:15px;color:#5C5C55;line-height:1.7;margin:0 0 24px;">
@@ -151,38 +178,11 @@ _CONTACT_CONFIRM_HTML = """\
       </table>
       <p style="font-size:13px;color:#8E8E85;margin:24px 0 0;line-height:1.7;">
         본인이 요청하지 않은 메일이라면 무시하셔도 됩니다.
-      </p>
-    </td></tr>
-    <tr><td style="padding:20px 48px 24px;background:#F4F4F5;border-top:1px solid #E8E8EA;">
-      <p style="font-size:12px;color:#B5B5AB;line-height:1.7;margin:0;">
-        &copy; 2025 rekit. 폐업 가전 직거래 플랫폼.
-      </p>
-    </td></tr>
-  </table>
-</td></tr>
-</table>
-</body>
-</html>
-"""
+      </p>"""
 
 # ── 문의 알림 (관리자용) ─────────────────────────────────────────────
 
-_CONTACT_NOTIFY_HTML = """\
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<title>rekit 새 문의 알림</title>
-</head>
-<body style="margin:0;padding:0;background:#FAFAFA;
-             font-family:-apple-system,'Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#FAFAFA;">
-<tr><td align="center" style="padding:40px 16px 56px;">
-  <table width="100%" cellpadding="0" cellspacing="0" border="0"
-         style="max-width:560px;background:#ffffff;border:1px solid #E8E8EA;
-                border-radius:14px;overflow:hidden;">
-    <tr><td height="4" style="background:#E87A4F;font-size:0;line-height:0;">&nbsp;</td></tr>
-    <tr><td style="padding:44px 48px 40px;">
+_CONTACT_NOTIFY_BODY = """\
       <p style="font-size:22px;font-weight:700;color:#1A1A17;letter-spacing:-0.02em;
                 margin:0 0 24px;">[관리자] 새 문의가 접수되었습니다</p>
       <table width="100%" cellpadding="0" cellspacing="0" border="0"
@@ -193,36 +193,67 @@ _CONTACT_NOTIFY_HTML = """\
         <p style="font-size:14px;color:#1A1A17;margin:0 0 14px;">{name}</p>
         <p style="font-size:13px;color:#8E8E85;margin:0 0 4px;">이메일</p>
         <p style="font-size:14px;color:#1A1A17;margin:0 0 14px;">{email}</p>
-        <p style="font-size:13px;color:#8E8E85;margin:0 0 4px;">연락처</p>
-        <p style="font-size:14px;color:#1A1A17;margin:0 0 14px;">{phone}</p>
         <p style="font-size:13px;color:#8E8E85;margin:0 0 4px;">제목</p>
         <p style="font-size:14px;color:#1A1A17;font-weight:600;margin:0 0 14px;">{title}</p>
         <p style="font-size:13px;color:#8E8E85;margin:0 0 4px;">내용</p>
         <p style="font-size:14px;color:#1A1A17;white-space:pre-wrap;margin:0;">{content}</p>
       </td></tr>
+      </table>"""
+
+
+# ── 문의 답변 완료 (고객용) ──────────────────────────────────────────
+
+_CONTACT_ANSWER_BODY = """\
+      <p style="font-size:22px;font-weight:700;color:#1A1A17;letter-spacing:-0.02em;
+                margin:0 0 14px;">문의에 답변이 등록되었습니다</p>
+      <p style="font-size:15px;color:#5C5C55;line-height:1.7;margin:0 0 24px;">
+        안녕하세요, <strong>{name}</strong>님.<br>
+        문의하신 내용에 대한 답변을 안내드립니다.
+      </p>
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="background:#F4F4F5;border-radius:10px;padding:20px 24px;
+                    margin-bottom:20px;">
+      <tr><td>
+        <p style="font-size:13px;color:#8E8E85;margin:0 0 6px;">문의 제목</p>
+        <p style="font-size:15px;color:#1A1A17;font-weight:600;margin:0;">{title}</p>
+      </td></tr>
       </table>
-    </td></tr>
-  </table>
-</td></tr>
-</table>
-</body>
-</html>
-"""
+      <table width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="background:#E5F2EC;border-radius:10px;padding:20px 24px;
+                    margin-bottom:32px;">
+      <tr><td>
+        <p style="font-size:13px;color:#2D7A60;margin:0 0 6px;">답변 내용</p>
+        <p style="font-size:14px;color:#1A1A17;white-space:pre-wrap;margin:0;">{answer}</p>
+      </td></tr>
+      </table>
+      <table width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr><td height="1" style="background:#E8E8EA;font-size:0;line-height:0;">&nbsp;</td></tr>
+      </table>
+      <p style="font-size:13px;color:#8E8E85;margin:24px 0 0;line-height:1.7;">
+        추가로 궁금한 점이 있으시면 다시 문의해 주세요.
+      </p>"""
+
+
+def render_contact_answer_email(*, name: str, title: str, answer: str) -> str:
+    """문의 답변 완료 이메일 (고객 수신용)."""
+    body = _CONTACT_ANSWER_BODY.format(name=name, title=title, answer=answer)
+    return _wrap_card(accent=_ACCENT_TEAL, page_title="rekit 문의 답변 완료", body=body)
 
 
 def render_contact_confirm_email(*, name: str, title: str) -> str:
     """문의 접수 확인 이메일 (고객 수신용)."""
-    return _CONTACT_CONFIRM_HTML.format(name=name, title=title)
+    body = _CONTACT_CONFIRM_BODY.format(name=name, title=title)
+    return _wrap_card(accent=_ACCENT_TEAL, page_title="rekit 문의 접수 확인", body=body)
 
 
 def render_contact_notify_email(
-    *, name: str, email: str, phone: str | None, title: str, content: str
+    *, name: str, email: str, title: str, content: str
 ) -> str:
     """문의 알림 이메일 (관리자 수신용)."""
-    return _CONTACT_NOTIFY_HTML.format(
+    body = _CONTACT_NOTIFY_BODY.format(
         name=name,
         email=email,
-        phone=phone or "미입력",
         title=title,
         content=content,
     )
+    return _wrap_card(accent=_ACCENT_ORANGE, page_title="rekit 새 문의 알림", body=body)

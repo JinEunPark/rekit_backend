@@ -26,6 +26,7 @@ from app.core.security import hash_password
 from app.catalog.models import ConditionGrade, Product, ProductCategoryMetaItem, ProductImage, ProductStatus
 from app.cart.models import CartItem
 from app.favorites.models import Favorite
+from app.help.models import Faq
 from app.user.models import User, UserRole
 from app.address.models import Address
 
@@ -229,6 +230,84 @@ async def seed_categories(session: AsyncSession) -> None:
     await session.flush()
 
 
+async def seed_faqs(session: AsyncSession) -> None:
+    # category -> [(question, answer), ...] — sort_order 는 카테고리 내 순서로 자동 부여
+    faqs_by_category: dict[str, list[tuple[str, str]]] = {
+        "주문": [
+            ("주문한 상품은 취소할 수 있나요?",
+             "결제 완료 후 배송 시작 전까지는 마이페이지 > 주문내역에서 직접 취소할 수 있습니다. "
+             "이미 배송이 시작된 경우에는 판매자와 협의 후 반품 절차를 이용해 주세요."),
+            ("여러 판매자의 상품을 한 번에 주문할 수 있나요?",
+             "장바구니에 담아 한 번에 결제하실 수 있지만, 판매자가 다른 상품은 각각 별도 배송으로 "
+             "처리되며 배송비도 판매자 단위로 계산됩니다."),
+            ("주문 상태는 어디서 확인하나요?",
+             "마이페이지 > 주문내역에서 결제완료, 배송준비중, 배송중, 배송완료 단계를 실시간으로 "
+             "확인할 수 있습니다."),
+        ],
+        "배송": [
+            ("배송비는 어떻게 계산되나요?",
+             "상품의 무게, 크기, 배송지까지의 거리를 기준으로 자동 계산됩니다. 결제 전 견적 화면에서 "
+             "정확한 배송비를 미리 확인할 수 있습니다."),
+            ("냉장고나 세탁기 같은 대형 가전은 어떻게 배송되나요?",
+             "소형 가전은 일반 택배(파렛트), 대형 가전은 화물 택배로 배송됩니다. 서울/경기 지역은 "
+             "철거 차량을 이용한 직접 배송도 가능합니다."),
+            ("배송 조회는 어떻게 하나요?",
+             "주문내역 상세 화면에서 배송 상태를 확인할 수 있으며, 송장번호가 등록되면 배송 조회 "
+             "링크로 실시간 위치 추적도 가능합니다."),
+        ],
+        "결제": [
+            ("어떤 결제 수단을 지원하나요?",
+             "신용/체크카드, 실시간 계좌이체, 카카오페이·네이버페이 등 간편결제를 지원합니다."),
+            ("환불은 얼마나 걸리나요?",
+             "판매자 확인 및 반품 상품 검수가 끝나면 영업일 기준 3~5일 내 결제하신 수단으로 "
+             "환불 처리됩니다."),
+            ("현금영수증이나 세금계산서 발행이 가능한가요?",
+             "마이페이지 > 주문내역에서 결제 건별로 현금영수증 발급을 요청할 수 있습니다. "
+             "세금계산서는 1:1 문의를 통해 접수해 주세요."),
+        ],
+        "회원": [
+            ("비회원도 구매할 수 있나요?",
+             "아니요. rekit은 안전한 직거래를 위해 회원가입 후 구매/판매가 가능합니다."),
+            ("비밀번호를 잊어버렸어요.",
+             "로그인 화면의 '비밀번호 찾기'에서 가입 시 등록한 이메일로 재설정 링크를 받을 수 "
+             "있습니다."),
+            ("회원 탈퇴는 어떻게 하나요?",
+             "마이페이지 > 계정 설정 > 회원 탈퇴에서 진행할 수 있습니다. 진행 중인 주문이나 "
+             "미완료 정산이 있으면 탈퇴가 제한됩니다."),
+        ],
+        "상품": [
+            ("상품의 상태 등급(A/B/C)은 무슨 기준인가요?",
+             "A는 사용감이 거의 없는 상태, B는 사용감이 있지만 정상 작동, C는 흠집이 많지만 "
+             "작동에는 문제없는 상태를 의미합니다. 등급별 실제 사진이 상품 상세페이지에 함께 "
+             "표시됩니다."),
+            ("관심 상품은 어디서 모아볼 수 있나요?",
+             "상품 상세페이지의 하트 아이콘을 누르면 마이페이지 > 관심상품 목록에서 모아볼 수 "
+             "있습니다."),
+        ],
+        "기타": [
+            ("문의는 어떻게 남기나요?",
+             "로그인 후 고객센터 > 1:1 문의에서 남겨주시면 영업일 기준 1~2일 내 답변드립니다. "
+             "답변이 등록되면 가입하신 이메일로도 안내드립니다."),
+            ("고객센터 운영시간은 어떻게 되나요?",
+             "평일 09:00~18:00 운영하며 주말/공휴일은 휴무입니다. 운영시간 외 문의는 다음 "
+             "영업일에 순차적으로 답변드립니다."),
+        ],
+    }
+
+    existing = set((await session.execute(select(Faq.category, Faq.question))).all())
+
+    for category, items in faqs_by_category.items():
+        for sort_order, (question, answer) in enumerate(items, start=1):
+            if (category, question) in existing:
+                print(f"  [skip] FAQ 이미 존재: [{category}] {question[:20]}")
+                continue
+            session.add(
+                Faq(category=category, question=question, answer=answer, sort_order=sort_order)
+            )
+            print(f"  [ok]   FAQ 생성: [{category}] {question[:20]}")
+    await session.flush()
+
+
 async def seed_address(session: AsyncSession, user: User) -> Address:
     result = await session.execute(
         select(Address).where(Address.user_id == user.id).limit(1)
@@ -337,6 +416,9 @@ async def main() -> None:
 
             print("\n[6] 관심상품 추가")
             await seed_favorites(session, user, products)
+
+            print("\n[7] FAQ 생성")
+            await seed_faqs(session)
 
     await engine.dispose()
 

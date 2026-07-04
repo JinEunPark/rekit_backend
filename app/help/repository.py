@@ -94,11 +94,18 @@ class HelpRepository:
     # ── 문의하기 ─────────────────────────────────────────────────────
 
     async def get_contact_list(
-        self, page: int, size: int, *, status: ContactStatus | None = None
+        self,
+        page: int,
+        size: int,
+        *,
+        status: ContactStatus | None = None,
+        user_id: int | None = None,
     ) -> tuple[list[Contact], int]:
         base = select(Contact)
         if status:
             base = base.where(Contact.status == status)
+        if user_id is not None:
+            base = base.where(Contact.user_id == user_id)
 
         count_stmt = select(func.count()).select_from(base.subquery())
         total: int = (await self._session.execute(count_stmt)).scalar_one()
@@ -114,6 +121,12 @@ class HelpRepository:
 
     async def get_contact(self, contact_id: int) -> Contact | None:
         stmt = select(Contact).where(Contact.id == contact_id)
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_contact_for_user(self, contact_id: int, user_id: int) -> Contact | None:
+        """본인 소유 문의만 조회 — 소유권을 SQL 레벨에서 강제한다."""
+        stmt = select(Contact).where(Contact.id == contact_id, Contact.user_id == user_id)
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 

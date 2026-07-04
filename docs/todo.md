@@ -1,11 +1,12 @@
 # Rekle Backend TODO — 디자인 시스템 기반 구현 계획
 
 > **분석 기준**: `/Volumes/A/web_projects/rekle` 프론트 디자인 (Vue 3 mockup, `_design/buyer/*`, `_design/admin/*`)
-> **현 백엔드 상태** (2026-06-24 기준):
-> - **구현 완료**: auth 전체 / users (PATCH·DELETE /me 포함) / catalog (DB 동적 카테고리) / admin catalog CRUD / admin dashboard·orders·members·sales / cart / favorites / address / order (환불요청·배송조회 포함) / payment (init·confirm·webhook) / uploads
-> - **미구현**: SMS 인증 / 본인인증 PG 연동 / shipment 추적 (스마트택배 API) / 알림·공지 / PG 환불 실호출
-> - **테스트**: 291개 통과 (단위 + 통합, DB·Redis 없이 fake repo + fake OAuth)
-> **작성일**: 2026-05-01 / **최종 업데이트**: 2026-06-24
+> **현 백엔드 상태** (2026-07-04 기준):
+> - **구현 완료**: auth 전체(이메일 인증 가입 포함) / users (PATCH·DELETE /me + 휴대폰 인증 변경) / catalog (DB 동적 카테고리, bulk 조회) / admin catalog CRUD(이미지 단건 수정 포함) / admin dashboard·orders·members·sales / cart / favorites / address(label/memo) / order (환불요청·배송조회 포함) / payment (init·confirm·webhook) / uploads / **help(공지·FAQ·문의) 신규 완료 — 로그인 필수 전환 + 답변 등록 + 내 문의 조회 추가** / **Redis 인프라 신규 완료**
+> - **미구현**: 회원가입/전화번호 변경 이외의 SMS 인증(`/auth/sms/*`) / 실제 SMS 발송 어댑터(Console mock만 존재) / 본인인증 PG 연동 / shipment 추적 (스마트택배 API) / 인앱 알림센터(벨 아이콘) / PG 환불 실호출 / rate limit / CI·DI 암호화 / 보안 헤더 미들웨어
+> - **알려진 버그**: `GET /admin/dashboard/sales-chart` — `date_trunc()` 포맷 문자열이 SELECT/GROUP BY/ORDER BY 마다 별개 bind parameter로 바인딩되어 Postgres가 동일 표현식으로 인식하지 못함 → `GroupingError`로 500 (§2 참고, 미해결)
+> - **테스트**: 365개 통과 (단위 + 통합, `tests/integration/` 포함) / ruff·mypy 전체 클린
+> **작성일**: 2026-05-01 / **최종 업데이트**: 2026-07-04
 
 ---
 
@@ -52,14 +53,16 @@
 - [x] `POST /auth/social/sign-up` — tempToken으로 소셜 신규가입 마무리
 - [x] `GET /users/me` — 내 정보 (프로필 + 소셜 연결 현황)
 - [x] `POST /users/me/password` — 비밀번호 변경 (`must_change_password` 해제)
-- [ ] `POST /auth/sms/send` — SMS 인증번호 발송 (Redis에 코드 캐시, rate-limit)
+- [x] `POST /auth/email/send-verification` — **신규 완료** 회원가입용 이메일 인증코드 발송 (Redis TTL 10분, 60초 rate-limit)
+- [x] `POST /auth/email/verify-code` — **신규 완료** 코드 검증 → `verifiedToken`(JWT 15분) 발급, `sign-up` 요청에 필수로 사용
+- [ ] `POST /auth/sms/send` — 회원가입 단계 SMS 인증번호 발송 (Redis에 코드 캐시, rate-limit) _(휴대폰 변경용과 별개, 미구현)_
 - [ ] `POST /auth/sms/verify` — SMS 인증번호 검증 → `phone_verified_at` 기록
 - [x] `PATCH /users/me` — username/phone 부분 업데이트 _(현재 인증 없이 자유변경 — §7.3 개인정보 수정 정책 참고)_
-- [ ] `POST /users/me/phone/send-verification` — 전화번호 변경: 새 번호로 SMS 인증코드 발송 (Redis TTL 10분)
-- [ ] `POST /users/me/phone/verify` — 인증코드 확인 후 `users.phone` 교체
+- [x] `POST /users/me/phone/send-verification` — **신규 완료** 전화번호 변경: 새 번호로 SMS 인증코드 발송 (Redis, 60초 rate-limit) — 실제 SMS는 `ConsoleSmsSender`(mock)만 연결됨
+- [x] `POST /users/me/phone/verify` — **신규 완료** 인증코드 확인 후 `users.phone` 교체 (`OtpInvalidError` 422)
 - [ ] `POST /users/me/email/send-verification` — 이메일 변경: 새 주소로 인증코드 발송 (Redis TTL 10분)
 - [ ] `POST /users/me/email/verify` — 인증코드 확인 후 `users.email` 교체
-- [x] `DELETE /users/me` — 회원탈퇴 (CI/DI 즉시 파기, `withdrawn_at` 기록, 거래정보 5년 보존)
+- [x] `DELETE /users/me` — 회원탈퇴 (PII 전체 익명화 — email/login_id/username/phone/CI·DI 파기, `UserStatus.WITHDRAWN` + `withdrawn_at` 기록, 거래정보 5년 보존)
 - [ ] `POST /users/me/social/connect` — 기가입 사용자 소셜 계정 추가 연결
 
 ### 1.2 본인인증 (`/api/v1/verifications`)
@@ -80,6 +83,7 @@
 - [x] `GET /products` — 목록 (query: `category`, `q`(검색), `grade`, `min_price`, `max_price`, `warranty`, `sort`(latest/price_asc/price_desc), `page`)
 - [x] `GET /products/{id}` — 상세 (이미지 다중, 스펙, 등급 안내, 배송정보)
 - [x] `GET /products/featured` — 홈 "오늘 입고된 상품" 4건 (`order by created_at desc, status=ACTIVE`)
+- [x] `POST /products/bulk` — **신규 완료** 상품 ID 배열로 bulk 조회 (장바구니/찜 목록 렌더용)
 - [x] `GET /categories` — 카테고리 메타(아이콘/라벨 — 정적 응답)
 
 ### 1.5 관심상품 / 찜 (`/api/v1/favorites`) ✅ 구현 완료
@@ -113,12 +117,26 @@
 - [x] `GET /orders/{order_number}/shipment` — 배송 정보
 - [ ] `GET /shipments/{tracking_number}/track` — 스마트택배 API 프록시 (Redis 캐시)
 
-### 1.9 알림 / 공지 (`/api/v1/notifications`, `/api/v1/announcements`) **[모델 신규]**
+### 1.9 알림 / 공지 (`/api/v1/help`, `/api/v1/notifications`)
 
+**공지사항 / FAQ / 문의 — `app/help/` 모듈로 신규 완료** (요구사항정의서의 `announcements`에 대응, 마이그레이션 `9855aeca0293` → `f25b27344175`(답변) → `0de60b6871de`(phone 제거))
+
+- [x] `GET /help/notices` — 공지사항 목록 (My 메뉴, 게시중만)
+- [x] `GET /help/notices/{notice_id}` — 공지사항 상세
+- [x] `GET /help/faqs` — FAQ 목록 (카테고리 필터) — **더미 데이터 16건 시드 완료** (`scripts/seed.py`, 주문/배송/결제/회원/상품/기타 6개 카테고리)
+- [x] `POST /help/contacts` — 1:1 문의 접수 **(breaking change: 로그인 필수로 전환, `name`/`email`/`phone` 요청 바디에서 제거 — 회원 프로필 기준 자동 채움)**
+- [x] `GET /help/contacts` — **신규 완료** 내 문의 목록 (페이지네이션)
+- [x] `GET /help/contacts/{contact_id}` — **신규 완료** 내 문의 상세 (본인 소유만, 소유권 SQL 레벨 검증)
+- [x] `GET /admin/notices`, `POST /admin/notices`, `PATCH /admin/notices/{id}`, `DELETE /admin/notices/{id}` — 공지 CRUD
+- [x] `GET/POST/PATCH/DELETE /admin/faqs` — FAQ CRUD
+- [x] `GET /admin/contacts`, `GET /admin/contacts/{id}`, `PATCH /admin/contacts/{id}/status` — 문의 관리 (PENDING↔ANSWERED)
+- [x] `PATCH /admin/contacts/{contact_id}/answer` — **신규 완료** 답변 등록 (본문 저장 + ANSWERED 전환 + 문의자 이메일 발송)
+
+**인앱 알림(벨 아이콘) — 미구현, 별도 모델 필요**
+
+- [ ] `Notification` 모델 신규 (§6.11)
 - [ ] `GET /notifications` — 내 알림 목록 (벨 아이콘)
 - [ ] `POST /notifications/{id}/read`
-- [ ] `GET /announcements` — 공지사항 (My 메뉴)
-- [ ] `GET /announcements/{id}`
 
 ### 1.10 관리자 — 대시보드 (`/api/v1/admin/dashboard`) ✅ 구현 완료
 
@@ -136,6 +154,7 @@
 - [x] `PATCH /admin/products/{id}` — 가격/재고/상태/스펙 수정 (partial update)
 - [x] `DELETE /admin/products/{id}` — soft delete (`status = INACTIVE`)
 - [x] `PUT /admin/products/{id}/images` — 이미지 전체 교체 (추가·삭제·순서 일괄 반영)
+- [x] `PATCH /admin/products/{id}/images/{image_id}` — **신규 완료** 이미지 단건 수정 (라벨/순서 등 부분 업데이트)
 - [ ] `POST /admin/products/import-csv` — Phase 우선순위 낮음
 
 ### 1.12 관리자 — 주문 (`/api/v1/admin/orders`) ✅ 대부분 구현 완료
@@ -180,20 +199,21 @@
 - [x] **BackgroundTasks** — 이메일 발송 분리 (SMTP 지연이 요청 트랜잭션 묶지 않음)
 - [x] **이메일 어댑터** — `ConsoleEmailSender` (개발) + `GmailSmtpEmailSender` (운영) Protocol 기반
 - [x] **OAuth 어댑터** — 카카오/네이버/구글 `httpx` 기반 + `translate_oauth_error` 헬퍼 (Ports & Adapters)
-- [x] **테스트** — 단위 131개 (DB 없이 fake repo + fake OAuth), `tests/conftest.py` 기반
-- [x] **CRUD 레이어** — catalog/cart/address/order/payment/favorites/admin_catalog 완료
+- [x] **테스트** — 359개 (단위 + `tests/integration/` 통합), `tests/conftest.py` 기반
+- [x] **CRUD 레이어** — catalog/cart/address/order/payment/favorites/admin_catalog/help 완료
 - [x] **`order_number` 생성기** — `RK-YYMMDD{id:04d}` 포맷, `app/order/order_number.py`
-- [ ] **CI/DI 암호화 유틸** — KMS or Fernet, `services/crypto.py`
+- [x] **Redis 통합** — **신규 완료** `app/core/redis.py` (`get_redis()` Depends 주입) — 이메일/휴대폰 인증코드 캐시 + 60초 rate-limit 에 사용 중
+- [ ] **CI/DI 암호화 유틸** — KMS or Fernet, `services/crypto.py` — 여전히 미구현 (`User.ci`/`di` 평문 저장)
 - [ ] **외부 연동 서비스 모듈**
-  - [ ] `services/sms.py` — NHN Cloud / 알리고
+  - [x] SMS 발송 **포트/의존성 주입 구조는 완료** — `app/auth/adapters/console_sms.py`(`ConsoleSmsSender`, 로그 출력 mock)만 연결됨. 운영용 NHN Cloud/알리고 어댑터로 교체 필요
   - [x] `app/payment/adapters/toss.py` — 결제 confirm/webhook 검증 (TossPaymentGateway)
-  - [ ] `services/toss_identity.py` 또는 `services/nice_identity.py`
+  - [ ] `services/toss_identity.py` 또는 `services/nice_identity.py` — 본인인증 PG, 미구현 (`identity_verifications` 테이블/모델만 존재, DB 직접 설정으로 우회 중)
   - [ ] `services/sweet_tracker.py` — 배송 추적 (Redis 캐시 5분)
 - [x] ~~`services/social_oauth.py`~~ — 어댑터 패턴으로 `app/auth/adapters/` 에 구현 완료
-- [ ] **Redis 통합** — `core/redis.py` (SMS 코드, 비로그인 장바구니, 배송 캐시, rate limit) — 의존성 있음, 미구현
-- [ ] **Rate Limit** — `slowapi` 의존성 있음, 미적용 (auth류 1분 10회, 일반 60회)
+- [ ] **Rate Limit** — `slowapi` 의존성 있음, 미적용 (auth류 1분 10회, 일반 60회) — 이메일/휴대폰 인증코드 자체 rate-limit(60초)은 Redis로 개별 구현되어 있으나 라우터 전역 rate limit은 아직 없음
+- [ ] **보안 헤더 미들웨어** — HSTS/X-Content-Type-Options, `app/core/middleware.py` 미구현
 - [ ] **관리자 보안** — IP 화이트리스트 또는 2FA, OpenAPI 문서 prod 비공개 (이미 적용됨)
-- [ ] **통합 테스트** — testcontainers + pytest-asyncio (DB 쿼리 정확성·트랜잭션·인증 가드 검증)
+- [x] **통합 테스트** — `tests/integration/` 디렉터리로 신규 추가됨 (라우터 ↔ DB 결합 검증). testcontainers 도입 여부는 미확인 — 실 DB 세션 fixture 구성 방식 재확인 필요
 
 ---
 
@@ -202,7 +222,9 @@
 - [x] 카테고리 메타 응답 (정적): `GET /categories` — `app/catalog/catalog_schemas.py`의 `CATEGORY_META`
 - [x] 관리자 계정 부트스트랩 스크립트 — `scripts/seed.py` (재실행 안전, admin01/hong001/kim001)
 - [x] 더미 상품 시드 (개발 편의) — `scripts/seed.py` 6개 상품 포함
+- [x] 더미 FAQ 시드 — **신규 완료** `scripts/seed.py::seed_faqs` 16건 (6개 카테고리, 1회 존재확인 쿼리로 재실행 안전)
 - [x] E2E 스모크 테스트 스크립트 — `scripts/test_api.sh` 33케이스 (멱등)
+- [ ] `scripts/test_api.sh`에 `app/help/` 모듈 케이스 없음 — 문의 접수(로그인 필수)/답변/FAQ 케이스 추가 필요
 
 ---
 
@@ -210,21 +232,25 @@
 
 ### Phase 1 (최소 동작)
 
-1. ✅ JWT/Depends 정비 + auth (sign-up/sign-in/refresh/sign-out/find-id/find-password/소셜 3종)
-2. ✅ GET /users/me, POST /users/me/password, PATCH /users/me, DELETE /users/me
-3. ✅ 상품 조회 (buyer) — `GET /products`, `GET /products/{id}`, `GET /products/featured`, `GET /categories`
-4. ✅ 주소록 CRUD
+1. ✅ JWT/Depends 정비 + auth (sign-up/sign-in/refresh/sign-out/find-id/find-password/소셜 3종, **이메일 인증코드 가입 가드 신규 완료**)
+2. ✅ GET /users/me, POST /users/me/password, PATCH /users/me, DELETE /users/me(PII 익명화)
+3. ✅ 상품 조회 (buyer) — `GET /products`(+bulk), `GET /products/{id}`, `GET /products/featured`, `GET /categories`
+4. ✅ 주소록 CRUD (label/memo 포함)
 5. ✅ 장바구니 CRUD + 관심상품 CRUD
-6. 본인인증 PG 연동 (start/callback/me) — Order 진입 가드 **(DB 직접 설정으로 우회 중)**
+6. 본인인증 PG 연동 (start/callback/me) — Order 진입 가드 **(여전히 DB 직접 설정으로 우회 중, 미구현)**
 7. ✅ 주문 생성 + 토스 결제 confirm/webhook (멱등) + 환불 요청 + 배송 정보 조회
-8. ✅ 관리자 상품 CRUD + 이미지 관리 + 주문 관리(송장·상태·취소·CSV) + 대시보드 + 회원 + 매출
+8. ✅ 관리자 상품 CRUD + 이미지 관리(전체 교체 + 단건 수정) + 주문 관리(송장·상태·취소·CSV) + 대시보드 + 회원 + 매출
+9. ✅ 휴대폰 번호 변경 인증(`/users/me/phone/*`) — Redis OTP, **신규 완료** (실 SMS 발송은 mock)
+10. ✅ 공지사항/FAQ/1:1문의 (`app/help/`) — **신규 완료**
 
 ### Phase 2 (안정화)
 
-9. 배송 추적 자동 폴링 (Celery / 스마트택배 API)
-10. PG 환불 실호출 (`POST /admin/orders/{n}/refund`, `POST /payments/{id}/refund`)
-11. SMS/이메일 알림 발송
-12. 알림센터 (`Notification` 모델 + 목록/읽음)
+11. 배송 추적 자동 폴링 (Celery / 스마트택배 API) — 미구현
+12. PG 환불 실호출 (`POST /admin/orders/{n}/refund`, `POST /payments/{id}/refund`) — 미구현
+13. 실 SMS 발송 어댑터 (NHN Cloud/알리고) 교체 — mock만 존재
+14. 회원가입 단계 SMS 인증(`/auth/sms/*`), 이메일 변경(`/users/me/email/*`) — 미구현
+15. 알림센터 (`Notification` 모델 + 목록/읽음) — 미구현
+16. Rate limit 전역 적용, 보안 헤더 미들웨어, CI/DI 암호화 — 미구현
 
 ### Phase 3 (확장)
 
@@ -238,11 +264,11 @@
 |---|---|---|
 | `Product` | 디자인 태그(인기/신규입고/베스트), 노출 정렬 — **선택** | 중 |
 | `ProductImage` | `label`(정면/측면/...) 컬럼 추가 — **권장** | 중 |
-| `User` | `status` enum(`ACTIVE`/`BANNED`) 추가 — **권장** (관리자 회원관리 표 "활성/제재") | 중 |
-| `Order` | `discount_amount`, `shipping_method` 추가 — **필수** (직배송 할인 -20k) | 상 |
+| `User` | `status` enum(`ACTIVE`/`BANNED`/`DORMANT`/`WITHDRAWN`) — ✅ **구현 완료** (관리자 회원관리 표 "활성/제재") | 중 |
+| `Order` | `discount_amount`, `shipping_method` — ✅ **구현 완료** (직배송 할인 -20k) | 상 |
 | `Order` | 주문 생성 시 배송지 스냅샷에 `recipient`만 있고 가입자명 별도 필요시 — **현행 OK** | — |
 | `OrderItem` | `product_image_url_snapshot` — **권장** (목록에서 이미지 노출) | 중 |
-| `Payment` | `card_company`, `card_last4`, `installment_months`, `approval_number` — **필수** (Complete 화면 "신한카드 1234 · 일시불") | 상 |
+| `Payment` | `card_company`, `card_last4`, `installment_months`, `approval_number`, `pg_tid` — ✅ **구현 완료** (Complete 화면 "신한카드 1234 · 일시불") | 상 |
 | `Shipment` | `direct_delivery_window_start/end` 또는 `delivery_memo_admin` — **선택** | 하 |
 | **신규** `Favorite` | 관심상품 — **필수** (My "관심상품 12") | 상 |
 | **신규** `Notification` | 인앱 알림 — **권장** (벨 아이콘) | 중 |
@@ -465,17 +491,17 @@ class Promotion(Base, TimestampMixin):
 
 ### 7.1 모델 변경 (마이그레이션 필요)
 
-- [ ] `ProductCategory` enum에 `VACUUM`, `SMALL_APPLIANCE` 추가 (§6.2)
-- [ ] `Product` — `tag`, `featured_until`, `view_count`, `favorite_count`, `sold_count` 추가 (§6.1)
-- [ ] `ProductImage` — `label`을 `ProductImageLabel` enum으로 전환, `Product.thumbnail_image_id` FK 또는 `is_primary` 추가 (§6.3)
-- [ ] `User` — `status: UserStatus(ACTIVE/BANNED/DORMANT)` 추가, 기존 `is_active`와 정합성 정리 (§6.4)
-- [ ] `Order` — `shipping_method: ShippingMethod`, `discount_amount`, `delivery_memo`, `identity_verified_snapshot_name` 추가 (§6.5)
-- [ ] `Payment` — `card_company`, `card_last4`, `installment_months`, `approval_number` 추가 (§6.6)
-- [ ] `Shipment` — `estimated_delivery_from`, `estimated_delivery_to`, `direct_delivery_note` 추가 (§6.8)
-- [ ] **신규** `Favorite(user_id, product_id)` — composite PK (§6.9)
-- [ ] **신규** `Promotion` (선택, 정적 JSON 대체 가능) (§6.10)
-- [ ] Alembic 마이그레이션 1개로 묶거나, 도메인별로 3~4개로 분할
-  - **마이그레이션 분할 권장**: `0002_categories_and_tags`, `0003_favorites`, `0004_order_shipping_payment_fields`
+- [ ] `ProductCategory` — enum이 아닌 동적 varchar 카테고리로 전환됨(`b427d8f8f268`) — `VACUUM`/`SMALL_APPLIANCE`는 이제 DB 시드 데이터로 추가하면 됨, 마이그레이션 불필요 (§6.2 재검토)
+- [ ] `Product` — `tag`, `featured_until`, `view_count`, `favorite_count`, `sold_count` 추가 (§6.1) — 여전히 미구현
+- [ ] `ProductImage` — `label`을 `ProductImageLabel` enum으로 전환, `Product.thumbnail_image_id` FK 또는 `is_primary` 추가 (§6.3) — 여전히 미구현 (현재 `label`은 nullable string)
+- [x] `User` — `status: UserStatus(ACTIVE/BANNED/DORMANT/WITHDRAWN)` 추가 완료 (§6.4)
+- [x] `Order` — `shipping_method`, `discount_amount` 추가 완료. `delivery_memo`, `identity_verified_snapshot_name`은 여전히 미구현 (§6.5)
+- [x] `Payment` — `card_company`, `card_last4`, `installment_months`, `approval_number`, `pg_tid` 추가 완료 (§6.6)
+- [ ] `Shipment` — `estimated_delivery_from`, `estimated_delivery_to`, `direct_delivery_note` 추가 (§6.8) — 여전히 미구현
+- [x] **신규** `Favorite(user_id, product_id)` — composite PK 구현 완료 (§6.9)
+- [ ] **신규** `Promotion` (선택, 정적 JSON 대체 가능) (§6.10) — 여전히 미구현
+- [x] **신규** `Help(Notice/Faq/Contact)` — 공지/FAQ/문의 모델 구현 완료 (마이그레이션 `9855aeca0293`, §1.9 참고)
+- [x] Alembic 마이그레이션은 도메인별로 개별 분할되어 진행 중 (favorites/withdrawn_at/user_status/address_label_memo/help_module 등 각각 별도 revision)
 
 ### 7.2 API 보강
 
@@ -501,12 +527,12 @@ class Promotion(Base, TimestampMixin):
   | 필드 | 정책 | 구현 상태 |
   |---|---|---|
   | `password` | 현재 비번 확인 후 변경 | ✅ 완료 |
-  | `phone` | SMS 인증코드 발송 → 확인 후 교체 | ❌ 미구현 (Redis 필요) |
-  | `email` | 새 이메일로 인증코드 발송 → 확인 후 교체 | ❌ 미구현 (Redis 필요) |
+  | `phone` | SMS 인증코드 발송 → 확인 후 교체 | ✅ **완료** (`/users/me/phone/send-verification`, `/verify` — Redis OTP, mock SMS) |
+  | `email` | 새 이메일로 인증코드 발송 → 확인 후 교체 | ❌ 미구현 (`/users/me/email/*` — Redis는 준비됐으나 라우터 없음). 회원가입 단계 이메일 인증(`/auth/email/*`)은 별도로 완료됨 |
   | `username` | 본인인증 완료 후 변경 잠금 (현재 자유변경 가능) | ⚠️ 본인인증 PG 연동 후 처리 |
   | `login_id` | 변경 불가 | ✅ 변경 불가 유지 |
 
-  - phone/email 변경 모두 `app/core/redis.py` 구현 선행 필요
+  - `app/core/redis.py`가 이미 구현되어 이메일 변경 라우터 추가 시 인프라 준비는 끝난 상태 — 남은 건 `/users/me/email/*` 엔드포인트와 서비스 로직뿐
   - `username` 잠금: 본인인증 PG 연동(§1.2) 완료 후 `identity_verified_at IS NOT NULL` 조건으로 `PATCH /users/me` 에서 차단
 - [ ] **환불 정책 7일** ([screens-buyer-1.jsx:371](/tmp/rekle-design/extracted2/rekle/project/screens-buyer-1.jsx)): "배송 후 7일 이내 동작 불량은 환불 가능, 단순 변심 반품 불가"
   - `POST /orders/{id}/refund/request`에서 `delivered_at + 7일` 윈도우 검증
@@ -555,8 +581,8 @@ class Promotion(Base, TimestampMixin):
 ## 9. 구현 순서 (Implementation Roadmap)
 
 > **아키텍처**: Modular Monolith + Layered (기본) + Ports & Adapters (외부 통합 모듈만)
-> **모듈 위치**: `app/{auth,user,catalog,cart,address,order,payment,common}/` — `docs/memory.md` 참고
-> **현재 상태 (2026-06-24)**: Week 0~6 대부분 완료. 테스트 291개. 미완: SMS/본인인증 PG/PG환불실호출/shipment추적/알림.
+> **모듈 위치**: `app/{auth,user,catalog,cart,address,order,payment,common,admin,help}/` — `docs/memory.md` 참고
+> **현재 상태 (2026-07-04)**: Week 0~6 대부분 완료 + help 모듈(공지/FAQ/문의) 신규 완료. 테스트 359개. 미완: 회원가입 SMS 인증(`/auth/sms/*`)·실 SMS 발송·본인인증 PG·PG환불실호출·shipment추적·알림센터·rate limit·CI/DI 암호화.
 
 각 주차 끝에 마이그레이션 1개씩 추가하고, 모든 새 엔드포인트는 통합 테스트(pytest + httpx) 1개씩 동반.
 
@@ -569,8 +595,8 @@ class Promotion(Base, TimestampMixin):
 - [x] `tests/conftest.py` — async test client, `make_user` 헬퍼, fake repo 패턴
 - [x] `pyproject.toml dev extras` — ruff/mypy/pytest-asyncio 설정 완료
 - [ ] `app/core/middleware.py` — 보안 헤더(HSTS/X-Content-Type-Options), structlog JSON 로깅
-- [ ] `app/core/redis.py` — `redis-py` async 클라이언트 + `Depends(get_redis)`
-- [ ] `app/core/rate_limit.py` — slowapi 기반 (auth류 1분 10회, 일반 60회)
+- [x] `app/core/redis.py` — **신규 완료** `redis-py` async 클라이언트 + `Depends(get_redis)`, 이메일/휴대폰 인증코드 캐시에 사용 중
+- [ ] `app/core/rate_limit.py` — slowapi 기반 (auth류 1분 10회, 일반 60회) — 전역 미적용 (인증코드 발송 자체의 60초 rate-limit은 Redis로 개별 구현됨)
 
 ### Week 1 — Auth + User 모듈 ✅ 완료 (일부 잔여)
 
@@ -584,13 +610,15 @@ class Promotion(Base, TimestampMixin):
 - [x] `POST /auth/find-password` — 임시 비밀번호 발급 메일 발송 (BackgroundTasks)
 - [x] `POST /auth/social/{kakao,naver,google}/callback` — OAuth 어댑터 3종 + 이메일 자동 연결
 - [x] `POST /auth/social/sign-up` — tempToken 소셜 신규가입
-- [x] `app/user/{router,service,repository,schemas}.py`
+- [x] `POST /auth/email/send-verification`, `POST /auth/email/verify-code` — **신규 완료** 회원가입 시 이메일 소유 인증(Redis 코드 캐시 + 60초 rate-limit), `verifiedToken`(JWT)을 sign-up 요청에 필수로 사용
+- [x] `app/user/{user_router,user_service,user_repository,user_schemas}.py`
 - [x] `GET /users/me` — 프로필 + 소셜 연결 현황
 - [x] `POST /users/me/password` — 비밀번호 변경 (`must_change_password` 해제)
-- [ ] `POST /auth/sms/send`, `POST /auth/sms/verify` — Redis 코드 캐시 (미구현, Redis 필요)
+- [ ] `POST /auth/sms/send`, `POST /auth/sms/verify` — 회원가입 단계 휴대폰 인증 (미구현, 아래 phone 변경용과는 별개)
+- [x] `POST /users/me/phone/send-verification`, `POST /users/me/phone/verify` — **신규 완료** 전화번호 변경용 Redis OTP (실 SMS는 `ConsoleSmsSender` mock)
 - [x] `PATCH /users/me` — username/phone 부분 업데이트
   - ⚠️ **TODO**: `username` 은 본인인증 결과(실명)와 연동되므로, 본인인증 완료 이후에는 PATCH 로 자유 변경 불가로 바꿔야 함. 현재는 인증 없이 변경 가능한 상태로 열려 있음 — 본인인증 PG 연동(§1.2) 완료 후 함께 처리.
-- [x] `DELETE /users/me` — CI/DI 파기 + `withdrawn_at` 기록
+- [x] `DELETE /users/me` — PII 전체 익명화 + `UserStatus.WITHDRAWN` + `withdrawn_at` 기록
 - [ ] CI/DI 컬럼 양방향 암호화 (AES-GCM) — 미구현
 
 ### Week 2 — Catalog (상품) 모듈 ✅ 완료 (일부 잔여)
@@ -645,7 +673,8 @@ class Promotion(Base, TimestampMixin):
 
 - [x] `GET /orders/{order_number}/shipment` — 배송 정보 조회
 - [ ] `GET /shipments/{tracking_number}/track` — 스마트택배 API 프록시 (미구현, Redis 캐시 5분)
-- [ ] `app/help/` 모듈 — 공지/FAQ/문의 (미구현)
+- [x] `app/help/` 모듈 — **신규 완료** 공지/FAQ/문의 (`router.py`+`admin_router.py`+`service.py`+`repository.py`+`models.py`, 마이그레이션 `9855aeca0293`+`f25b27344175`+`0de60b6871de`) — 문의는 로그인 필수, 답변 등록 + 내 문의 조회 포함
+- [ ] `GET /admin/dashboard/sales-chart` **버그 미해결** — `dashboard_service.py`의 `date_trunc()` 호출이 SELECT/GROUP BY/ORDER BY마다 별도 bind parameter로 바인딩되어 Postgres `GroupingError` → 500. 처리되지 않은 500은 `CORSMiddleware`보다 바깥의 `ServerErrorMiddleware`를 통과해 CORS 헤더 없이 응답되므로 프론트에서는 "CORS 에러"로 보인다. 수정: `date_trunc` 호출을 `literal_column`으로 바꾸거나 표현식을 변수로 추출해 재사용
 - [ ] `app/notification/` 모듈 — `Notification` 신규 모델 + 알림 목록/읽음 (미구현)
 - [x] **Admin 라우터** (모두 `Depends(get_current_admin)` 가드):
   - [x] `/admin/dashboard/{summary,sales-chart,pending-orders,popular-categories,stock-alerts}`
@@ -657,6 +686,7 @@ class Promotion(Base, TimestampMixin):
 
 ### Week 7 — 운영 / 마무리 (필수)
 
+- [ ] **버그 수정 (긴급, 작업량 적음)** — `GET /admin/dashboard/sales-chart` 500 에러 (§1.10/Week 6 참고). 관리자 대시보드 매출 차트가 현재 항상 실패 중
 - [ ] **감사 로그** — Hibernate Envers 대용으로 SQLAlchemy `event.listens_for` 또는 `Audited` 패턴 (mutation 1년 보존)
 - [ ] **모니터링** — Sentry SDK + structlog JSON 포맷 + Datadog 또는 Grafana 메트릭
 - [ ] **운영 헤더** — `Strict-Transport-Security`, `X-Content-Type-Options: nosniff` 미들웨어
