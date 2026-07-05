@@ -93,7 +93,7 @@ for item_req in req.items:
 재고 복구가 필요한 지점이 최소 4곳(사용자 취소/관리자 취소/웹훅 실패/웹훅 취소)이므로,
 각자 따로 구현하면 Reuse 위반이 즉시 발생한다. 먼저 공용 함수를 어디에 둘지 결정한다.
 
-- [ ] **결정**: `app/order/order_repository.py`에 `increment_stock` 원자적 SQL만 추가하고,
+- [x] **결정**: `app/order/order_repository.py`에 `increment_stock` 원자적 SQL만 추가하고,
       "order.items를 순회하며 각 상품에 increment_stock을 호출"하는 **오케스트레이션**은
       각 서비스(`OrderService`, `AdminOrderService`, `PaymentService`)가 개별적으로
       호출하게 둘지, 아니면 `app/order/` 밑에 모듈 레벨 순수 함수
@@ -136,10 +136,11 @@ async def increment_stock(self, product_id: int, quantity: int) -> None:
     await self._session.execute(stmt)
 ```
 
-- [ ] `app/order/order_repository.py`에 위 메서드 추가.
-- [ ] `app/payment/payment_repository.py`에도 동일한 메서드 추가 (1-0의 결정에 따름).
+- [x] `app/order/order_repository.py`에 위 메서드 추가. (커밋 `b88c9fd`)
+- [x] `app/payment/payment_repository.py`에도 동일한 메서드 추가 (1-0의 결정에 따름).
       단, `PaymentRepository`는 `Product`를 import하지 않고 있으므로
       `from app.catalog.models import Product`와 `from sqlalchemy import update` 추가 필요.
+      (커밋 `b88c9fd`)
 
 **TDD** (`tests/integration/test_order_repository.py`, 신규 파일 —
 이 repo는 여태 단위 테스트가 없었다. `SELECT ... FOR UPDATE`/원자적 SQL 정확성은
@@ -153,6 +154,10 @@ fake repo로 검증할 수 없으므로 `tests/integration/conftest.py`의 `db_s
    - Given: `stock=10`
    - When: `decrement_stock(id, 3)` → `increment_stock(id, 3)`
    - Then: `stock == 10` (원위치 확인 — 두 연산이 서로 역함수임을 고정하는 회귀 테스트)
+
+**Task 1-1 완료** (커밋 `b88c9fd`) — `tests/integration/test_order_repository.py` 2개
+테스트 모두 통과. `PaymentRepository`는 문서 계획대로 자체 `increment_stock`을
+따로 구현(중복 허용, 1-0 결정 참고).
 
 ---
 
