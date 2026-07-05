@@ -706,3 +706,20 @@ class Promotion(Base, TimestampMixin):
 | Week 3 (cart/wishlist/address) | ★ | order에 필요하나 mock 가능 |
 | Week 6 (admin) | ★ | 운영 단계에서 필요, 사용자 트래픽엔 무영향 |
 | Week 7 (운영) | — | 출시 직전 검증
+
+---
+
+## 각주 — 결제 개선 항목 (Phase 2 후보)
+
+### Payment confirm: `payment_id` 기반 정확한 READY 매칭 (Task 5-1 옵션 a)
+
+현재 `confirm_payment`는 주문 ID로 READY 결제를 찾는데, Task 4 멱등성으로 정상 흐름에서
+READY는 항상 최대 1개이므로 실용적으로 문제가 없다.
+
+하지만 사용자가 여러 결제수단을 동시에 시도하는 기능이 생기면 READY가 여러 개가 될 수 있고,
+이때 "어느 READY를 confirm할지" 명시해야 한다. 해결책:
+- `PaymentConfirmRequest`에 `payment_id: int` 필드 추가 (프론트가 `init_payment` 응답의
+  `payment_id`를 들고 있다가 confirm 시 같이 전송)
+- `payment_schemas.py` + `payment_router.py` + 프론트 SDK 변경 필요
+
+Phase 2 다중 결제수단 지원 시 재검토 필요.

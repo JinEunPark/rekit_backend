@@ -136,6 +136,10 @@ class _FakePaymentRepo:
     async def get_order_by_number(self, order_number: str) -> Order | None:
         return next((o for o in self._orders if o.order_number == order_number), None)
 
+    async def get_order_by_number_with_lock(self, order_number: str) -> Order | None:
+        # 단위 테스트에서는 락 없이 동일하게 동작 (락은 실제 DB에서만 의미있음)
+        return next((o for o in self._orders if o.order_number == order_number), None)
+
     async def get_order_by_id(self, order_id: int) -> Order | None:
         return next((o for o in self._orders if o.id == order_id), None)
 
@@ -224,6 +228,38 @@ async def test_init_payment_already_paid_raises() -> None:
             user_id=1,
             req=PaymentInitRequest(order_number="RK-2606200001", method=PaymentMethod.CARD),
         )
+
+
+async def test_init_payment_reuses_existing_ready_payment() -> None:
+    """이미 READY 결제가 있으면 새로 생성하지 않고 그대로 재사용한다 (멱등성)."""
+    order = make_order()
+    existing = make_payment(payment_id=99, order_id=1, status=PaymentStatus.READY)
+    repo = _FakePaymentRepo(orders=[order], payments=[existing])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    result = await service.init_payment(
+        user_id=1,
+        req=PaymentInitRequest(order_number="RK-2606200001", method=PaymentMethod.CARD),
+    )
+
+    assert result.payment_id == 99
+    assert len(repo._payments) == 1
+
+
+async def test_init_payment_ignores_non_ready_payments_when_checking_ready() -> None:
+    """READY가 아닌(취소된) 과거 결제는 재사용 대상이 아니고 새로 생성된다."""
+    order = make_order()
+    cancelled = make_payment(payment_id=5, order_id=1, status=PaymentStatus.CANCELLED)
+    repo = _FakePaymentRepo(orders=[order], payments=[cancelled])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    result = await service.init_payment(
+        user_id=1,
+        req=PaymentInitRequest(order_number="RK-2606200001", method=PaymentMethod.CARD),
+    )
+
+    assert result.payment_id != 5
+    assert len(repo._payments) == 2
 
 
 # ── confirm_payment ─────────────────────────────────────────────

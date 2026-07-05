@@ -665,13 +665,13 @@ async def init_payment(
     )
 ```
 
-- [ ] 위 변경 적용. **`method`가 재사용 시 요청값과 다르면 어떻게 할지 결정**:
+- [x] 위 변경 적용. **`method`가 재사용 시 요청값과 다르면 어떻게 할지 결정**:
       기존 READY 건의 `method`를 그대로 쓸지, 새 `req.method`로 갱신할지.
       → 권장: 기존 값을 유지 (결제수단을 바꾸고 싶으면 프론트가 먼저 그 READY를
       취소하는 별도 API가 필요하다는 뜻인데, 그건 이 문서 범위 밖. 지금은 "이미
-      READY가 있으면 그대로 재사용"이 제일 단순하고 안전).
-- [ ] 기존 `test_init_payment_success` 등 회귀 테스트가 "매번 새 Payment 생성"을
-      전제로 하고 있는지 확인 — 전제가 깨지면 테스트 수정 필요 (아래 목록 참고).
+      READY가 있으면 그대로 재사용"이 제일 단순하고 안전). 구현됨, 기존 값 유지.
+- [x] 기존 `test_init_payment_success` 등 회귀 테스트가 "매번 새 Payment 생성"을
+      전제로 하고 있는지 확인 — 확인 완료. 회귀 테스트 21건 모두 통과.
 
 **TDD** (`tests/test_payment_service.py`):
 
@@ -722,7 +722,7 @@ async def init_payment(
   흐름에서 주문당 READY는 항상 최대 1개이므로 "아무거나 집는" 문제가 사실상
   사라진다. API 변경 없음.
 
-- [ ] **결정: (b)를 기본으로 채택.** Task 4 완료 후에도 동시성 상 READY가
+- [x] **결정: (b)를 기본으로 채택.** Task 4 완료 후에도 동시성 상 READY가
       2개 이상 생기는 경로가 남아있는지 재검토 (예: `init_payment`의
       "READY 존재 확인 → 없으면 생성" 사이에 동시 요청 두 개가 끼어들면
       여전히 2개가 생길 수 있음 — **이건 Task 4의 원자성 문제이기도 함**,
@@ -730,12 +730,12 @@ async def init_payment(
       완전히 안전함. Task 4 구현 시 `get_order_by_number`를
       `with_for_update` 버전으로 바꾸는 걸 같이 검토할 것 — **Task 4 문서에
       이 내용 추가 필요, 아래 체크박스로 남김**).
-  - [ ] (Task 4 보강) `init_payment`에서 `order` 조회를
+  - [x] (Task 4 보강) `init_payment`에서 `order` 조회를
         `get_order_by_number_with_lock`(신규, `FOR UPDATE`)으로 바꿔서
-        "READY 확인 → 없으면 생성"이 원자적으로 처리되게 한다.
-- [ ] (a)는 지금 채택하지 않지만, 나중에 여러 결제수단을 병렬로 시도하게
+        "READY 확인 → 없으면 생성"이 원자적으로 처리되게 한다. 구현됨.
+- [x] (a)는 지금 채택하지 않지만, 나중에 여러 결제수단을 병렬로 시도하게
       하는 기능이 생기면 재검토가 필요하다는 점을 `docs/todo.md`에 각주로
-      남길 것.
+      남길 것. → docs/todo.md에 기록 완료.
 
 **TDD**: Task 4 완료 후 아래로 회귀 고정.
 1. `test_confirm_payment_uses_the_single_ready_payment_after_init_dedup`

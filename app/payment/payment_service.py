@@ -55,21 +55,27 @@ class PaymentService:
         3. Payment(status=READY) 생성 + save
         4. PaymentInitResponse 반환
         """
-        order = await self._repo.get_order_by_number(req.order_number)
+        # FOR UPDATE 락 — READY 확인 → 없으면 생성 구간을 원자적으로 처리 (Task 5-1 보강).
+        order = await self._repo.get_order_by_number_with_lock(req.order_number)
         if order is None or order.user_id != user_id:
             raise OrderNotFoundError()
 
         if order.status != OrderStatus.PENDING:
             raise PaymentFailedError(f"주문 상태가 PENDING 이 아닙니다: {order.status}")
 
-        payment = Payment(
-            order_id=order.id,
-            pg_provider=PgProvider.TOSS,
-            method=req.method,
-            amount=order.total_amount,
-            status=PaymentStatus.READY,
+        existing_payments = await self._repo.get_by_order_id(order.id)
+        payment = next(
+            (p for p in existing_payments if p.status == PaymentStatus.READY), None
         )
-        payment = await self._repo.save(payment)
+        if payment is None:
+            payment = Payment(
+                order_id=order.id,
+                pg_provider=PgProvider.TOSS,
+                method=req.method,
+                amount=order.total_amount,
+                status=PaymentStatus.READY,
+            )
+            payment = await self._repo.save(payment)
 
         # user.username 은 order 에 직접 없으므로 recipient_name(스냅샷)을 대신 활용.
         # 실제 결제창 표시 이름: 배송지 수령인 이름이 가장 가까운 값.

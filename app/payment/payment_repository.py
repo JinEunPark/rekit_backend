@@ -45,6 +45,13 @@ class PaymentRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_order_by_number_with_lock(self, order_number: str) -> Order | None:
+        """FOR UPDATE 락으로 주문 조회 — init_payment에서 READY 확인+생성을 원자적으로 처리."""
+        result = await self._session.execute(
+            select(Order).where(Order.order_number == order_number).with_for_update()
+        )
+        return result.scalar_one_or_none()
+
     async def get_order_by_id(self, order_id: int) -> Order | None:
         result = await self._session.execute(
             select(Order).where(Order.id == order_id).options(selectinload(Order.items))
