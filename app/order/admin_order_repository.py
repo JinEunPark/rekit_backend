@@ -5,10 +5,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.catalog.models import Product
 from app.order.models import Order, OrderStatus
 from app.order.shipment import Shipment, ShipmentStatus
 from app.user.models import User
@@ -79,11 +80,24 @@ class AdminOrderRepository:
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
     async def get_order_for_update(self, order_number: str) -> Order | None:
+        """SELECT ... FOR UPDATE 로 주문을 잠근다 (items 포함 — 취소 시 재고 복구에 필요)."""
         return (
             await self._session.execute(
-                select(Order).where(Order.order_number == order_number)
+                select(Order)
+                .where(Order.order_number == order_number)
+                .options(selectinload(Order.items))
+                .with_for_update()
             )
         ).scalar_one_or_none()
+
+    async def increment_stock(self, product_id: int, quantity: int) -> None:
+        """재고를 quantity 만큼 가산 (관리자 주문 취소 시 복구용). 원자적 UPDATE."""
+        stmt = (
+            update(Product)
+            .where(Product.id == product_id)
+            .values(stock=Product.stock + quantity)
+        )
+        await self._session.execute(stmt)
 
     async def create_or_update_shipment(
         self, order: Order, carrier: str, tracking_number: str

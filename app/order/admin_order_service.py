@@ -92,6 +92,10 @@ class AdminOrderService:
             raise OrderNotFoundError()
         if order.status not in _CANCELLABLE:
             raise OrderCancelForbiddenError()
+
+        for item in order.items:
+            await self._repo.increment_stock(item.product_id, item.quantity)
+
         order.status = OrderStatus.CANCELLED
         order.cancelled_at = datetime.now(UTC)
         return await self.get_order(order_number)

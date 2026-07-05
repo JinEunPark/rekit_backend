@@ -9,7 +9,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.core.exceptions import OrderNotFoundError
+from app.core.exceptions import OrderCancelForbiddenError, OrderNotFoundError
+from app.order.admin_order_schemas import AdminOrderCancelRequest
 from app.order.admin_order_service import AdminOrderService
 from app.order.models import Order, OrderItem, OrderStatus
 from app.order.shipment import ShipmentMethod
@@ -59,11 +60,20 @@ def _make_order(*, order_number: str = "RK-2607060001") -> Order:
 class _FakeAdminOrderRepo:
     def __init__(self, order: Order | None) -> None:
         self._order = order
+        self.increment_calls: list[tuple[int, int]] = []
 
     async def get_by_order_number(self, order_number: str) -> Order | None:
         if self._order and self._order.order_number == order_number:
             return self._order
         return None
+
+    async def get_order_for_update(self, order_number: str) -> Order | None:
+        if self._order and self._order.order_number == order_number:
+            return self._order
+        return None
+
+    async def increment_stock(self, product_id: int, quantity: int) -> None:
+        self.increment_calls.append((product_id, quantity))
 
 
 def _make_service(order: Order | None) -> AdminOrderService:
@@ -110,3 +120,32 @@ class TestGetOrderItemSnapshot:
 
         with pytest.raises(OrderNotFoundError):
             await service.get_order("RK-0000000000")
+
+
+class TestAdminCancelOrder:
+    @pytest.mark.asyncio
+    async def test_cancel_order_restores_stock(self):
+        """관리자 취소 시 주문 라인의 재고가 복구된다."""
+        order = _make_order()
+        order.status = OrderStatus.PAID
+        order.items[0].product_id = 18
+        order.items[0].quantity = 2
+        repo = _FakeAdminOrderRepo(order)
+        service = AdminOrderService(repo)  # type: ignore[arg-type]
+
+        await service.cancel_order(order.order_number, AdminOrderCancelRequest())
+
+        assert repo.increment_calls == [(18, 2)]
+
+    @pytest.mark.asyncio
+    async def test_cancel_order_not_cancellable_status_raises_and_no_stock_change(self):
+        """취소 불가 상태(SHIPPING)에서는 예외가 나고 재고도 바뀌지 않는다."""
+        order = _make_order()
+        order.status = OrderStatus.SHIPPING
+        repo = _FakeAdminOrderRepo(order)
+        service = AdminOrderService(repo)  # type: ignore[arg-type]
+
+        with pytest.raises(OrderCancelForbiddenError):
+            await service.cancel_order(order.order_number, AdminOrderCancelRequest())
+
+        assert repo.increment_calls == []
