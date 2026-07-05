@@ -194,7 +194,7 @@ async def cancel_order(self, user_id: int, order_number: str) -> OrderResponse:
     return _to_order_response(order)
 ```
 
-- [ ] 위 변경 적용. **순서 주의**: 재고 복구를 먼저 하고 상태 전환을 나중에 하든 순서
+- [x] 위 변경 적용 (커밋 `d31bc86`). **순서 주의**: 재고 복구를 먼저 하고 상태 전환을 나중에 하든 순서
       자체는 트랜잭션 내에서 원자적으로 같이 커밋되므로 상관없음 — 다만 재고 복구 도중
       예외가 나면 상태 전환도 같이 롤백돼야 하므로, **같은 트랜잭션 안에서 처리되는지
       반드시 확인** (지금처럼 `db_session` 컨텍스트가 감싸는 형태면 자동으로 보장됨).
@@ -231,6 +231,13 @@ async def increment_stock(self, product_id: int, quantity: int) -> None:
    - Given: `status=PAID`인 주문 (결제 후 취소 케이스)
    - When: 취소
    - Then: 재고 복구는 여전히 일어남 (PG 환불은 별도 처리라는 걸 주석으로 명시)
+
+**Task 1-2 완료** (커밋 `d31bc86`) — 위 4개 테스트 전부 통과 (실제 테스트명은
+`test_cancel_order_restores_stock_for_single_item`,
+`test_cancel_order_restores_stock_for_multiple_items`,
+`test_cancel_already_cancelled_order_does_not_double_restore`,
+`test_cancel_paid_order_also_restores_stock`). 기존 `TestCancelOrder` 회귀
+7건도 모두 통과.
 
 ---
 
