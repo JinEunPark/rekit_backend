@@ -4,8 +4,7 @@
 > **현 백엔드 상태** (2026-07-04 기준):
 > - **구현 완료**: auth 전체(이메일 인증 가입 포함) / users (PATCH·DELETE /me + 휴대폰 인증 변경) / catalog (DB 동적 카테고리, bulk 조회) / admin catalog CRUD(이미지 단건 수정 포함) / admin dashboard·orders·members·sales / cart / favorites / address(label/memo) / order (환불요청·배송조회 포함) / payment (init·confirm·webhook) / uploads / **help(공지·FAQ·문의) 신규 완료 — 로그인 필수 전환 + 답변 등록 + 내 문의 조회 추가** / **Redis 인프라 신규 완료**
 > - **미구현**: 회원가입/전화번호 변경 이외의 SMS 인증(`/auth/sms/*`) / 실제 SMS 발송 어댑터(Console mock만 존재) / 본인인증 PG 연동 / shipment 추적 (스마트택배 API) / 인앱 알림센터(벨 아이콘) / PG 환불 실호출 / rate limit / CI·DI 암호화 / 보안 헤더 미들웨어
-> - **알려진 버그**: `GET /admin/dashboard/sales-chart` — `date_trunc()` 포맷 문자열이 SELECT/GROUP BY/ORDER BY 마다 별개 bind parameter로 바인딩되어 Postgres가 동일 표현식으로 인식하지 못함 → `GroupingError`로 500 (§2 참고, 미해결)
-> - **테스트**: 365개 통과 (단위 + 통합, `tests/integration/` 포함) / ruff·mypy 전체 클린
+> - **테스트**: 366개 통과 (단위 + 통합, `tests/integration/` 포함, 실제 Postgres 대상 통합 테스트 신규 포함) / ruff·mypy 전체 클린
 > **작성일**: 2026-05-01 / **최종 업데이트**: 2026-07-04
 
 ---
@@ -674,7 +673,7 @@ class Promotion(Base, TimestampMixin):
 - [x] `GET /orders/{order_number}/shipment` — 배송 정보 조회
 - [ ] `GET /shipments/{tracking_number}/track` — 스마트택배 API 프록시 (미구현, Redis 캐시 5분)
 - [x] `app/help/` 모듈 — **신규 완료** 공지/FAQ/문의 (`router.py`+`admin_router.py`+`service.py`+`repository.py`+`models.py`, 마이그레이션 `9855aeca0293`+`f25b27344175`+`0de60b6871de`) — 문의는 로그인 필수, 답변 등록 + 내 문의 조회 포함
-- [ ] `GET /admin/dashboard/sales-chart` **버그 미해결** — `dashboard_service.py`의 `date_trunc()` 호출이 SELECT/GROUP BY/ORDER BY마다 별도 bind parameter로 바인딩되어 Postgres `GroupingError` → 500. 처리되지 않은 500은 `CORSMiddleware`보다 바깥의 `ServerErrorMiddleware`를 통과해 CORS 헤더 없이 응답되므로 프론트에서는 "CORS 에러"로 보인다. 수정: `date_trunc` 호출을 `literal_column`으로 바꾸거나 표현식을 변수로 추출해 재사용
+- [x] `GET /admin/dashboard/sales-chart` **버그 수정 완료** — `dashboard_service.py`의 `date_trunc()` 호출을 `literal_column`으로 바꿔 SELECT/GROUP BY/ORDER BY 세 곳이 동일 표현식을 공유하도록 수정 (기존엔 매번 별도 bind parameter로 바인딩되어 Postgres `GroupingError` → 500, CORS 헤더 없는 응답으로 위장돼 보였음). 실제 Postgres 대상 통합 테스트(`tests/integration/test_dashboard_service.py`) 추가 — fake repo로는 이런 SQL 구조 버그가 재현되지 않아 최초로 real-DB 통합 테스트 패턴을 도입함
 - [ ] `app/notification/` 모듈 — `Notification` 신규 모델 + 알림 목록/읽음 (미구현)
 - [x] **Admin 라우터** (모두 `Depends(get_current_admin)` 가드):
   - [x] `/admin/dashboard/{summary,sales-chart,pending-orders,popular-categories,stock-alerts}`
@@ -686,7 +685,6 @@ class Promotion(Base, TimestampMixin):
 
 ### Week 7 — 운영 / 마무리 (필수)
 
-- [ ] **버그 수정 (긴급, 작업량 적음)** — `GET /admin/dashboard/sales-chart` 500 에러 (§1.10/Week 6 참고). 관리자 대시보드 매출 차트가 현재 항상 실패 중
 - [ ] **감사 로그** — Hibernate Envers 대용으로 SQLAlchemy `event.listens_for` 또는 `Audited` 패턴 (mutation 1년 보존)
 - [ ] **모니터링** — Sentry SDK + structlog JSON 포맷 + Datadog 또는 Grafana 메트릭
 - [ ] **운영 헤더** — `Strict-Transport-Security`, `X-Content-Type-Options: nosniff` 미들웨어

@@ -39,7 +39,9 @@
       "Bash(curl -s -X PATCH http://localhost:8000/api/v1/admin/contacts/9/answer -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiQURNSU4iLCJzdWIiOiIxOCIsImlhdCI6MTc4MzE0MDE3OSwiZXhwIjoxNzgzMTQxOTc5LCJ0eXBlIjoiYWNjZXNzIn0.rUitVfbIBPOA7cztKS1wP2fya3gF2je3Yp5yRBjUhQs' -H 'Content-Type: application/json' -d '{\"answer\":\"리팩터 후 정상 동작 확인용 답변입니다.\"}')",
       "Bash(curl -s http://localhost:8000/api/v1/help/contacts/9 -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiVVNFUiIsInN1YiI6IjEyIiwiaWF0IjoxNzgzMTM5MDgwLCJleHAiOjE3ODMxNDA4ODAsInR5cGUiOiJhY2Nlc3MifQ.fKqp_A44rH4d9KvvbJaiz91ioadDItOAalORXOBC2to')",
       "Bash(curl -s -i -X POST http://localhost:8000/api/v1/help/contacts -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiVVNFUiIsInN1YiI6IjEyIiwiaWF0IjoxNzgzMTM5MDgwLCJleHAiOjE3ODMxNDA4ODAsInR5cGUiOiJhY2Nlc3MifQ.fKqp_A44rH4d9KvvbJaiz91ioadDItOAalORXOBC2to' -H 'Content-Type: application/json' -d '{\"title\":\"phone 제거 확인용 문의\",\"content\":\"phone 필드 제거 후 정상 동작 확인.\"}')",
-      "Bash(python3 -c \"import json; json.load\\(open\\('/Volumes/A/web_projects/rekle_backend/.claude/settings.json'\\)\\); print\\('valid JSON'\\)\")"
+      "Bash(python3 -c \"import json; json.load\\(open\\('/Volumes/A/web_projects/rekle_backend/.claude/settings.json'\\)\\); print\\('valid JSON'\\)\")",
+      "Bash(.venv/bin/pytest tests/integration/test_dashboard_service.py -v)",
+      "Bash(curl -s -i http://localhost:8000/api/v1/admin/dashboard/sales-chart?period=30d -H 'Origin: http://localhost:5173' -H 'Authorization: Bearer __TRACKED_VAR__')"
     ]
   }
 }
