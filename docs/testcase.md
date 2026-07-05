@@ -372,16 +372,13 @@ async def _restore_order_stock_and_cancel(self, order_id: int) -> None:
     order.cancelled_at = datetime.now(UTC)
 ```
 
-- [ ] `PaymentRepository`에 `get_order_by_id(order_id: int) -> Order | None`
-      추가 — `selectinload(Order.items)` 포함 (재고 복구에 items 필요).
-- [ ] `PARTIAL_CANCELED`(부분 취소)는 **전체 재고 복구 대상이 아님**을 명시적으로
-      분기 처리 (위 코드의 `if pg_status == _TOSS_CANCELED:` 조건). 이 모델에는
-      라인별 부분 환불 개념이 아직 없으므로, 부분취소 시엔 재고를 만지지 않고
-      `payment.status`만 `CANCELLED`로 바꿔두는 현재 동작을 **의도적으로 유지**한다 —
-      다만 이건 실제로는 미완성 기능이므로 `# TODO: 부분 취소 시 라인별 재고 복구
-      정책 미정` 주석을 남겨서 다음 세션이 헷갈리지 않게 할 것.
-- [ ] `from datetime import UTC, datetime`가 이미 import돼 있는지 확인 (order_service.py에서
-      쓰던 것과 동일 패턴).
+- [x] `PaymentRepository`에 `get_order_by_id(order_id: int) -> Order | None`
+      추가 — `selectinload(Order.items)` 포함 (재고 복구에 items 필요). (커밋 `fb19223`)
+- [x] `PARTIAL_CANCELED`(부분 취소)는 **전체 재고 복구 대상이 아님**을 명시적으로
+      분기 처리 (위 코드의 `if pg_status == _TOSS_CANCELED:` 조건). `# TODO: 부분
+      취소 시 라인별 재고 복구 정책 미정` 주석 추가함. (커밋 `fb19223`)
+- [x] `from datetime import UTC, datetime` 추가 (payment_service.py에 이전엔 없었음,
+      이번에 신규 추가). (커밋 `fb19223`)
 
 **TDD** (`tests/test_payment_service.py`):
 
@@ -404,6 +401,11 @@ async def _restore_order_stock_and_cancel(self, order_id: int) -> None:
      (웹훅은 재시도될 수 있으므로 현실적인 케이스)
    - When: `handle_webhook` 호출
    - Then: `increment_stock` 호출 없음 (중복 복구 방지 가드 확인)
+
+**Task 1-4 완료** (커밋 `fb19223`) — 위 4개 테스트 + 기존 웹훅 회귀 2건 전부 통과.
+
+**Task 1 전체 완료** — 1-0/1-1/1-2/1-3/1-4 모두 체크됨. 재고 미복구 버그(A-1, C-11,
+C-12)가 사용자 취소/관리자 취소/웹훅 실패/웹훅 취소 4개 경로 모두에서 해결됨.
 
 ---
 
