@@ -135,3 +135,12 @@ class OrderRepository:
             .values(stock=Product.stock - quantity)
         )
         await self._session.execute(stmt)
+
+    async def increment_stock(self, product_id: int, quantity: int) -> None:
+        """재고를 quantity 만큼 가산 (주문 취소/실패 시 복구용). 원자적 UPDATE."""
+        stmt = (
+            update(Product)
+            .where(Product.id == product_id)
+            .values(stock=Product.stock + quantity)
+        )
+        await self._session.execute(stmt)

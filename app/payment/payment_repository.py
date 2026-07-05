@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.catalog.models import Product
 from app.order.models import Order, OrderStatus
 from app.payment.adapters.ports import TossConfirmResult
 from app.payment.models import Payment, PaymentStatus
@@ -74,3 +75,12 @@ class PaymentRepository:
         order.status = OrderStatus.PAID
         order.paid_at = datetime.now(UTC)
         await self._session.flush()
+
+    async def increment_stock(self, product_id: int, quantity: int) -> None:
+        """재고를 quantity 만큼 가산 (결제 실패/취소 웹훅 시 복구용). 원자적 UPDATE."""
+        stmt = (
+            update(Product)
+            .where(Product.id == product_id)
+            .values(stock=Product.stock + quantity)
+        )
+        await self._session.execute(stmt)
