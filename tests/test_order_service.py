@@ -25,7 +25,7 @@ from app.core.exceptions import (
     RefundForbiddenError,
     ShipmentNotFoundError,
 )
-from app.order.models import Order, OrderStatus
+from app.order.models import Order, OrderItem, OrderStatus
 from app.order.order_schemas import (
     CreateOrderRequest,
     OrderItemRequest,
@@ -148,6 +148,7 @@ class FakeOrderRepository:
         self._orders: list[Order] = orders or []
         self._shipments: list[Shipment] = shipments or []
         self._next_order_id = 100
+        self.increment_calls: list[tuple[int, int]] = []
 
     # ── 필수 인터페이스 ────────────────────────────────────
 
@@ -205,6 +206,11 @@ class FakeOrderRepository:
     async def decrement_stock(self, product_id: int, quantity: int) -> None:
         if product_id in self._products:
             self._products[product_id].stock -= quantity
+
+    async def increment_stock(self, product_id: int, quantity: int) -> None:
+        self.increment_calls.append((product_id, quantity))
+        if product_id in self._products:
+            self._products[product_id].stock += quantity
 
 
 # ── 헬퍼 ────────────────────────────────────────────────────────────
@@ -599,6 +605,85 @@ class TestCancelOrder:
 
         with pytest.raises(OrderCancelForbiddenError):
             await service.cancel_order(user_id=1, order_number=order.order_number)
+
+    async def test_cancel_order_restores_stock_for_single_item(self) -> None:
+        """취소 시 주문 라인의 재고가 복구된다."""
+        order = make_order(status=OrderStatus.PENDING)
+        order.items = [
+            OrderItem(
+                product_id=1,
+                product_title_snapshot="상품",
+                price_snapshot=100_000,
+                quantity=2,
+            )
+        ]
+        repo = FakeOrderRepository(orders=[order])
+        service = OrderService(repo)  # type: ignore[arg-type]
+
+        await service.cancel_order(user_id=1, order_number=order.order_number)
+
+        assert repo.increment_calls == [(1, 2)]
+
+    async def test_cancel_order_restores_stock_for_multiple_items(self) -> None:
+        """라인이 여러 개면 각 상품별로 정확한 수량만큼 복구된다."""
+        order = make_order(status=OrderStatus.PENDING)
+        order.items = [
+            OrderItem(
+                product_id=1,
+                product_title_snapshot="상품A",
+                price_snapshot=100_000,
+                quantity=1,
+            ),
+            OrderItem(
+                product_id=2,
+                product_title_snapshot="상품B",
+                price_snapshot=50_000,
+                quantity=3,
+            ),
+        ]
+        repo = FakeOrderRepository(orders=[order])
+        service = OrderService(repo)  # type: ignore[arg-type]
+
+        await service.cancel_order(user_id=1, order_number=order.order_number)
+
+        assert repo.increment_calls == [(1, 1), (2, 3)]
+
+    async def test_cancel_already_cancelled_order_does_not_double_restore(self) -> None:
+        """이미 취소된 주문을 다시 취소 시도하면 재고 복구가 중복되지 않는다."""
+        order = make_order(status=OrderStatus.CANCELLED)
+        order.items = [
+            OrderItem(
+                product_id=1,
+                product_title_snapshot="상품",
+                price_snapshot=100_000,
+                quantity=2,
+            )
+        ]
+        repo = FakeOrderRepository(orders=[order])
+        service = OrderService(repo)  # type: ignore[arg-type]
+
+        with pytest.raises(OrderCancelForbiddenError):
+            await service.cancel_order(user_id=1, order_number=order.order_number)
+
+        assert repo.increment_calls == []
+
+    async def test_cancel_paid_order_also_restores_stock(self) -> None:
+        """결제 후(PAID) 취소도 재고는 복구된다 (PG 환불은 별도 처리)."""
+        order = make_order(status=OrderStatus.PAID)
+        order.items = [
+            OrderItem(
+                product_id=1,
+                product_title_snapshot="상품",
+                price_snapshot=100_000,
+                quantity=1,
+            )
+        ]
+        repo = FakeOrderRepository(orders=[order])
+        service = OrderService(repo)  # type: ignore[arg-type]
+
+        await service.cancel_order(user_id=1, order_number=order.order_number)
+
+        assert repo.increment_calls == [(1, 1)]
 
 
 # ── list_orders ──────────────────────────────────────────────────────

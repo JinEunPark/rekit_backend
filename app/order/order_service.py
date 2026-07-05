@@ -215,6 +215,9 @@ class OrderService:
         if order.status not in _CANCELLABLE_STATUSES:
             raise OrderCancelForbiddenError()
 
+        for item in order.items:
+            await self._repo.increment_stock(item.product_id, item.quantity)
+
         order.status = OrderStatus.CANCELLED
         order.cancelled_at = datetime.now(UTC)
 
