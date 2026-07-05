@@ -41,7 +41,24 @@
       "Bash(curl -s -i -X POST http://localhost:8000/api/v1/help/contacts -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiVVNFUiIsInN1YiI6IjEyIiwiaWF0IjoxNzgzMTM5MDgwLCJleHAiOjE3ODMxNDA4ODAsInR5cGUiOiJhY2Nlc3MifQ.fKqp_A44rH4d9KvvbJaiz91ioadDItOAalORXOBC2to' -H 'Content-Type: application/json' -d '{\"title\":\"phone 제거 확인용 문의\",\"content\":\"phone 필드 제거 후 정상 동작 확인.\"}')",
       "Bash(python3 -c \"import json; json.load\\(open\\('/Volumes/A/web_projects/rekle_backend/.claude/settings.json'\\)\\); print\\('valid JSON'\\)\")",
       "Bash(.venv/bin/pytest tests/integration/test_dashboard_service.py -v)",
-      "Bash(curl -s -i http://localhost:8000/api/v1/admin/dashboard/sales-chart?period=30d -H 'Origin: http://localhost:5173' -H 'Authorization: Bearer __TRACKED_VAR__')"
+      "Bash(curl -s -i http://localhost:8000/api/v1/admin/dashboard/sales-chart?period=30d -H 'Origin: http://localhost:5173' -H 'Authorization: Bearer __TRACKED_VAR__')",
+      "Bash(.venv/bin/pytest tests/integration/test_sales_service.py -v)",
+      "Bash(.venv/bin/pytest tests/integration/ -v)",
+      "Bash(curl -s -i 'http://localhost:8000/api/v1/admin/sales/timeseries?start=2026-07-01&end=2026-07-06' -H 'Authorization: Bearer __TRACKED_VAR__')",
+      "Bash(pip show *)",
+      "Bash(.venv/bin/python -c \"import asyncpg\")",
+      "Bash(.venv/bin/pytest tests/integration/ -v --durations=30)",
+      "Bash(.venv/bin/pytest tests/integration/ --durations=0 -vv)",
+      "Bash(.venv/bin/pytest tests/integration/test_address_router.py -v -s)",
+      "Bash(.venv/bin/pytest tests/integration/test_sales_service.py tests/integration/test_dashboard_service.py -v -s --durations=0)",
+      "Bash(.venv/bin/pytest tests/integration/test_sales_service.py tests/integration/test_dashboard_service.py -v --durations=0)",
+      "Bash(.venv/bin/mypy app/admin/_query_helpers.py app/admin/dashboard_service.py)",
+      "Bash(.venv/bin/pytest tests/integration/ -q)",
+      "Bash(curl -s http://localhost:8000/api/v1/admin/dashboard/sales-chart?period=7d -H 'Authorization: Bearer __TRACKED_VAR__' -w '\\\\nHTTP:%{http_code}\\\\n')",
+      "Bash(curl -s 'http://localhost:8000/api/v1/admin/sales/timeseries?start=2026-06-01&end=2026-07-06' -H 'Authorization: Bearer __TRACKED_VAR__' -w '\\\\nHTTP:%{http_code}\\\\n')",
+      "Bash(curl -s 'http://localhost:8000/api/v1/admin/sales/timeseries?start=2026-06-01&end=2026-07-06&granularity=week' -H 'Authorization: Bearer __TRACKED_VAR__' -w '\\\\nHTTP:%{http_code}\\\\n')",
+      "Bash(.venv/bin/pytest tests/test_admin_order_service.py -v)",
+      "Bash(.venv/bin/pytest tests/test_admin_order_service.py tests/test_order_service.py -q)"
     ]
   }
 }
