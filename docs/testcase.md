@@ -283,18 +283,17 @@ async def cancel_order(
     return await self.get_order(order_number)
 ```
 
-- [ ] `app/order/admin_order_repository.py::get_order_for_update`(81-86)에
+- [x] `app/order/admin_order_repository.py::get_order_for_update`(81-86)에
       `.with_for_update()` 추가 (지금 안 걸려있는 버그성 네이밍 불일치 수정).
-      **주의**: `.options(selectinload(...))`와 `.with_for_update()`를 같이 쓸 때
-      SQLAlchemy/Postgres 조합에 따라 `FOR UPDATE`가 JOIN된 테이블까지 잠그려다
-      에러가 나는 경우가 있음(`FOR UPDATE cannot be applied to the nullable side
-      of an outer join` 류) — `get_by_order_number`(68-78)처럼 여러 relationship을
-      selectinload 하는 구조라면, **락은 `Order` 단일 테이블만 걸고 items 등은
-      별도 쿼리로 lazy/selectin 하도록 분리**해야 할 수 있음. 실제 적용 시 반드시
-      `.with_for_update()` 추가 후 이 메서드를 쓰는 기존 호출부(`input_shipment`,
-      `update_status`, `cancel_order`)가 다 정상 동작하는지 통합 테스트로 확인.
-- [ ] `AdminOrderRepository`에 `increment_stock` 위임 메서드 추가 (1-0 결정에 따라
+      **확인 완료**: 실제 Postgres에 대해 직접 실행해본 결과, `selectinload(Order.items)`는
+      `order_items`에 대해 별도 SELECT(FOR UPDATE 없음)를 내고 `orders` 테이블에만
+      `FOR UPDATE`가 걸려서 우려했던 "FOR UPDATE cannot be applied to the nullable
+      side of an outer join" 에러는 발생하지 않음 — selectinload는 JOIN이 아니라
+      별도 쿼리라 걱정할 필요 없었음. `input_shipment`/`update_status`도 동일 메서드를
+      쓰지만 이번 변경으로 동작이 달라지지 않음(추가된 건 items eager-load뿐).
+- [x] `AdminOrderRepository`에 `increment_stock` 위임 메서드 추가 (1-0 결정에 따라
       `OrderRepository`와 별개로 자체 구현 — 동일한 2~3줄 SQL 중복 허용).
+      (커밋 `afd76ff`)
 
 **TDD** (`tests/test_admin_order_service.py`):
 
@@ -311,6 +310,11 @@ async def cancel_order(
    같은 order_number로 `get_order_for_update`를 호출하면 첫 트랜잭션 커밋까지
    대기하는지 (`asyncio.wait_for`로 타임아웃 짧게 걸어서 "블록됨"을 간접 확인하는
    패턴 — 실제 예시는 Task 5-2 테스트 설계와 동일한 기법 사용).
+
+**Task 1-3 완료** (커밋 `afd76ff`, `8c72966`) — 단위 테스트 2건(재고 복구,
+취소불가 상태) + 실제 Postgres 두 커넥션으로 락 동작을 검증하는 통합 테스트 1건
+전부 통과. `get_order_for_update`가 실제로 `FOR UPDATE`를 걸어 두 번째
+트랜잭션을 1초 타임아웃까지 블록시키는 것까지 확인함.
 
 ---
 
