@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, literal_column, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.admin._query_helpers import date_trunc_literal
 from app.admin.dashboard_schemas import (
     CategoryStat,
     DashboardSummary,
@@ -74,11 +75,7 @@ class DashboardService:
             hour=0, minute=0, second=0, microsecond=0
         )
 
-        # "day" 를 bind parameter 로 넘기면 SELECT/GROUP BY/ORDER BY 마다 별개
-        # 파라미터로 바인딩되어 Postgres 가 동일 표현식으로 인식하지 못하고
-        # "column must appear in GROUP BY" 에러를 낸다 — literal_column 으로
-        # SQL에 직접 인라인해서 세 곳 모두 동일한 표현식을 재사용한다.
-        day_trunc = func.date_trunc(literal_column("'day'"), Order.created_at)
+        day_trunc = date_trunc_literal("day", Order.created_at)
 
         rows = (
             await self._session.execute(

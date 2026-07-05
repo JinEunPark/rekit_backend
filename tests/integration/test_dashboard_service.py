@@ -8,19 +8,16 @@ ORDER BY 표현식의 동일성을 파싱 시점에 검증하므로, 매칭되�
 from __future__ import annotations
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin.dashboard_service import DashboardService
-from app.core.database import async_session_factory
 
 
 @pytest.mark.asyncio
-async def test_get_sales_chart_does_not_raise_grouping_error():
+async def test_get_sales_chart_does_not_raise_grouping_error(db_session: AsyncSession):
     """date_trunc 표현식이 SELECT/GROUP BY/ORDER BY에서 동일 표현식으로 바인딩돼야 한다."""
-    async with async_session_factory() as session:
-        service = DashboardService(session)
-        try:
-            result = await service.get_sales_chart("7d")
-        finally:
-            await session.rollback()
+    service = DashboardService(db_session)
+
+    result = await service.get_sales_chart("7d")
 
     assert result.period == "7d"

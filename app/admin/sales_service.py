@@ -9,6 +9,7 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.admin._query_helpers import TruncUnit, date_trunc_literal
 from app.admin.sales_schemas import (
     PaymentMethodStat,
     SalesSummary,
@@ -56,11 +57,12 @@ class SalesService:
     async def get_timeseries(
         self, from_dt: datetime, to_dt: datetime, granularity: str
     ) -> SalesTimeSeries:
-        trunc = "week" if granularity == "week" else "day"
+        trunc: TruncUnit = "week" if granularity == "week" else "day"
+        period_trunc = date_trunc_literal(trunc, Order.created_at)
         rows = (
             await self._session.execute(
                 select(
-                    func.date_trunc(trunc, Order.created_at).label("period"),
+                    period_trunc.label("period"),
                     func.coalesce(func.sum(Order.total_amount), 0).label("revenue"),
                     func.count(Order.id).label("order_count"),
                 )
@@ -69,8 +71,8 @@ class SalesService:
                     Order.created_at <= to_dt,
                     Order.status != OrderStatus.CANCELLED,
                 )
-                .group_by(func.date_trunc(trunc, Order.created_at))
-                .order_by(func.date_trunc(trunc, Order.created_at))
+                .group_by(period_trunc)
+                .order_by(period_trunc)
             )
         ).all()
         data = [
