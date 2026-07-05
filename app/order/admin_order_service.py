@@ -153,7 +153,11 @@ def _to_detail(order: Order) -> AdminOrderDetail:
         address2=order.address2,
         items=[
             AdminOrderItemSummary(
+                product_id=i.product_id,
                 product_title_snapshot=i.product_title_snapshot,
+                product_brand_snapshot=i.product_brand_snapshot,
+                product_model_name_snapshot=i.product_model_name_snapshot,
+                product_image_url_snapshot=i.product_image_url_snapshot,
                 quantity=i.quantity,
                 price_snapshot=i.price_snapshot,
             )

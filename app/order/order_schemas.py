@@ -53,6 +53,7 @@ class OrderItemResponse(BaseModel):
     product_id: int
     product_title_snapshot: str
     product_brand_snapshot: str | None
+    product_model_name_snapshot: str | None
     product_image_url_snapshot: str | None
     price_snapshot: int
     quantity: int

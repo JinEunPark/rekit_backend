@@ -44,6 +44,7 @@ def make_product(
     stock: int = 5,
     status: ProductStatus = ProductStatus.ACTIVE,
     brand: str | None = "LG전자",
+    model_name: str | None = "F21VDAP",
 ) -> Product:
     """테스트용 Product 인스턴스 (DB 없이 메모리)."""
     p = Product(
@@ -57,6 +58,7 @@ def make_product(
     )
     p.id = product_id
     p.brand = brand
+    p.model_name = model_name
     p.images = []
     return p
 
@@ -474,6 +476,36 @@ class TestCreateOrder:
         result = await service.create_order(user_id=1, req=req, identity_verified=True)
 
         assert result.items[0].product_brand_snapshot is None
+
+    async def test_create_order_stores_model_name_snapshot(self) -> None:
+        """주문 생성 시 상품 모델명이 스냅샷으로 저장된다."""
+        product = make_product(model_name="F21VDAP")
+        address = make_address()
+        service = _make_service(products=[product], addresses=[address])
+
+        req = CreateOrderRequest(
+            items=[OrderItemRequest(product_id=1, quantity=1)],
+            address_id=1,
+            shipping_method=ShipmentMethod.PARCEL,
+        )
+        result = await service.create_order(user_id=1, req=req, identity_verified=True)
+
+        assert result.items[0].product_model_name_snapshot == "F21VDAP"
+
+    async def test_create_order_model_name_snapshot_none_when_no_model_name(self) -> None:
+        """모델명 미입력 상품 → product_model_name_snapshot=None."""
+        product = make_product(model_name=None)
+        address = make_address()
+        service = _make_service(products=[product], addresses=[address])
+
+        req = CreateOrderRequest(
+            items=[OrderItemRequest(product_id=1, quantity=1)],
+            address_id=1,
+            shipping_method=ShipmentMethod.PARCEL,
+        )
+        result = await service.create_order(user_id=1, req=req, identity_verified=True)
+
+        assert result.items[0].product_model_name_snapshot is None
 
     async def test_create_order_stock_exactly_enough(self) -> None:
         """재고 == 요청 수량 → 성공."""
