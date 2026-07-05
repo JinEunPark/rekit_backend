@@ -33,6 +33,13 @@ class PaymentRepository:
         )
         return list(result.scalars().all())
 
+    async def get_by_order_id_with_lock(self, order_id: int) -> list[Payment]:
+        """FOR UPDATE 락으로 결제 목록 조회 — 동시 confirm 이중 호출 방지."""
+        result = await self._session.execute(
+            select(Payment).where(Payment.order_id == order_id).with_for_update()
+        )
+        return list(result.scalars().all())
+
     async def get_by_pg_tid(self, pg_tid: str) -> Payment | None:
         result = await self._session.execute(
             select(Payment).where(Payment.pg_tid == pg_tid)

@@ -106,12 +106,29 @@ class PaymentService:
         if order is None:
             raise OrderNotFoundError()
 
-        # READY 상태 결제 찾기
-        payments = await self._repo.get_by_order_id(order.id)
+        # order.status가 PENDING인지 먼저 확인 — Task 2 타임아웃으로 취소된 주문 방어
+        if order.status != OrderStatus.PENDING:
+            raise PaymentFailedError(f"주문 상태가 PENDING 이 아닙니다: {order.status}")
+
+        # FOR UPDATE 락으로 동시 confirm 이중 호출 방지 (Task 5-2)
+        payments = await self._repo.get_by_order_id_with_lock(order.id)
         ready_payment = next(
             (p for p in payments if p.status == PaymentStatus.READY), None
         )
+        already_paid = next(
+            (p for p in payments if p.status == PaymentStatus.PAID), None
+        )
         if ready_payment is None:
+            if already_paid is not None:
+                # 이미 확정된 결제 — 멱등 성공으로 처리, 게이트웨이 재호출 안 함
+                return PaymentConfirmResponse(
+                    order_number=order.order_number,
+                    status=already_paid.status,
+                    paid_at=already_paid.paid_at,
+                    card_company=already_paid.card_company,
+                    card_last4=already_paid.card_last4,
+                    installment_months=already_paid.installment_months,
+                )
             raise PaymentFailedError("결제 준비 중인 결제 건이 없습니다.")
 
         if req.amount != order.total_amount:

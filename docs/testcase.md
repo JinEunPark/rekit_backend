@@ -779,7 +779,7 @@ if ready_payment is None:
         )
     raise PaymentFailedError("결제 준비 중인 결제 건이 없습니다.")
 ```
-- [ ] 위 로직 적용. **`with_for_update()`가 걸린 채로 외부 PG API를 호출하는
+- [x] 위 로직 적용. **`with_for_update()`가 걸린 채로 외부 PG API를 호출하는
       구간(`gateway.confirm`)이 있으므로, 락을 잡는 시점과 PG 호출 시점의
       순서를 신중하게 배치**: 락은 "이미 PAID인지 재확인"까지만 쓰고, PG
       호출 자체는 락을 잡은 트랜잭션 안에서 이뤄지되 이 트랜잭션이 오래 걸리면
@@ -822,7 +822,7 @@ if order.status != OrderStatus.PENDING:
 ```
 을 `confirm_payment` 맨 앞(READY 조회 전)에 추가.
 
-- [ ] 위 가드 추가. **Task 2와의 상호작용 주의**: Task 2 타임아웃이 주문을
+- [x] 위 가드 추가. **Task 2와의 상호작용 주의**: Task 2 타임아웃이 주문을
       취소하면서 READY 결제는 그대로 두면(현재 Task 2 설계에는 결제 자체를
       취소하는 로직이 없음 — Order만 CANCELLED), 사용자가 그 뒤에 실제로
       결제를 완료해서 confirm이 들어오면 이 가드에 막혀 `PaymentFailedError`가

@@ -90,10 +90,12 @@ def make_payment(
 class _FakeGateway:
     def __init__(self, *, should_fail: bool = False) -> None:
         self.should_fail = should_fail
+        self.confirm_call_count: int = 0
 
     async def confirm(
         self, *, payment_key: str, order_id: str, amount: int
     ) -> TossConfirmResult:
+        self.confirm_call_count += 1
         if self.should_fail:
             raise PaymentFailedError("PG 확인 실패")
         return TossConfirmResult(
@@ -128,6 +130,10 @@ class _FakePaymentRepo:
         return next((p for p in self._payments if p.id == payment_id), None)
 
     async def get_by_order_id(self, order_id: int) -> list[Payment]:
+        return [p for p in self._payments if p.order_id == order_id]
+
+    async def get_by_order_id_with_lock(self, order_id: int) -> list[Payment]:
+        # 단위 테스트에서는 락 없이 동일하게 동작
         return [p for p in self._payments if p.order_id == order_id]
 
     async def get_by_pg_tid(self, pg_tid: str) -> Payment | None:
@@ -263,6 +269,54 @@ async def test_init_payment_ignores_non_ready_payments_when_checking_ready() -> 
 
 
 # ── confirm_payment ─────────────────────────────────────────────
+
+
+async def test_confirm_payment_on_already_paid_order_is_idempotent_no_gateway_call() -> None:
+    """READY 없고 PAID만 있으면 게이트웨이 호출 없이 기존 PAID 정보로 반환 (멱등성)."""
+    order = make_order()
+    paid_payment = make_payment(
+        payment_id=42, order_id=1, status=PaymentStatus.PAID, pg_tid="toss_key_paid"
+    )
+    paid_payment.paid_at = datetime.now(UTC)
+    paid_payment.card_company = "국민카드"
+    paid_payment.card_last4 = "5678"
+    paid_payment.installment_months = 0
+
+    gw = _FakeGateway()
+    repo = _FakePaymentRepo(orders=[order], payments=[paid_payment])
+    service = PaymentService(repo, gw, _FakeEmailSender())  # type: ignore[arg-type]
+
+    result = await service.confirm_payment(
+        PaymentConfirmRequest(
+            payment_key="toss_key_paid",
+            order_id="RK-2606200001",
+            amount=300_000,
+        ),
+        BackgroundTasks(),
+    )
+
+    assert result.order_number == "RK-2606200001"
+    assert result.card_company == "국민카드"
+    assert gw.confirm_call_count == 0  # 게이트웨이 호출 없음
+
+
+async def test_confirm_payment_on_cancelled_order_raises() -> None:
+    """order.status가 CANCELLED이면 PaymentFailedError 발생, 게이트웨이 호출 없음 (Task 5-3)."""
+    order = make_order(status=OrderStatus.CANCELLED)
+    payment = make_payment(order_id=1, status=PaymentStatus.READY)
+    gw = _FakeGateway()
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, gw, _FakeEmailSender())  # type: ignore[arg-type]
+
+    with pytest.raises(PaymentFailedError):
+        await service.confirm_payment(
+            PaymentConfirmRequest(
+                payment_key="k", order_id="RK-2606200001", amount=300_000
+            ),
+            BackgroundTasks(),
+        )
+
+    assert gw.confirm_call_count == 0
 
 
 async def test_confirm_payment_success() -> None:
