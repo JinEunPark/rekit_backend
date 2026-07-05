@@ -491,11 +491,11 @@ C-12)가 사용자 취소/관리자 취소/웹훅 실패/웹훅 취소 4개 경�
             await self._repo.update_order_paid(order)
 ```
 
-- [ ] `PaymentRepository.get_order_by_id`는 Task 1-4에서 이미 추가하기로 했으므로
+- [x] `PaymentRepository.get_order_by_id`는 Task 1-4에서 이미 추가하기로 했으므로
       재사용. **Task 1-4와 Task 3-1은 같은 메서드를 공유하니, 구현 순서상 Task 1을
-      먼저 끝내고 Task 3을 시작하면 자연히 중복이 없다.**
-- [ ] `order.status == PENDING`일 때만 전환하는 가드 필수 — 이미 PAID/CANCELLED인
-      주문에 웹훅이 늦게 도착하거나 재시도로 중복 도착해도 안전하게 무시됨.
+      먼저 끝내고 Task 3을 시작하면 자연히 중복이 없다.** 재사용됨.
+- [x] `order.status == PENDING`일 때만 전환하는 가드 필수 — 이미 PAID/CANCELLED인
+      주문에 웹훅이 늦게 도착하거나 재시도로 중복 도착해도 안전하게 무시됨. 구현됨.
 
 **TDD** (`tests/test_payment_service.py`):
 
@@ -560,18 +560,18 @@ C-12)가 사용자 취소/관리자 취소/웹훅 실패/웹훅 취소 4개 경�
         # 아래 공통 로직에서 PAID 분기를 타면 pg_tid를 여기서 채워줘야 함.
 ```
 
-- [ ] `PaymentRepository`에 `get_ready_payment_by_order_number(order_number: str) -> Payment | None`
+- [x] `PaymentRepository`에 `get_ready_payment_by_order_number(order_number: str) -> Payment | None`
       추가 — `Order`를 `order_number`로 찾고, 그 주문의 `payments` 중 `status == READY`인
       것 하나를 반환 (Task 5-1에서 "READY는 항상 최대 1개"가 보장되면 이 메서드가 훨씬
-      단순해짐 — **Task 4/5를 먼저 끝내고 이 Task를 하면 모호함이 줄어든다**).
-- [ ] fallback으로 찾은 `payment`가 PAID 분기를 탈 때, 원래 `update_status_paid`가
+      단순해짐 — **Task 4/5를 먼저 끝내고 이 Task를 하면 모호함이 줄어든다**). 구현됨.
+- [x] fallback으로 찾은 `payment`가 PAID 분기를 탈 때, 원래 `update_status_paid`가
       하던 일(`pg_tid`, `paid_at`, 카드 정보 등 채우기)을 여기서도 해줘야 하는데,
       웹훅 payload에는 카드 정보가 confirm 응답과 다른 형태로 올 수 있음 — **토스
       웹훅 payload의 실제 필드 구조를 토스 공식 문서에서 재확인 필요** (이 프로젝트는
       아직 실제 토스 계약 전이라 목업 상태 — 실제 연동 시 반드시 실제 payload 샘플로
-      필드명 재검증할 것). 최소한 `pg_tid`와 `paid_at`은 채우고, 카드 정보는 없으면
-      `None`으로 둬도 영수증에는 confirm 경로보다 정보가 부실할 수 있음을 감안.
-- [ ] `handle_webhook` 전체를 다시 정리하면 대략:
+      필드명 재검증할 것). 최소한 `pg_tid`만 채우고(`payment.pg_tid = payment.pg_tid or pg_tid`),
+      카드 정보는 None으로 둠. 실제 연동 시 재확인 필요.
+- [x] `handle_webhook` 전체를 다시 정리하면 대략:
       ```python
       pg_status: str = data.get("status", "")
       if pg_status == _TOSS_DONE:

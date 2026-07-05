@@ -46,6 +46,22 @@ class PaymentRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_ready_payment_by_order_number(self, order_number: str) -> Payment | None:
+        """order_number로 주문을 찾아 READY 상태 결제 반환 (웹훅 pg_tid 없을 때 fallback)."""
+        order_result = await self._session.execute(
+            select(Order).where(Order.order_number == order_number)
+        )
+        order = order_result.scalar_one_or_none()
+        if order is None:
+            return None
+        payment_result = await self._session.execute(
+            select(Payment).where(
+                Payment.order_id == order.id,
+                Payment.status == PaymentStatus.READY,
+            )
+        )
+        return payment_result.scalar_one_or_none()
+
     async def get_order_by_number(self, order_number: str) -> Order | None:
         result = await self._session.execute(
             select(Order).where(Order.order_number == order_number)

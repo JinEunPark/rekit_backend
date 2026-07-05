@@ -187,7 +187,13 @@ class PaymentService:
 
         payment = await self._repo.get_by_pg_tid(pg_tid)
         if payment is None:
-            return
+            # confirm이 아직 실행 안 된 경우 pg_tid가 DB에 없을 수 있음 — orderId로 fallback
+            order_number: str | None = data.get("orderId")
+            if not order_number:
+                return
+            payment = await self._repo.get_ready_payment_by_order_number(order_number)
+            if payment is None:
+                return
 
         # 멱등성: 이미 PAID 이면 중복 처리 없음
         if payment.status == PaymentStatus.PAID:
@@ -196,6 +202,10 @@ class PaymentService:
         pg_status: str = data.get("status", "")
         if pg_status == _TOSS_DONE:
             payment.status = PaymentStatus.PAID
+            payment.pg_tid = payment.pg_tid or pg_tid  # fallback 경로일 때만 채움
+            order = await self._repo.get_order_by_id(payment.order_id)
+            if order is not None and order.status == OrderStatus.PENDING:
+                await self._repo.update_order_paid(order)
         elif pg_status in (_TOSS_CANCELED, _TOSS_PARTIAL_CANCELED):
             payment.status = PaymentStatus.CANCELLED
             if pg_status == _TOSS_CANCELED:

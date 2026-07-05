@@ -125,6 +125,7 @@ class _FakePaymentRepo:
         self._payments: list[Payment] = list(payments or [])
         self._next_id = 1
         self.increment_calls: list[tuple[int, int]] = []
+        self.fallback_call_count: int = 0
 
     async def get_by_id(self, payment_id: int) -> Payment | None:
         return next((p for p in self._payments if p.id == payment_id), None)
@@ -148,6 +149,20 @@ class _FakePaymentRepo:
 
     async def get_order_by_id(self, order_id: int) -> Order | None:
         return next((o for o in self._orders if o.id == order_id), None)
+
+    async def get_ready_payment_by_order_number(self, order_number: str) -> Payment | None:
+        self.fallback_call_count += 1
+        order = next((o for o in self._orders if o.order_number == order_number), None)
+        if order is None:
+            return None
+        return next(
+            (
+                p
+                for p in self._payments
+                if p.order_id == order.id and p.status == PaymentStatus.READY
+            ),
+            None,
+        )
 
     async def increment_stock(self, product_id: int, quantity: int) -> None:
         self.increment_calls.append((product_id, quantity))
@@ -391,6 +406,118 @@ async def test_webhook_unknown_event_ignored() -> None:
     await service.handle_webhook(
         TossWebhookPayload(eventType="UNKNOWN_EVENT", data={})
     )
+
+
+# ── webhook: DONE 시 order.status PAID 전환 (Task 3-1) ─────────────────────
+
+
+async def test_webhook_done_transitions_order_to_paid() -> None:
+    """웹훅 DONE 수신 시 payment.status=PAID, order.status=PAID로 전환된다."""
+    order = make_order(order_id=1, status=OrderStatus.PENDING)
+    payment = make_payment(order_id=1, status=PaymentStatus.READY, pg_tid="pk_done")
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_done", "status": "DONE"},
+        )
+    )
+
+    assert payment.status == PaymentStatus.PAID
+    assert order.status == OrderStatus.PAID
+    assert order.paid_at is not None
+
+
+async def test_webhook_done_on_already_paid_order_is_noop_for_order() -> None:
+    """이미 PAID인 payment에 DONE 웹훅 재수신 → 멱등성 가드에서 걸려 order 변경 없음."""
+    order = make_order(order_id=1, status=OrderStatus.PAID)
+    payment = make_payment(order_id=1, status=PaymentStatus.PAID, pg_tid="pk_dup")
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    original_status = order.status
+
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_dup", "status": "DONE"},
+        )
+    )
+
+    assert order.status == original_status  # 변경 없음
+
+
+async def test_webhook_done_order_already_missing_is_noop() -> None:
+    """payment.order_id가 가리키는 Order가 없어도 예외 없이 조용히 처리된다."""
+    payment = make_payment(order_id=999, status=PaymentStatus.READY, pg_tid="pk_orphan")
+    repo = _FakePaymentRepo(orders=[], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    # 예외 없이 처리돼야 함
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_orphan", "status": "DONE"},
+        )
+    )
+
+    assert payment.status == PaymentStatus.PAID  # payment는 PAID 전환됨
+
+
+# ── webhook: orderId fallback 조회 (Task 3-2) ─────────────────────
+
+
+async def test_webhook_arrives_before_confirm_finds_payment_by_order_id_fallback() -> None:
+    """pg_tid로 찾지 못하면 orderId(order_number)로 READY 결제를 fallback 조회한다."""
+    order = make_order(order_id=1, order_number="RK-1", status=OrderStatus.PENDING)
+    # confirm 전 상태: pg_tid가 없는 READY 결제
+    payment = make_payment(order_id=1, status=PaymentStatus.READY, pg_tid=None)
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_new", "orderId": "RK-1", "status": "DONE"},
+        )
+    )
+
+    assert payment.status == PaymentStatus.PAID
+    assert payment.pg_tid == "pk_new"
+    assert order.status == OrderStatus.PAID
+
+
+async def test_webhook_fallback_when_no_ready_payment_and_no_pg_tid_match_is_noop() -> None:
+    """pg_tid로도, orderId fallback으로도 찾지 못하면 조용히 return."""
+    repo = _FakePaymentRepo(orders=[], payments=[])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    # 예외 없이 조용히 처리돼야 함
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_x", "orderId": "RK-NONE", "status": "DONE"},
+        )
+    )
+
+
+async def test_webhook_pg_tid_found_directly_does_not_use_fallback() -> None:
+    """pg_tid로 직접 찾으면 get_ready_payment_by_order_number가 호출되지 않는다."""
+    order = make_order(order_id=1, order_number="RK-2606200001", status=OrderStatus.PENDING)
+    payment = make_payment(order_id=1, status=PaymentStatus.READY, pg_tid="pk_direct")
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_direct", "orderId": "RK-2606200001", "status": "DONE"},
+        )
+    )
+
+    assert repo.fallback_call_count == 0
 
 
 # ── webhook: 실패/취소 시 재고 복구 (Task 1-4) ─────────────────────
