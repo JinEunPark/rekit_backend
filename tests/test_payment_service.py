@@ -12,7 +12,7 @@ from fastapi import BackgroundTasks
 
 from app.common.email import EmailSender
 from app.core.exceptions import OrderNotFoundError, PaymentFailedError
-from app.order.models import Order, OrderStatus
+from app.order.models import Order, OrderItem, OrderStatus
 from app.payment.adapters.ports import PaymentGateway, TossConfirmResult
 from app.payment.models import Payment, PaymentMethod, PaymentStatus, PgProvider
 from app.payment.payment_schemas import (
@@ -122,6 +122,7 @@ class _FakePaymentRepo:
         self._orders: list[Order] = list(orders or [])
         self._payments: list[Payment] = list(payments or [])
         self._next_id = 1
+        self.increment_calls: list[tuple[int, int]] = []
 
     async def get_by_id(self, payment_id: int) -> Payment | None:
         return next((p for p in self._payments if p.id == payment_id), None)
@@ -134,6 +135,12 @@ class _FakePaymentRepo:
 
     async def get_order_by_number(self, order_number: str) -> Order | None:
         return next((o for o in self._orders if o.order_number == order_number), None)
+
+    async def get_order_by_id(self, order_id: int) -> Order | None:
+        return next((o for o in self._orders if o.id == order_id), None)
+
+    async def increment_stock(self, product_id: int, quantity: int) -> None:
+        self.increment_calls.append((product_id, quantity))
 
     async def save(self, payment: Payment) -> Payment:
         payment.id = self._next_id
@@ -294,6 +301,96 @@ async def test_webhook_unknown_event_ignored() -> None:
     await service.handle_webhook(
         TossWebhookPayload(eventType="UNKNOWN_EVENT", data={})
     )
+
+
+# ── webhook: 실패/취소 시 재고 복구 (Task 1-4) ─────────────────────
+
+
+def _order_with_item(**kwargs) -> Order:
+    order = make_order(**kwargs)
+    order.items = [
+        OrderItem(
+            product_id=1,
+            product_title_snapshot="상품",
+            price_snapshot=100_000,
+            quantity=2,
+        )
+    ]
+    return order
+
+
+async def test_webhook_aborted_cancels_order_and_restores_stock() -> None:
+    """결제 거절(ABORTED) 웹훅 수신 시 주문이 취소되고 재고가 복구된다."""
+    order = _order_with_item(order_id=1, status=OrderStatus.PENDING)
+    payment = make_payment(order_id=1, status=PaymentStatus.READY, pg_tid="pk_1")
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_1", "status": "ABORTED"},
+        )
+    )
+
+    assert payment.status == PaymentStatus.FAILED
+    assert order.status == OrderStatus.CANCELLED
+    assert repo.increment_calls == [(1, 2)]
+
+
+async def test_webhook_canceled_cancels_order_and_restores_stock() -> None:
+    """결제 취소(CANCELED) 웹훅 수신 시 주문이 취소되고 재고가 복구된다."""
+    order = _order_with_item(order_id=1, status=OrderStatus.PENDING)
+    payment = make_payment(order_id=1, status=PaymentStatus.READY, pg_tid="pk_2")
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_2", "status": "CANCELED"},
+        )
+    )
+
+    assert payment.status == PaymentStatus.CANCELLED
+    assert order.status == OrderStatus.CANCELLED
+    assert repo.increment_calls == [(1, 2)]
+
+
+async def test_webhook_partial_canceled_does_not_restore_stock() -> None:
+    """부분취소(PARTIAL_CANCELED)는 order/재고에 영향을 주지 않는다 (정책 미정, 현재 동작 고정)."""
+    order = _order_with_item(order_id=1, status=OrderStatus.PENDING)
+    payment = make_payment(order_id=1, status=PaymentStatus.READY, pg_tid="pk_3")
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_3", "status": "PARTIAL_CANCELED"},
+        )
+    )
+
+    assert payment.status == PaymentStatus.CANCELLED
+    assert order.status == OrderStatus.PENDING
+    assert repo.increment_calls == []
+
+
+async def test_webhook_aborted_already_cancelled_order_does_not_double_restore() -> None:
+    """주문이 이미 취소된 상태에서 ABORTED 웹훅이 재수신돼도 재고를 중복 복구하지 않는다."""
+    order = _order_with_item(order_id=1, status=OrderStatus.CANCELLED)
+    payment = make_payment(order_id=1, status=PaymentStatus.READY, pg_tid="pk_4")
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_4", "status": "ABORTED"},
+        )
+    )
+
+    assert repo.increment_calls == []
 
 
 # ── confirm_payment: 이메일 발송 ────────────────────────────────

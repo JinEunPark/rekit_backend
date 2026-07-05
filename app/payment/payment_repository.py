@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.catalog.models import Product
 from app.order.models import Order, OrderStatus
@@ -41,6 +42,12 @@ class PaymentRepository:
     async def get_order_by_number(self, order_number: str) -> Order | None:
         result = await self._session.execute(
             select(Order).where(Order.order_number == order_number)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_order_by_id(self, order_id: int) -> Order | None:
+        result = await self._session.execute(
+            select(Order).where(Order.id == order_id).options(selectinload(Order.items))
         )
         return result.scalar_one_or_none()
 

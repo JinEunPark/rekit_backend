@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import BackgroundTasks
 
 from app.common.email import EmailSender
@@ -173,9 +175,25 @@ class PaymentService:
             payment.status = PaymentStatus.PAID
         elif pg_status in (_TOSS_CANCELED, _TOSS_PARTIAL_CANCELED):
             payment.status = PaymentStatus.CANCELLED
+            if pg_status == _TOSS_CANCELED:
+                # 부분취소(PARTIAL_CANCELED)는 라인별 부분 환불 개념이 아직 모델에
+                # 없어 전체 재고 복구 대상이 아님 — 현재는 의도적으로 스킵.
+                # TODO: 부분 취소 시 라인별 재고 복구 정책 미정.
+                await self._restore_order_stock_and_cancel(payment.order_id)
         elif pg_status == _TOSS_ABORTED:
             payment.status = PaymentStatus.FAILED
             payment.fail_reason = data.get("failure", {}).get("message")
+            await self._restore_order_stock_and_cancel(payment.order_id)
+
+    async def _restore_order_stock_and_cancel(self, order_id: int) -> None:
+        """결제 실패/취소 웹훅 시 주문을 취소하고 재고를 복구한다. 중복 호출에 안전."""
+        order = await self._repo.get_order_by_id(order_id)
+        if order is None or order.status == OrderStatus.CANCELLED:
+            return
+        for item in order.items:
+            await self._repo.increment_stock(item.product_id, item.quantity)
+        order.status = OrderStatus.CANCELLED
+        order.cancelled_at = datetime.now(UTC)
 
 
 async def _send_payment_confirmation_email(
