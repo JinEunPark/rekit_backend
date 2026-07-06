@@ -997,13 +997,13 @@ result: TossConfirmResult = await self._gateway.confirm(
 )
 ```
 
-- [ ] 위 한 줄 변경. `req.amount == order.total_amount` 검증(109-112)이 이미
+- [x] 위 한 줄 변경. `req.amount == order.total_amount` 검증(109-112)이 이미
       있으므로 이 시점엔 두 값이 항상 같음 — **동작 변화는 없고, 원칙만
       바꾸는 순수 개선.**
 
 **TDD**: 신규 테스트 불필요. 기존 `test_confirm_payment_success`,
 `test_confirm_payment_amount_mismatch_raises`가 계속 통과하는지로 회귀 확인.
-- [ ] 변경 후 `.venv/bin/pytest tests/test_payment_service.py -v` 전부 통과 확인.
+- [x] 변경 후 `.venv/bin/pytest tests/test_payment_service.py -v` 전부 통과 확인.
 
 ---
 

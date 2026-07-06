@@ -139,7 +139,7 @@ class PaymentService:
         result: TossConfirmResult = await self._gateway.confirm(
             payment_key=req.payment_key,
             order_id=req.order_id,
-            amount=req.amount,
+            amount=order.total_amount,  # req.amount 는 검증에만 사용, 실제 전달은 서버 신뢰값
         )
 
         await self._repo.update_status_paid(ready_payment, result)
