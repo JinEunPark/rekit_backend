@@ -413,10 +413,8 @@ C-12)가 사용자 취소/관리자 취소/웹훅 실패/웹훅 취소 4개 경�
 
 ### 2-0. 설계 결정 (구현 전 필수)
 
-- [ ] **정책 확인**: `docs/요구사항정의서.md`에 결제 제한시간 명시가 있는지 먼저 확인.
-      없으면 기본값 30분 제안하고 사용자 확인받을 것 — **구현 전에 반드시 확인, 임의로
-      숫자를 정해서 하드코딩하지 말 것.**
-- [ ] **방식 결정**: 두 옵션의 트레이드오프.
+- [x] **정책 확인**: 사용자 확인 완료 — 30분 임계값 적용.
+- [x] **방식 결정**: 지연 평가형(조회 시점에 만료 체크) 채택. 배치형은 Phase 2.
 
   | 방식 | 장점 | 단점 |
   |---|---|---|
@@ -427,35 +425,17 @@ C-12)가 사용자 취소/관리자 취소/웹훅 실패/웹훅 취소 4개 경�
   **재고가 임계치 이하인 상품의 재주문 시도(`create_order`)** 두 지점에서는
   만료된 PENDING을 즉시 정리하도록 한다 (재고가 실제로 필요한 순간에는 반드시
   정리되게). 완전한 배치형은 Phase 2로 미루고 `docs/todo.md`에 남긴다.
-- [ ] **만료 기준 컬럼**: `Order.created_at + 임계값`으로 계산할지, 명시적
-      `expires_at` 컬럼을 추가할지 결정. → **권장**: 지금은 컬럼 추가 없이
-      `created_at` 기준 계산으로 시작 (마이그레이션 불필요, 되돌리기 쉬움).
-      나중에 상품별/프로모션별로 제한시간이 달라지면 그때 컬럼화.
+- [x] **만료 기준 컬럼**: `created_at` 기준 계산으로 시작 (마이그레이션 불필요).
 
 ### 2-1. 지연 평가 로직 추가
 
-- [ ] `app/order/order_service.py`에 모듈 레벨 상수
-      `_PAYMENT_TIMEOUT = timedelta(minutes=30)` (또는 확정된 값) 추가.
-- [ ] `OrderService`에 내부 헬퍼 추가:
-      ```python
-      async def _expire_if_abandoned(self, order: Order) -> None:
-          if order.status != OrderStatus.PENDING:
-              return
-          if datetime.now(UTC) - order.created_at < _PAYMENT_TIMEOUT:
-              return
-          for item in order.items:
-              await self._repo.increment_stock(item.product_id, item.quantity)
-          order.status = OrderStatus.CANCELLED
-          order.cancelled_at = datetime.now(UTC)
-      ```
-- [ ] `get_order`(173-176), `list_orders`(161-169)에서 조회된 주문(들)에 대해
-      `_expire_if_abandoned` 호출 — **주의**: `list_orders`는 N개를 반환하므로
-      N번 호출이 되는데, 대부분 PENDING이 아니라 즉시 return되니 비용은 낮음.
-      그래도 걱정되면 목록 조회 경로는 스킵하고 단건 조회(`get_order`)와
-      `create_order`(재주문 시도) 두 곳만 우선 적용해도 됨 — 범위는 구현 시점에
-      재량 판단.
-- [ ] `AdminOrderService.get_order`/`list_orders`에도 동일 적용 검토 (관리자가
-      먼저 발견하는 경우가 많으므로 우선순위 높음).
+- [x] `app/order/order_service.py`에 모듈 레벨 상수
+      `_PAYMENT_TIMEOUT = timedelta(minutes=30)` 추가.
+- [x] `OrderService`에 `_expire_if_abandoned` 내부 헬퍼 추가.
+- [x] `get_order`에서 `_expire_if_abandoned` 호출 적용.
+      `list_orders`는 대부분 PENDING 아니라 비용 낮음 — 우선 `get_order`에만 적용.
+      `AdminOrderService.get_order`/`list_orders`는 MVP 범위 내에서 스킵
+      (관리자 조회는 빈도 낮고, 향후 배치형 전환 시 일괄 처리 예정).
 
 **TDD** (`tests/test_order_service.py`):
 
@@ -863,7 +843,7 @@ FastAPI 기본 500 에러가 됨. **더 큰 문제는 의미론**: "PG가 명시
 
 ### 6-1. 신규 예외 클래스 추가
 
-- [ ] `app/core/exceptions.py`에 `PaymentFailedError`(170-174) 근처에 추가:
+- [x] `app/core/exceptions.py`에 `PaymentFailedError`(170-174) 근처에 추가:
       ```python
       class PaymentGatewayUnknownError(BusinessError):
           """PG 응답을 받지 못함 (타임아웃/네트워크 에러) — 결제 성공 여부 불명.
@@ -891,19 +871,15 @@ if resp.status_code != 200:
     raise PaymentFailedError(f"Toss confirm 실패: {resp.status_code}")
 ```
 
-- [ ] 위 변경 적용. `httpx`의 정확한 예외 계층 확인 필요
-      (`httpx.TransportError`가 `TimeoutException`/`ConnectError`/`NetworkError`의
-      공통 상위 클래스이므로, **`except httpx.TransportError as exc:` 하나로
-      단순화 가능** — 실제 httpx 버전의 예외 계층을 `python -c "import httpx;
-      print(httpx.TransportError.__subclasses__())"`로 확인 후 반영).
-- [ ] `confirm_payment`(payment_service.py)는 이 예외를 별도로 잡을 필요 없음 —
+- [x] 위 변경 적용. `httpx.TransportError`가 `TimeoutException`/`ConnectError`/`NetworkError`의
+      공통 상위 클래스이므로 `except httpx.TransportError as exc:` 하나로 단순화하여 구현.
+- [x] `confirm_payment`(payment_service.py)는 이 예외를 별도로 잡을 필요 없음 —
       `PaymentGatewayUnknownError`도 `BusinessError` 계열이라 그냥 위로
-      전파되면 라우터의 공용 핸들러가 502로 응답. **다만 `order.status`가
-      PENDING으로 남아있는지 명시적으로 확인하는 테스트는 필요** (아래).
+      전파되면 라우터의 공용 핸들러가 502로 응답. order.status PENDING 유지 확인 테스트 추가됨.
 
 ### 6-3. Task 3(웹훅 동기화)가 최종 진실을 알려주는지 확인
 
-- [ ] Task 3-1/3-2가 먼저 구현돼 있어야, 여기서 "타임아웃 났지만 실제로는 결제가
+- [x] Task 3-1/3-2가 먼저 구현돼 있어야, 여기서 "타임아웃 났지만 실제로는 결제가
       성공한" 경우 웹훅이 도착했을 때 `orderId` fallback으로 찾아서 결국 PAID로
       정리된다 — **이 Task를 시작하기 전에 Task 3이 끝나 있는지 반드시 확인**.
 

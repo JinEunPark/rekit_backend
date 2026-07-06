@@ -8,7 +8,7 @@ DB 없이 서비스 로직을 검증한다:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -851,3 +851,39 @@ class TestRequestRefund:
 
         with pytest.raises(OrderNotFoundError):
             await service.request_refund(user_id=1, order_number=order.order_number)
+
+
+# ── Task 2: PENDING 주문 타임아웃 지연 평가 ────────────────────────────
+
+
+class TestExpireAbandonedOrder:
+    async def test_get_order_expires_pending_order_past_timeout(self) -> None:
+        """31분이 지난 PENDING 주문은 get_order 시 즉시 CANCELLED 로 전환된다."""
+        order = make_order(user_id=1, status=OrderStatus.PENDING)
+        order.created_at = datetime.now(UTC) - timedelta(minutes=31)
+        order.items = []
+        service = _make_service(orders=[order])
+
+        result = await service.get_order(user_id=1, order_number=order.order_number)
+
+        assert result.status == OrderStatus.CANCELLED
+
+    async def test_get_order_does_not_expire_pending_order_within_timeout(self) -> None:
+        """30분 미만인 PENDING 주문은 만료되지 않는다."""
+        order = make_order(user_id=1, status=OrderStatus.PENDING)
+        order.created_at = datetime.now(UTC) - timedelta(minutes=10)
+        service = _make_service(orders=[order])
+
+        result = await service.get_order(user_id=1, order_number=order.order_number)
+
+        assert result.status == OrderStatus.PENDING
+
+    async def test_get_order_does_not_expire_non_pending_order(self) -> None:
+        """PENDING 이 아닌 주문(PAID 등)은 created_at 이 오래돼도 만료 처리 안 함."""
+        order = make_order(user_id=1, status=OrderStatus.PAID)
+        order.created_at = datetime.now(UTC) - timedelta(days=999)
+        service = _make_service(orders=[order])
+
+        result = await service.get_order(user_id=1, order_number=order.order_number)
+
+        assert result.status == OrderStatus.PAID

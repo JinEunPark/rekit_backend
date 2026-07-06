@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.address.models import Address
 from app.catalog.models import ProductStatus
@@ -43,6 +43,9 @@ from app.order.shipment import ShipmentMethod
 
 # PENDING / PAID / PREPARING 상태만 취소 허용
 _CANCELLABLE_STATUSES = {OrderStatus.PENDING, OrderStatus.PAID, OrderStatus.PREPARING}
+
+# 결제 미완료 PENDING 주문 유효 시간 (지연 평가 방식)
+_PAYMENT_TIMEOUT = timedelta(minutes=30)
 
 
 class OrderService:
@@ -173,6 +176,7 @@ class OrderService:
     async def get_order(self, user_id: int, order_number: str) -> OrderResponse:
         """order_number 로 단건 조회. 소유권 불일치는 OrderNotFoundError 로 처리(정보 노출 방지)."""
         order = await self._get_order_for_user(user_id, order_number)
+        await self._expire_if_abandoned(order)
         return _to_order_response(order)
 
     # ── 배송 조회 ────────────────────────────────────────────────────
@@ -233,6 +237,20 @@ class OrderService:
         if address.user_id != user_id:
             raise PermissionDeniedError()
         return address
+
+    async def _expire_if_abandoned(self, order: Order) -> None:
+        """결제 기한(30분)이 지난 PENDING 주문을 즉시 취소하고 재고를 복구한다.
+
+        지연 평가 방식 — 조회 시점에 만료 여부를 확인한다.
+        """
+        if order.status != OrderStatus.PENDING:
+            return
+        if datetime.now(UTC) - order.created_at < _PAYMENT_TIMEOUT:
+            return
+        for item in order.items:
+            await self._repo.increment_stock(item.product_id, item.quantity)
+        order.status = OrderStatus.CANCELLED
+        order.cancelled_at = datetime.now(UTC)
 
     async def _get_order_for_user(self, user_id: int, order_number: str) -> Order:
         """order_number 로 주문 조회 + 소유권 검증. 실패 시 OrderNotFoundError."""
