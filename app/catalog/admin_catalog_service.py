@@ -75,10 +75,17 @@ class AdminCatalogService:
     async def update_product(
         self, product_id: int, data: AdminProductUpdate
     ) -> AdminProductDetailResponse:
-        product = await self._repo.get_by_id(product_id)
+        changes = data.model_dump(exclude_unset=True)
+        # stock 변경 시 FOR UPDATE 락 — create_order 트랜잭션과의 lost update 방지
+        # 주의: 락은 "동시 트랜잭션 덮어쓰기"만 막으며, 관리자가 stale 값을
+        # 절대값으로 입력하는 경우는 여전히 발생 가능 (상대값 조정 API는 범위 밖)
+        if "stock" in changes:
+            product = await self._repo.get_by_id_with_lock(product_id)
+        else:
+            product = await self._repo.get_by_id(product_id)
         if product is None:
             raise ProductNotFoundError()
-        for key, value in data.model_dump(exclude_unset=True).items():
+        for key, value in changes.items():
             setattr(product, key, value)
         return _to_detail(product)
 

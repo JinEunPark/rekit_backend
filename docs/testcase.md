@@ -949,10 +949,10 @@ async def update_product(
     return _to_detail(product)
 ```
 
-- [ ] `CatalogRepository`에 `get_by_id_with_lock` 추가 (`get_by_id`와 동일하되
+- [x] `CatalogRepository`에 `get_by_id_with_lock` 추가 (`get_by_id`와 동일하되
       `.with_for_update()` 추가).
-- [ ] 위 서비스 로직 변경 적용.
-- [ ] **범위 제한 결정 사항**: 이 방식도 "관리자가 절대값으로 stock을 정하면
+- [x] 위 서비스 로직 변경 적용.
+- [x] **범위 제한 결정 사항**: 이 방식도 "관리자가 절대값으로 stock을 정하면
       그 시점의 최신값 위에 계산해서 쓰는 게 아니라 그냥 그 값으로 덮어쓴다"는
       근본 설계는 그대로 유지 — 락은 "그 사이에 다른 트랜잭션이 끼어드는 것"만
       막아주는 것이고, "관리자가 입력한 값 자체가 최신 재고를 반영 못 한 stale

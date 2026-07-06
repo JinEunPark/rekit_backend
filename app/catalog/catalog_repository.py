@@ -81,6 +81,17 @@ class CatalogRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_id_with_lock(self, product_id: int) -> Product | None:
+        """PK 로 상품 단건 조회 + FOR UPDATE 락. stock 변경 시 lost update 방지."""
+        stmt = (
+            select(Product)
+            .where(Product.id == product_id)
+            .options(selectinload(Product.images))
+            .with_for_update()
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def admin_get_list(
         self, params: AdminProductListParams
     ) -> tuple[list[Product], int]:

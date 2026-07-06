@@ -316,6 +316,47 @@ async def test_update_product_not_found() -> None:
         await service.update_product(999, AdminProductUpdate(title="제목"))
 
 
+async def test_update_product_without_stock_field_does_not_use_lock() -> None:
+    """title 만 변경 — get_by_id_with_lock 이 아닌 get_by_id 가 호출된다 (락 없음)."""
+    product = make_product(product_id=1)
+    repo = _SpyAdminCatalogRepo([product])
+    service = AdminCatalogService(repo)  # type: ignore[arg-type]
+
+    await service.update_product(1, AdminProductUpdate(title="새 제목"))
+
+    assert repo.lock_calls == 0
+    assert repo.no_lock_calls == 1
+
+
+async def test_update_product_with_stock_field_uses_lock() -> None:
+    """stock 이 포함된 PATCH — get_by_id_with_lock(FOR UPDATE) 이 호출된다."""
+    product = make_product(product_id=1)
+    repo = _SpyAdminCatalogRepo([product])
+    service = AdminCatalogService(repo)  # type: ignore[arg-type]
+
+    await service.update_product(1, AdminProductUpdate(stock=99))
+
+    assert repo.lock_calls == 1
+    assert repo.no_lock_calls == 0
+
+
+class _SpyAdminCatalogRepo(_FakeAdminCatalogRepo):
+    """get_by_id / get_by_id_with_lock 호출 횟수를 추적하는 스파이."""
+
+    def __init__(self, products: list[Product] | None = None) -> None:
+        super().__init__(products)
+        self.lock_calls = 0
+        self.no_lock_calls = 0
+
+    async def get_by_id(self, product_id: int) -> Product | None:
+        self.no_lock_calls += 1
+        return await super().get_by_id(product_id)
+
+    async def get_by_id_with_lock(self, product_id: int) -> Product | None:
+        self.lock_calls += 1
+        return await super().get_by_id(product_id)
+
+
 # ── delete_product ────────────────────────────────────────────
 
 
