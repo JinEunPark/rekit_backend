@@ -173,6 +173,19 @@ class PaymentFailedError(BusinessError):
     message = "결제가 실패했습니다."
 
 
+class PaymentGatewayUnknownError(BusinessError):
+    """PG 응답을 받지 못함 (타임아웃/네트워크 에러) — 결제 성공 여부 불명.
+
+    사용자에게 재시도를 유도하면 안 된다 (이중 결제 위험). 웹훅이 최종
+    진실을 알려줄 때까지 주문을 PENDING 으로 유지하고, 사용자에게는
+    "결제 확인 중"이라고만 안내해야 한다.
+    """
+
+    code = "PAYMENT_GATEWAY_UNKNOWN"
+    http_status = status.HTTP_502_BAD_GATEWAY
+    message = "결제 결과를 확인할 수 없습니다. 잠시 후 주문 내역을 다시 확인해주세요."
+
+
 class OtpInvalidError(BusinessError):
     code = "OTP_INVALID"
     http_status = status.HTTP_422_UNPROCESSABLE_ENTITY

@@ -13,7 +13,7 @@ import hmac
 import httpx
 
 from app.core.config import settings
-from app.core.exceptions import PaymentFailedError
+from app.core.exceptions import PaymentFailedError, PaymentGatewayUnknownError
 from app.payment.adapters.ports import TossConfirmResult
 
 _TOSS_CONFIRM_URL = "https://api.tosspayments.com/v1/payments/confirm"
@@ -43,8 +43,12 @@ class TossPaymentGateway:
             "orderId": order_id,
             "amount": amount,
         }
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(_TOSS_CONFIRM_URL, json=payload, headers=headers)
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(_TOSS_CONFIRM_URL, json=payload, headers=headers)
+        except httpx.TransportError as exc:
+            # 타임아웃/커넥션 에러 — 결제 성공 여부 불명. PaymentFailedError와 구분.
+            raise PaymentGatewayUnknownError() from exc
 
         if resp.status_code != 200:
             raise PaymentFailedError(f"Toss confirm 실패: {resp.status_code}")

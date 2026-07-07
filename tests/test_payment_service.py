@@ -11,7 +11,7 @@ import pytest
 from fastapi import BackgroundTasks
 
 from app.common.email import EmailSender
-from app.core.exceptions import OrderNotFoundError, PaymentFailedError
+from app.core.exceptions import OrderNotFoundError, PaymentFailedError, PaymentGatewayUnknownError
 from app.order.models import Order, OrderItem, OrderStatus
 from app.payment.adapters.ports import PaymentGateway, TossConfirmResult
 from app.payment.models import Payment, PaymentMethod, PaymentStatus, PgProvider
@@ -88,14 +88,17 @@ def make_payment(
 
 
 class _FakeGateway:
-    def __init__(self, *, should_fail: bool = False) -> None:
+    def __init__(self, *, should_fail: bool = False, should_timeout: bool = False) -> None:
         self.should_fail = should_fail
+        self.should_timeout = should_timeout
         self.confirm_call_count: int = 0
 
     async def confirm(
         self, *, payment_key: str, order_id: str, amount: int
     ) -> TossConfirmResult:
         self.confirm_call_count += 1
+        if self.should_timeout:
+            raise PaymentGatewayUnknownError()
         if self.should_fail:
             raise PaymentFailedError("PG 확인 실패")
         return TossConfirmResult(
@@ -365,6 +368,42 @@ async def test_confirm_payment_amount_mismatch_raises() -> None:
             ),
             BackgroundTasks(),
         )
+
+
+async def test_confirm_payment_gateway_timeout_raises_unknown_error_not_failed() -> None:
+    """PG 네트워크 타임아웃 시 PaymentGatewayUnknownError가 발생한다 (PaymentFailedError 아님)."""
+    order = make_order()
+    payment = make_payment(order_id=1)
+    service = _make_service(
+        orders=[order], payments=[payment], gateway=_FakeGateway(should_timeout=True)
+    )
+
+    with pytest.raises(PaymentGatewayUnknownError):
+        await service.confirm_payment(
+            PaymentConfirmRequest(
+                payment_key="k", order_id="RK-2606200001", amount=300_000
+            ),
+            BackgroundTasks(),
+        )
+
+
+async def test_confirm_payment_gateway_timeout_does_not_change_order_status() -> None:
+    """PG 타임아웃 후에도 order.status는 PENDING 그대로 유지된다 (재시도 가능 상태)."""
+    order = make_order()
+    payment = make_payment(order_id=1)
+    service = _make_service(
+        orders=[order], payments=[payment], gateway=_FakeGateway(should_timeout=True)
+    )
+
+    with pytest.raises(PaymentGatewayUnknownError):
+        await service.confirm_payment(
+            PaymentConfirmRequest(
+                payment_key="k", order_id="RK-2606200001", amount=300_000
+            ),
+            BackgroundTasks(),
+        )
+
+    assert order.status == OrderStatus.PENDING
 
 
 async def test_confirm_payment_gateway_fails() -> None:

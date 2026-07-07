@@ -58,7 +58,15 @@
       "Bash(curl -s 'http://localhost:8000/api/v1/admin/sales/timeseries?start=2026-06-01&end=2026-07-06' -H 'Authorization: Bearer __TRACKED_VAR__' -w '\\\\nHTTP:%{http_code}\\\\n')",
       "Bash(curl -s 'http://localhost:8000/api/v1/admin/sales/timeseries?start=2026-06-01&end=2026-07-06&granularity=week' -H 'Authorization: Bearer __TRACKED_VAR__' -w '\\\\nHTTP:%{http_code}\\\\n')",
       "Bash(.venv/bin/pytest tests/test_admin_order_service.py -v)",
-      "Bash(.venv/bin/pytest tests/test_admin_order_service.py tests/test_order_service.py -q)"
+      "Bash(.venv/bin/pytest tests/test_admin_order_service.py tests/test_order_service.py -q)",
+      "Skill(loop)",
+      "Skill(loop:*)",
+      "Bash(.venv/bin/pytest tests/integration/test_order_repository.py -v)",
+      "Bash(.venv/bin/pytest tests/test_order_service.py -k \"TestCancelOrder\" -v)",
+      "Bash(.venv/bin/pytest tests/test_admin_order_service.py -k \"TestAdminCancelOrder\" -v)",
+      "Bash(grep -n \"1\\\\. \\\\`test_cancel_order_restores_stock\\\\`\\\\|2\\\\. \\\\`test_cancel_order_not_cancellable\\\\|3\\\\. \\(통합 테스트\" /Volumes/A/web_projects/rekle_backend/docs/testcase.md)",
+      "Bash(.venv/bin/pytest tests/integration/test_admin_order_repository.py -v)",
+      "Bash(.venv/bin/pytest tests/test_payment_service.py -k \"webhook\" -v)"
     ]
   }
 }
