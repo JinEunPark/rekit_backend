@@ -48,6 +48,25 @@ class OrderRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_by_order_number_with_lock(self, order_number: str) -> Order | None:
+        """order_number 로 주문 단건 조회 + SELECT FOR UPDATE (아이템 포함).
+
+        취소 등 상태 변경 직전에만 사용 — 동시 취소 경쟁 조건 방지.
+        """
+        stmt = (
+            select(Order)
+            .where(Order.order_number == order_number)
+            .with_for_update()
+            .options(selectinload(Order.items))
+        )
+        # populate_existing=True: 세션 identity map에 이미 로드된 Order 객체가 있어도
+        # DB에서 읽어온 최신 값(다른 트랜잭션이 커밋한 CANCELLED 등)으로 강제 갱신.
+        # 락 재조회 후 최신 상태를 보장하기 위해 필요.
+        result = await self._session.execute(
+            stmt, execution_options={"populate_existing": True}
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_order_number_with_shipment(self, order_number: str) -> Order | None:
         """order_number 로 주문 단건 조회 (shipment 포함, items 제외). get_shipment 전용."""
         stmt = (

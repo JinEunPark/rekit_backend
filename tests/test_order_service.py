@@ -142,6 +142,7 @@ class FakeOrderRepository:
         addresses: list[Address] | None = None,
         orders: list[Order] | None = None,
         shipments: list[Shipment] | None = None,
+        locked_order_override: Order | None = None,
     ) -> None:
         self._products: dict[int, Product] = {p.id: p for p in (products or [])}
         self._addresses: list[Address] = addresses or []
@@ -149,6 +150,10 @@ class FakeOrderRepository:
         self._shipments: list[Shipment] = shipments or []
         self._next_order_id = 100
         self.increment_calls: list[tuple[int, int]] = []
+        self.locked_read_calls: int = 0
+        self.unlocked_read_calls: int = 0
+        # get_by_order_number_with_lock 이 반환할 주문을 강제 지정 (테스트 spy용)
+        self._locked_order_override: Order | None = locked_order_override
 
     # ── 필수 인터페이스 ────────────────────────────────────
 
@@ -163,6 +168,13 @@ class FakeOrderRepository:
         return matched[offset : offset + size], total
 
     async def get_by_order_number(self, order_number: str) -> Order | None:
+        self.unlocked_read_calls += 1
+        return next((o for o in self._orders if o.order_number == order_number), None)
+
+    async def get_by_order_number_with_lock(self, order_number: str) -> Order | None:
+        self.locked_read_calls += 1
+        if self._locked_order_override is not None:
+            return self._locked_order_override
         return next((o for o in self._orders if o.order_number == order_number), None)
 
     async def get_by_order_number_with_shipment(self, order_number: str) -> Order | None:
@@ -685,6 +697,20 @@ class TestCancelOrder:
 
         assert repo.increment_calls == [(1, 1)]
 
+    async def test_cancel_order_uses_locked_read(self) -> None:
+        """cancel_order 는 락 버전 조회를 정확히 1회 사용하고, 락 없는 버전은 사용하지 않는다."""
+        # Arrange
+        order = make_order(status=OrderStatus.PENDING)
+        repo = FakeOrderRepository(orders=[order])
+        service = OrderService(repo)  # type: ignore[arg-type]
+
+        # Act
+        await service.cancel_order(user_id=1, order_number=order.order_number)
+
+        # Assert
+        assert repo.locked_read_calls == 1
+        assert repo.unlocked_read_calls == 0
+
 
 # ── list_orders ──────────────────────────────────────────────────────
 
@@ -887,3 +913,43 @@ class TestExpireAbandonedOrder:
         result = await service.get_order(user_id=1, order_number=order.order_number)
 
         assert result.status == OrderStatus.PAID
+
+    async def test_get_order_expire_double_checks_status_after_lock(self) -> None:
+        """락 재조회 결과가 이미 CANCELLED이면 increment_stock을 호출하지 않는다.
+
+        Given: 1차 조회는 PENDING(만료 후보) + 아이템 있음,
+        락 재조회는 CANCELLED(다른 트랜잭션이 선점)
+        Then:  increment_stock 호출 없음 — 이중 복구 방지
+
+        NOTE: already_cancelled 에 items 를 공유하면 SQLAlchemy relationship이
+              아이템을 재배치해 order.items 가 비어 Red 단계를 제대로 못 잡는다.
+              별도 status=CANCELLED 주문을 override 로 쓴다.
+        """
+        # Arrange: 만료 후보 주문 (아이템 있음)
+        order = make_order(user_id=1, status=OrderStatus.PENDING, order_id=10)
+        order.created_at = datetime.now(UTC) - timedelta(minutes=31)
+        order.items = [
+            OrderItem(
+                product_id=1,
+                product_title_snapshot="상품",
+                price_snapshot=100_000,
+                quantity=2,
+            )
+        ]
+
+        # 락 재조회 시 CANCELLED 버전 반환 — 아이템 공유 없이 별도 객체 사용
+        already_cancelled = make_order(
+            user_id=1, status=OrderStatus.CANCELLED, order_id=11
+        )
+        already_cancelled.order_number = order.order_number
+
+        repo = FakeOrderRepository(
+            orders=[order], locked_order_override=already_cancelled
+        )
+        service = OrderService(repo)  # type: ignore[arg-type]
+
+        # Act
+        await service.get_order(user_id=1, order_number=order.order_number)
+
+        # Assert: 락 재조회 후 CANCELLED → increment_stock 호출 없음
+        assert repo.increment_calls == []

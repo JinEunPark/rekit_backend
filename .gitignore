@@ -40,6 +40,7 @@ htmlcov/
 # Logs
 *.log
 logs/
+.claude-loop-logs/
 
 # Database
 *.sqlite

@@ -66,7 +66,22 @@
       "Bash(.venv/bin/pytest tests/test_admin_order_service.py -k \"TestAdminCancelOrder\" -v)",
       "Bash(grep -n \"1\\\\. \\\\`test_cancel_order_restores_stock\\\\`\\\\|2\\\\. \\\\`test_cancel_order_not_cancellable\\\\|3\\\\. \\(통합 테스트\" /Volumes/A/web_projects/rekle_backend/docs/testcase.md)",
       "Bash(.venv/bin/pytest tests/integration/test_admin_order_repository.py -v)",
-      "Bash(.venv/bin/pytest tests/test_payment_service.py -k \"webhook\" -v)"
+      "Bash(.venv/bin/pytest tests/test_payment_service.py -k \"webhook\" -v)",
+      "Bash(git -C /Volumes/A/web_projects/rekle_backend show --stat d672ae9)",
+      "Bash(chmod +x /Volumes/A/web_projects/rekle_backend/scripts/run_testcase2_loop.sh)",
+      "Bash(bash -n /Volumes/A/web_projects/rekle_backend/scripts/run_testcase2_loop.sh)",
+      "WebFetch(domain:developers.portone.io)",
+      "Bash(claude mcp *)",
+      "WebSearch",
+      "WebFetch(domain:www.portone.io)",
+      "WebFetch(domain:help.portone.io)",
+      "WebFetch(domain:blog.portone.io)",
+      "WebFetch(domain:www.nicepay.co.kr)",
+      "WebFetch(domain:github.com)",
+      "Bash(cd ~/.claude/mcp-servers/nicepay-mcp && npm install && npm run build 2>&1 | tail -n 30)",
+      "Read(//Users/bagjin-eun/.claude/mcp-servers/nicepay-mcp/**)",
+      "WebFetch(domain:developers.nicepay.co.kr)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

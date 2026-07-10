@@ -129,6 +129,11 @@ class _FakePaymentRepo:
         self._next_id = 1
         self.increment_calls: list[tuple[int, int]] = []
         self.fallback_call_count: int = 0
+        # 락 버전 호출 추적 (Task 3-1 spy)
+        self.locked_pg_tid_calls: int = 0
+        self.unlocked_pg_tid_calls: int = 0
+        self.locked_fallback_calls: int = 0
+        self.locked_order_by_id_calls: int = 0
 
     async def get_by_id(self, payment_id: int) -> Payment | None:
         return next((p for p in self._payments if p.id == payment_id), None)
@@ -141,6 +146,11 @@ class _FakePaymentRepo:
         return [p for p in self._payments if p.order_id == order_id]
 
     async def get_by_pg_tid(self, pg_tid: str) -> Payment | None:
+        self.unlocked_pg_tid_calls += 1
+        return next((p for p in self._payments if p.pg_tid == pg_tid), None)
+
+    async def get_by_pg_tid_with_lock(self, pg_tid: str) -> Payment | None:
+        self.locked_pg_tid_calls += 1
         return next((p for p in self._payments if p.pg_tid == pg_tid), None)
 
     async def get_order_by_number(self, order_number: str) -> Order | None:
@@ -153,8 +163,28 @@ class _FakePaymentRepo:
     async def get_order_by_id(self, order_id: int) -> Order | None:
         return next((o for o in self._orders if o.id == order_id), None)
 
+    async def get_order_by_id_with_lock(self, order_id: int) -> Order | None:
+        self.locked_order_by_id_calls += 1
+        return next((o for o in self._orders if o.id == order_id), None)
+
     async def get_ready_payment_by_order_number(self, order_number: str) -> Payment | None:
         self.fallback_call_count += 1
+        order = next((o for o in self._orders if o.order_number == order_number), None)
+        if order is None:
+            return None
+        return next(
+            (
+                p
+                for p in self._payments
+                if p.order_id == order.id and p.status == PaymentStatus.READY
+            ),
+            None,
+        )
+
+    async def get_ready_payment_by_order_number_with_lock(
+        self, order_number: str
+    ) -> Payment | None:
+        self.locked_fallback_calls += 1
         order = next((o for o in self._orders if o.order_number == order_number), None)
         if order is None:
             return None
@@ -786,3 +816,158 @@ async def test_payment_email_body_no_card_info() -> None:
     )
 
     assert "결제 완료" in sender.records[0]["body"]
+
+
+# ── Task 3-1: handle_webhook 락 버전 조회 사용 확인 ──────────────
+
+
+async def test_handle_webhook_uses_locked_payment_read() -> None:
+    """handle_webhook 는 get_by_pg_tid_with_lock 을 사용하고, 락 없는 버전을 쓰지 않는다."""
+    # Arrange
+    order = make_order(order_id=1, status=OrderStatus.PENDING)
+    payment = make_payment(order_id=1, status=PaymentStatus.READY, pg_tid="pk_lock_test")
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    # Act
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_lock_test", "status": "DONE"},
+        )
+    )
+
+    # Assert: 락 버전만 호출, 락 없는 버전은 호출 안 됨
+    assert repo.locked_pg_tid_calls == 1
+    assert repo.unlocked_pg_tid_calls == 0
+
+
+async def test_handle_webhook_fallback_uses_locked_read() -> None:
+    """pg_tid fallback 경로도 get_ready_payment_by_order_number_with_lock 을 사용한다."""
+    # Arrange: pg_tid 없는 READY 결제 (confirm 전 상태)
+    order = make_order(order_id=1, order_number="RK-LOCK1", status=OrderStatus.PENDING)
+    payment = make_payment(order_id=1, status=PaymentStatus.READY, pg_tid=None)
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    # Act: pg_tid 로 찾지 못하면 order_number fallback
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_new", "orderId": "RK-LOCK1", "status": "DONE"},
+        )
+    )
+
+    # Assert: 락 fallback 사용, 락 없는 fallback 은 사용 안 됨
+    assert repo.locked_fallback_calls == 1
+    assert repo.fallback_call_count == 0
+
+
+async def test_restore_order_stock_uses_locked_order_read() -> None:
+    """_restore_order_stock_and_cancel 는 get_order_by_id_with_lock 을 사용한다."""
+    # Arrange: ABORTED 웹훅 → _restore_order_stock_and_cancel 호출
+    order = _order_with_item(order_id=1, status=OrderStatus.PENDING)
+    payment = make_payment(order_id=1, status=PaymentStatus.READY, pg_tid="pk_abort")
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    # Act
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_abort", "status": "ABORTED"},
+        )
+    )
+
+    # Assert: _restore_order_stock_and_cancel 에서 락 버전 사용
+    assert repo.locked_order_by_id_calls >= 1
+
+
+# ── Task 4: PAID 이후 환불/취소 웹훅 정상 처리 ─────────────────────────
+
+
+async def test_webhook_canceled_after_paid_restores_stock_and_cancels_order() -> None:
+    """PAID 결제에 CANCELED 웹훅 도착 → payment CANCELLED, order CANCELLED, 재고 복구."""
+    # Arrange: 이미 결제 완료된 주문 (payment=PAID, order=PAID)
+    order = _order_with_item(order_id=1, status=OrderStatus.PAID)
+    payment = make_payment(order_id=1, status=PaymentStatus.PAID, pg_tid="pk_refund1")
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    # Act
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_refund1", "status": "CANCELED"},
+        )
+    )
+
+    # Assert
+    assert payment.status == PaymentStatus.CANCELLED
+    assert order.status == OrderStatus.CANCELLED
+    assert repo.increment_calls == [(1, 2)]  # 재고 복구됨
+
+
+async def test_webhook_partial_canceled_after_paid_does_not_restore_stock() -> None:
+    """PAID 결제에 PARTIAL_CANCELED 웹훅 → payment CANCELLED, 재고 복구는 안 됨."""
+    # Arrange
+    order = _order_with_item(order_id=1, status=OrderStatus.PAID)
+    payment = make_payment(order_id=1, status=PaymentStatus.PAID, pg_tid="pk_partial1")
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    # Act
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_partial1", "status": "PARTIAL_CANCELED"},
+        )
+    )
+
+    # Assert: payment만 CANCELLED, order와 재고는 변화 없음 (기존 정책 유지)
+    assert payment.status == PaymentStatus.CANCELLED
+    assert order.status == OrderStatus.PAID  # order는 그대로
+    assert repo.increment_calls == []  # 재고 복구 안 됨
+
+
+async def test_webhook_aborted_after_paid_is_ignored() -> None:
+    """PAID 결제에 ABORTED 웹훅 도착 — PG에서 나올 수 없는 조합, 방어적으로 무시."""
+    # Arrange
+    order = _order_with_item(order_id=1, status=OrderStatus.PAID)
+    payment = make_payment(order_id=1, status=PaymentStatus.PAID, pg_tid="pk_aborted_after_paid")
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    # Act
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_aborted_after_paid", "status": "ABORTED"},
+        )
+    )
+
+    # Assert: 아무것도 변하지 않아야 함
+    assert payment.status == PaymentStatus.PAID
+    assert order.status == OrderStatus.PAID
+    assert repo.increment_calls == []
+
+
+async def test_webhook_done_after_paid_is_still_idempotent_noop() -> None:
+    """PAID 결제에 DONE 중복 웹훅 — 기존 멱등성 동작 회귀 보호."""
+    # Arrange
+    payment = make_payment(status=PaymentStatus.PAID, pg_tid="pk_done_dup")
+    repo = _FakePaymentRepo(payments=[payment])
+    service = PaymentService(repo, _FakeGateway(), _FakeEmailSender())  # type: ignore[arg-type]
+
+    original_status = payment.status
+
+    # Act
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_done_dup", "status": "DONE"},
+        )
+    )
+
+    # Assert: 상태 변경 없음
+    assert payment.status == original_status

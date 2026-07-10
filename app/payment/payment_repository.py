@@ -46,6 +46,13 @@ class PaymentRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_pg_tid_with_lock(self, pg_tid: str) -> Payment | None:
+        """SELECT FOR UPDATE 로 Payment 조회 — 웹훅 동시 수신 경쟁 방지."""
+        result = await self._session.execute(
+            select(Payment).where(Payment.pg_tid == pg_tid).with_for_update()
+        )
+        return result.scalar_one_or_none()
+
     async def get_ready_payment_by_order_number(self, order_number: str) -> Payment | None:
         """order_number로 주문을 찾아 READY 상태 결제 반환 (웹훅 pg_tid 없을 때 fallback)."""
         order_result = await self._session.execute(
@@ -59,6 +66,26 @@ class PaymentRepository:
                 Payment.order_id == order.id,
                 Payment.status == PaymentStatus.READY,
             )
+        )
+        return payment_result.scalar_one_or_none()
+
+    async def get_ready_payment_by_order_number_with_lock(
+        self, order_number: str
+    ) -> Payment | None:
+        """order_number로 READY Payment를 SELECT FOR UPDATE 조회 (pg_tid 없는 fallback 경로 락)."""
+        order_result = await self._session.execute(
+            select(Order).where(Order.order_number == order_number)
+        )
+        order = order_result.scalar_one_or_none()
+        if order is None:
+            return None
+        payment_result = await self._session.execute(
+            select(Payment)
+            .where(
+                Payment.order_id == order.id,
+                Payment.status == PaymentStatus.READY,
+            )
+            .with_for_update()
         )
         return payment_result.scalar_one_or_none()
 
@@ -78,6 +105,16 @@ class PaymentRepository:
     async def get_order_by_id(self, order_id: int) -> Order | None:
         result = await self._session.execute(
             select(Order).where(Order.id == order_id).options(selectinload(Order.items))
+        )
+        return result.scalar_one_or_none()
+
+    async def get_order_by_id_with_lock(self, order_id: int) -> Order | None:
+        """SELECT FOR UPDATE 로 Order 조회 (아이템 포함) — 웹훅 취소 시 재고 이중 복구 방지."""
+        result = await self._session.execute(
+            select(Order)
+            .where(Order.id == order_id)
+            .with_for_update()
+            .options(selectinload(Order.items))
         )
         return result.scalar_one_or_none()
 

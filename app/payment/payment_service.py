@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from fastapi import BackgroundTasks
@@ -19,6 +20,8 @@ from app.payment.payment_schemas import (
     PaymentInitResponse,
     TossWebhookPayload,
 )
+
+logger = logging.getLogger(__name__)
 
 _EVENT_PAYMENT_STATUS_CHANGED = "PAYMENT_STATUS_CHANGED"
 _TOSS_DONE = "DONE"
@@ -185,21 +188,33 @@ class PaymentService:
         if not pg_tid:
             return
 
-        payment = await self._repo.get_by_pg_tid(pg_tid)
+        # FOR UPDATE 락 — 웹훅 재전송으로 동일 이벤트가 동시에 도착할 때 이중 처리 방지
+        payment = await self._repo.get_by_pg_tid_with_lock(pg_tid)
         if payment is None:
             # confirm이 아직 실행 안 된 경우 pg_tid가 DB에 없을 수 있음 — orderId로 fallback
             order_number: str | None = data.get("orderId")
             if not order_number:
                 return
-            payment = await self._repo.get_ready_payment_by_order_number(order_number)
+            payment = await self._repo.get_ready_payment_by_order_number_with_lock(order_number)
             if payment is None:
                 return
 
-        # 멱등성: 이미 PAID 이면 중복 처리 없음
-        if payment.status == PaymentStatus.PAID:
-            return
-
         pg_status: str = data.get("status", "")
+
+        # PAID 상태에서 도착하는 웹훅은 pg_status별로 구분해 처리한다.
+        # - DONE 재수신: 멱등 무시
+        # - CANCELED/PARTIAL_CANCELED: 정상 환불 이벤트 — 아래 공통 로직으로 통과
+        # - ABORTED: PG에서 나올 수 없는 조합, 방어적 무시
+        if payment.status == PaymentStatus.PAID:
+            if pg_status == _TOSS_DONE:
+                return  # 중복 DONE 웹훅 — 기존 멱등성 동작 유지
+            if pg_status in (_TOSS_CANCELED, _TOSS_PARTIAL_CANCELED):
+                pass  # PAID 이후 정상 취소/환불 — 아래 공통 로직으로 흘려보냄
+            else:
+                # ABORTED 가 PAID 이후 도착 — PG 쪽에서 나올 수 없는 조합
+                logger.warning("PAID 결제에 ABORTED 웹훅 도착 — 무시: pg_tid=%s", pg_tid)
+                return
+
         if pg_status == _TOSS_DONE:
             payment.status = PaymentStatus.PAID
             payment.pg_tid = payment.pg_tid or pg_tid  # fallback 경로일 때만 채움
@@ -219,8 +234,11 @@ class PaymentService:
             await self._restore_order_stock_and_cancel(payment.order_id)
 
     async def _restore_order_stock_and_cancel(self, order_id: int) -> None:
-        """결제 실패/취소 웹훅 시 주문을 취소하고 재고를 복구한다. 중복 호출에 안전."""
-        order = await self._repo.get_order_by_id(order_id)
+        """결제 실패/취소 웹훅 시 주문을 취소하고 재고를 복구한다.
+
+        FOR UPDATE 락으로 동시 웹훅 재전송에 의한 재고 이중 복구를 방지한다.
+        """
+        order = await self._repo.get_order_by_id_with_lock(order_id)
         if order is None or order.status == OrderStatus.CANCELLED:
             return
         for item in order.items:

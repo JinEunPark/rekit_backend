@@ -213,8 +213,11 @@ class OrderService:
         """PENDING/PAID/PREPARING 상태 주문을 취소한다.
 
         PAID 이상의 결제 취소(PG 호출)는 payment 모듈 책임이며, 여기서는 상태만 전환.
+        더블클릭/자동 재시도로 인한 동시 취소를 막기 위해 SELECT FOR UPDATE 를 사용한다.
         """
-        order = await self._get_order_for_user(user_id, order_number)
+        order = await self._repo.get_by_order_number_with_lock(order_number)
+        if order is None or order.user_id != user_id:
+            raise OrderNotFoundError()
 
         if order.status not in _CANCELLABLE_STATUSES:
             raise OrderCancelForbiddenError()
@@ -242,15 +245,21 @@ class OrderService:
         """결제 기한(30분)이 지난 PENDING 주문을 즉시 취소하고 재고를 복구한다.
 
         지연 평가 방식 — 조회 시점에 만료 여부를 확인한다.
+        2단계 확인: 1차 락 없이 후보 판단, 후보이면 FOR UPDATE 재조회 후 더블체크
+        (동시 폴링으로 인한 재고 이중 복구 방지).
         """
         if order.status != OrderStatus.PENDING:
             return
         if datetime.now(UTC) - order.created_at < _PAYMENT_TIMEOUT:
             return
-        for item in order.items:
+        # 2단계: 락을 잡고 상태 재확인 (다른 트랜잭션이 이미 처리했을 수 있음)
+        locked_order = await self._repo.get_by_order_number_with_lock(order.order_number)
+        if locked_order is None or locked_order.status != OrderStatus.PENDING:
+            return
+        for item in locked_order.items:
             await self._repo.increment_stock(item.product_id, item.quantity)
-        order.status = OrderStatus.CANCELLED
-        order.cancelled_at = datetime.now(UTC)
+        locked_order.status = OrderStatus.CANCELLED
+        locked_order.cancelled_at = datetime.now(UTC)
 
     async def _get_order_for_user(self, user_id: int, order_number: str) -> Order:
         """order_number 로 주문 조회 + 소유권 검증. 실패 시 OrderNotFoundError."""
