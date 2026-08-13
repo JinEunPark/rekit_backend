@@ -23,7 +23,7 @@ class ProductStatus(enum.StrEnum):
 
     ACTIVE = "ACTIVE"  # 판매중 — 목록/검색 노출
     INACTIVE = "INACTIVE"  # 비공개 — 운영자가 임시 숨김
-    SOLD_OUT = "SOLD_OUT"  # 품절 — 재고 0 시 자동 전환
+    SOLD_OUT = "SOLD_OUT"  # 품절 — 재고 0 시 ACTIVE 에서 자동 전환, 재고 회복 시 자동 복원
 
 
 class Product(Base, TimestampMixin):

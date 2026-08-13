@@ -9,6 +9,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.catalog.catalog_utils import stock_increment_status_case
 from app.catalog.models import Product
 from app.order.models import Order, OrderStatus
 from app.order.shipment import Shipment, ShipmentStatus
@@ -91,11 +92,16 @@ class AdminOrderRepository:
         ).scalar_one_or_none()
 
     async def increment_stock(self, product_id: int, quantity: int) -> None:
-        """재고를 quantity 만큼 가산 (관리자 주문 취소 시 복구용). 원자적 UPDATE."""
+        """재고를 quantity 만큼 가산 (관리자 주문 취소 시 복구용). 원자적 UPDATE.
+
+        재고가 0 을 넘고 현재 SOLD_OUT 이면 ACTIVE 로 자동 복원한다.
+        운영자가 수동으로 INACTIVE 처리한 상품은 대상에서 제외한다.
+        """
+        new_stock = Product.stock + quantity
         stmt = (
             update(Product)
             .where(Product.id == product_id)
-            .values(stock=Product.stock + quantity)
+            .values(stock=new_stock, status=stock_increment_status_case(new_stock))
         )
         await self._session.execute(stmt)
 

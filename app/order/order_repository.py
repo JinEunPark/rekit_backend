@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.address.models import Address
+from app.catalog.catalog_utils import stock_decrement_status_case, stock_increment_status_case
 from app.catalog.models import Product
 from app.order.models import Order, OrderItem  # noqa: F401 — OrderItem used by relationship
 
@@ -147,19 +148,28 @@ class OrderRepository:
         order.order_number = order_number
 
     async def decrement_stock(self, product_id: int, quantity: int) -> None:
-        """재고를 quantity 만큼 감산 (SQL UPDATE — Python 루프 없이 원자적 처리)."""
+        """재고를 quantity 만큼 감산 (SQL UPDATE — Python 루프 없이 원자적 처리).
+
+        재고가 0 이하가 되면 ACTIVE → SOLD_OUT 으로 함께 전환한다 (원자적).
+        """
+        new_stock = Product.stock - quantity
         stmt = (
             update(Product)
             .where(Product.id == product_id)
-            .values(stock=Product.stock - quantity)
+            .values(stock=new_stock, status=stock_decrement_status_case(new_stock))
         )
         await self._session.execute(stmt)
 
     async def increment_stock(self, product_id: int, quantity: int) -> None:
-        """재고를 quantity 만큼 가산 (주문 취소/실패 시 복구용). 원자적 UPDATE."""
+        """재고를 quantity 만큼 가산 (주문 취소/실패 시 복구용). 원자적 UPDATE.
+
+        재고가 0 을 넘고 현재 SOLD_OUT 이면 ACTIVE 로 자동 복원한다.
+        운영자가 수동으로 INACTIVE 처리한 상품은 대상에서 제외한다.
+        """
+        new_stock = Product.stock + quantity
         stmt = (
             update(Product)
             .where(Product.id == product_id)
-            .values(stock=Product.stock + quantity)
+            .values(stock=new_stock, status=stock_increment_status_case(new_stock))
         )
         await self._session.execute(stmt)

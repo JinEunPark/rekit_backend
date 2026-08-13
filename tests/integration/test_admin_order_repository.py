@@ -12,11 +12,28 @@ import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.catalog.models import ConditionGrade, Product, ProductStatus
 from app.core.database import async_session_factory
 from app.order.admin_order_repository import AdminOrderRepository
 from app.order.models import Order, OrderStatus
 from app.order.shipment import ShipmentMethod
 from app.user.models import User
+
+
+async def _make_product(
+    session: AsyncSession, *, stock: int, status: ProductStatus = ProductStatus.SOLD_OUT
+) -> Product:
+    product = Product(
+        title="관리자통합테스트 상품",
+        category="ETC",
+        condition_grade=ConditionGrade.B,
+        price=10_000,
+        stock=stock,
+        status=status,
+    )
+    session.add(product)
+    await session.flush()
+    return product
 
 
 async def _make_order(session: AsyncSession, *, order_number: str) -> Order:
@@ -67,3 +84,33 @@ async def test_get_order_for_update_actually_locks_the_row(db_session: AsyncSess
         async with async_session_factory() as cleanup_session:
             await cleanup_session.execute(delete(Order).where(Order.id == order_id))
             await cleanup_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_increment_stock_from_sold_out_auto_restores_active(
+    db_session: AsyncSession,
+):
+    """관리자 주문 취소로 SOLD_OUT 상품 재고가 회복되면 ACTIVE 로 자동 복원된다."""
+    product = await _make_product(db_session, stock=0, status=ProductStatus.SOLD_OUT)
+    repo = AdminOrderRepository(db_session)
+
+    await repo.increment_stock(product.id, 1)
+    await db_session.refresh(product)
+
+    assert product.stock == 1
+    assert product.status == ProductStatus.ACTIVE
+
+
+@pytest.mark.asyncio
+async def test_increment_stock_does_not_reactivate_inactive_product(
+    db_session: AsyncSession,
+):
+    """운영자가 수동으로 INACTIVE 처리한 상품은 재고가 회복돼도 자동 활성화되지 않는다."""
+    product = await _make_product(db_session, stock=0, status=ProductStatus.INACTIVE)
+    repo = AdminOrderRepository(db_session)
+
+    await repo.increment_stock(product.id, 1)
+    await db_session.refresh(product)
+
+    assert product.stock == 1
+    assert product.status == ProductStatus.INACTIVE
