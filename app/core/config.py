@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     # 로컬/개발 환경 전용. 운영(production)에서는 반드시 False.
     use_fake_pg: bool = False
 
+    # ── 전화번호 인증 (Octomo) ─────────────────────────────
+    octomo_api_key: str | None = None
+
     # S3 호환 오브젝트 스토리지 (dev: SeaweedFS)
     s3_endpoint_url: str
     s3_region: str = "ap-northeast-2"

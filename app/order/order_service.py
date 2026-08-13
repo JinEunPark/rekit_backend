@@ -93,7 +93,12 @@ class OrderService:
         req: CreateOrderRequest,
         identity_verified: bool,
     ) -> OrderResponse:
-        """주문을 생성하고 재고를 차감한 뒤 OrderResponse 를 반환한다."""
+        """주문을 생성하고 재고를 차감한 뒤 OrderResponse 를 반환한다.
+
+        identity_verified: 휴대폰 인증(Octomo) 완료 사용자만 통과 — 회원가입
+        1차 인증과 첫 주문 전 확인이 이제 이 하나의 인증으로 통합돼 있다
+        (`User.verified` = `phone_verified_at is not None`).
+        """
         if not identity_verified:
             raise IdentityRequiredError()
 

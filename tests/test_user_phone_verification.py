@@ -1,4 +1,4 @@
-"""UserService 전화번호 인증 단위 테스트 — DB·Redis 없이."""
+"""UserService 전화번호 인증(Octomo QR 방식) 단위 테스트 — DB·Redis·Octomo 없이."""
 
 from __future__ import annotations
 
@@ -6,9 +6,10 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.auth.adapters.ports import PhoneVerificationChallenge
 from app.core.exceptions import OtpInvalidError, OtpRateLimitedError
 from app.core.security import hash_password
-from app.user.models import Gender, User, UserRole
+from app.user.models import User, UserRole
 from app.user.user_service import UserService
 
 # ── Fakes ────────────────────────────────────────────────────────────────────
@@ -19,12 +20,21 @@ class _FakeUserRepo:
         pass
 
 
-class _FakeSmsSender:
-    def __init__(self) -> None:
-        self.sent: list[tuple[str, str]] = []
+class _FakePhoneVerifier:
+    """issue_challenge/verify 호출을 기록하는 fake. verify 결과는 미리 설정."""
 
-    async def send(self, phone: str, message: str) -> None:
-        self.sent.append((phone, message))
+    def __init__(self, *, verify_result: bool = True) -> None:
+        self.issued: list[str] = []
+        self.verified: list[str] = []
+        self.verify_result = verify_result
+
+    async def issue_challenge(self, phone: str) -> PhoneVerificationChallenge:
+        self.issued.append(phone)
+        return PhoneVerificationChallenge(code="abc123", qr_code="data:image/png;base64,fake")
+
+    async def verify(self, phone: str) -> bool:
+        self.verified.append(phone)
+        return self.verify_result
 
 
 class _FakeRedis:
@@ -56,12 +66,14 @@ class _FakeRedis:
 # ── 팩토리 ────────────────────────────────────────────────────────────────────
 
 
-def _make_service() -> tuple[UserService, _FakeSmsSender, _FakeRedis]:
+def _make_service(
+    *, verify_result: bool = True
+) -> tuple[UserService, _FakePhoneVerifier, _FakeRedis]:
     repo = _FakeUserRepo()
-    sms = _FakeSmsSender()
+    verifier = _FakePhoneVerifier(verify_result=verify_result)
     redis = _FakeRedis()
-    service = UserService(repo, sms_sender=sms, redis=redis)  # type: ignore[arg-type]
-    return service, sms, redis
+    service = UserService(repo, phone_verifier=verifier, redis=redis)  # type: ignore[arg-type]
+    return service, verifier, redis
 
 
 def _make_user() -> User:
@@ -79,81 +91,58 @@ def _make_user() -> User:
     )
     u.id = 1
     u.phone = "01000000000"
-    u.gender = Gender.MALE
     return u
 
 
 # ── send_phone_verification ───────────────────────────────────────────────────
 
 
-async def test_send_stores_otp_in_redis_and_sends_sms() -> None:
-    """OTP 발송 시 Redis 에 코드가 저장되고 SMS 어댑터가 호출된다."""
-    service, sms, redis = _make_service()
+async def test_send_phone_verification_returns_challenge_from_verifier() -> None:
+    """Octomo 어댑터가 발급한 challenge(코드+QR)를 그대로 반환한다."""
+    service, verifier, _ = _make_service()
 
-    await service.send_phone_verification(phone="01012345678")
+    challenge = await service.send_phone_verification(phone="01012345678")
 
-    stored = await redis.get("sms:verify:01012345678")
-    assert stored is not None and len(stored) == 6 and stored.isdigit()
-    assert len(sms.sent) == 1
-    phone, message = sms.sent[0]
-    assert phone == "01012345678"
-    assert stored in message  # OTP 코드가 메시지에 포함
+    assert challenge.qr_code == "data:image/png;base64,fake"
+    assert verifier.issued == ["01012345678"]
 
 
-async def test_send_rate_limit_blocks_second_request() -> None:
+async def test_send_phone_verification_rate_limited_within_60s_raises() -> None:
     """60초 이내 재요청은 OtpRateLimitedError 를 raise 한다."""
-    service, _, _ = _make_service()
+    service, verifier, _ = _make_service()
 
     await service.send_phone_verification(phone="01012345678")
 
     with pytest.raises(OtpRateLimitedError):
         await service.send_phone_verification(phone="01012345678")
 
+    # rate-limit 에 걸린 두 번째 호출은 verifier 까지 도달하지 않아야 함
+    assert verifier.issued == ["01012345678"]
+
 
 # ── verify_phone ──────────────────────────────────────────────────────────────
 
 
-async def test_verify_phone_updates_user_phone_and_verified_at() -> None:
-    """올바른 코드 입력 시 user.phone 과 phone_verified_at 이 갱신된다."""
-    service, _, redis = _make_service()
+async def test_verify_phone_success_sets_phone_and_phone_verified_at() -> None:
+    """Octomo 검증 성공 시 user.phone 과 phone_verified_at 이 갱신된다."""
+    service, verifier, _ = _make_service(verify_result=True)
     user = _make_user()
-    await redis.set("sms:verify:01099998888", "654321")
 
-    await service.verify_phone(user=user, phone="01099998888", code="654321")
+    await service.verify_phone(user=user, phone="01099998888")
 
     assert user.phone == "01099998888"
     assert user.phone_verified_at is not None
+    assert verifier.verified == ["01099998888"]
 
 
-async def test_verify_phone_deletes_otp_after_success() -> None:
-    """검증 성공 후 Redis 키가 삭제된다 — 재사용 방지."""
-    service, _, redis = _make_service()
-    user = _make_user()
-    await redis.set("sms:verify:01099998888", "111111")
-
-    await service.verify_phone(user=user, phone="01099998888", code="111111")
-
-    assert await redis.get("sms:verify:01099998888") is None
-
-
-async def test_verify_phone_raises_on_wrong_code() -> None:
-    """코드 불일치 시 OtpInvalidError — user 는 변경되지 않는다."""
-    service, _, redis = _make_service()
+async def test_verify_phone_failure_raises_otp_invalid_and_does_not_change_user() -> None:
+    """Octomo 검증 실패(미도착/만료) 시 OtpInvalidError, user 는 변경되지 않는다."""
+    service, _, _ = _make_service(verify_result=False)
     user = _make_user()
     original_phone = user.phone
-    await redis.set("sms:verify:01099998888", "123456")
 
     with pytest.raises(OtpInvalidError):
-        await service.verify_phone(user=user, phone="01099998888", code="999999")
+        await service.verify_phone(user=user, phone="01099998888")
 
     assert user.phone == original_phone
     assert user.phone_verified_at is None
-
-
-async def test_verify_phone_raises_when_otp_expired() -> None:
-    """Redis 에 키가 없으면(만료) OtpInvalidError."""
-    service, _, _ = _make_service()
-    user = _make_user()
-
-    with pytest.raises(OtpInvalidError):
-        await service.verify_phone(user=user, phone="01099998888", code="123456")

@@ -48,7 +48,6 @@ def _to_member_detail(row: MemberRow) -> AdminMemberDetail:
         order_count=row.order_count,
         total_purchased=row.total_purchased,
         phone_verified_at=row.user.phone_verified_at,
-        identity_verified_at=row.user.identity_verified_at,
         agreed_marketing_at=row.user.agreed_marketing_at,
     )
 

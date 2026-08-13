@@ -21,14 +21,19 @@ _VALID: dict[str, Any] = dict(
 
 
 class TestAddressCreatePhone:
-    def test_phone_with_hyphens_normalizes_to_digits(self) -> None:
-        """하이픈 포함 입력 → 숫자만 저장."""
+    def test_phone_without_hyphens_normalizes_to_hyphenated_format(self) -> None:
+        """하이픈 없는 입력 → 010-1234-5678 형식으로 저장."""
+        data = AddressCreate(**{**_VALID, "phone": "01012345678"})
+        assert data.phone == "010-1234-5678"
+
+    def test_phone_with_hyphens_stays_normalized(self) -> None:
+        """이미 하이픈 포함 입력도 동일하게 정규화된다."""
         data = AddressCreate(**{**_VALID, "phone": "010-1234-5678"})
-        assert data.phone == "01012345678"
+        assert data.phone == "010-1234-5678"
 
     def test_phone_016_prefix_accepted(self) -> None:
         data = AddressCreate(**{**_VALID, "phone": "01612345678"})
-        assert data.phone == "01612345678"
+        assert data.phone == "016-1234-5678"
 
     def test_landline_number_raises(self) -> None:
         """유선전화(02, 031 등)는 거부."""
@@ -104,7 +109,7 @@ class TestAddressUpdate:
 
     def test_partial_update_only_phone(self) -> None:
         data = AddressUpdate(phone="01099998888")
-        assert data.phone == "01099998888"
+        assert data.phone == "010-9999-8888"
         assert data.recipient is None
 
     def test_phone_validation_applies_in_update(self) -> None:

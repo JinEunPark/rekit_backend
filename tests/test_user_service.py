@@ -17,7 +17,7 @@ import pytest
 
 from app.core.exceptions import InvalidCredentialsError
 from app.core.security import hash_password, verify_password
-from app.user.models import Gender, User, UserRole, UserStatus
+from app.user.models import User, UserRole, UserStatus
 from app.user.user_schemas import UpdateProfileRequest
 from app.user.user_service import UserService
 
@@ -59,10 +59,6 @@ def _make_user(
     )
     u.id = 1
     u.phone = "01012345678"
-    u.birth_date = datetime.now(UTC).date()
-    u.gender = Gender.MALE
-    u.ci = "some-ci"
-    u.di = "some-di"
     return u
 
 
@@ -113,7 +109,7 @@ def test_update_profile_changes_phone() -> None:
 
     service.update_profile(user=user, data=UpdateProfileRequest(phone="01099998888"))
 
-    assert user.phone == "01099998888"
+    assert user.phone == "010-9999-8888"
 
 
 def test_update_profile_none_fields_are_skipped() -> None:
@@ -153,7 +149,7 @@ async def test_withdraw_anonymizes_identifying_fields() -> None:
 
 
 async def test_withdraw_clears_pii_fields() -> None:
-    """탈퇴 시 nullable PII 필드(username·phone·birth_date·gender·ci·di) 전체 파기."""
+    """탈퇴 시 nullable PII 필드(username·phone) 파기."""
     user = _make_user()
     service, _ = _make_service()
 
@@ -161,10 +157,6 @@ async def test_withdraw_clears_pii_fields() -> None:
 
     assert user.username == "(탈퇴한 사용자)"
     assert user.phone is None
-    assert user.birth_date is None
-    assert user.gender is None
-    assert user.ci is None
-    assert user.di is None
 
 
 async def test_withdraw_invalidates_password() -> None:

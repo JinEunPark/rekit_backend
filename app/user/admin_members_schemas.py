@@ -41,7 +41,6 @@ class AdminMemberItem(BaseModel):
 
 class AdminMemberDetail(AdminMemberItem):
     phone_verified_at: datetime | None
-    identity_verified_at: datetime | None
     agreed_marketing_at: datetime | None
 
 

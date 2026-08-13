@@ -11,7 +11,12 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.user.user_schemas import ChangePasswordRequest
+from app.user.user_schemas import (
+    ChangePasswordRequest,
+    PhoneSendRequest,
+    PhoneVerifyRequest,
+    UpdateProfileRequest,
+)
 
 
 def test_change_password_request_accepts_camelcase_alias() -> None:
@@ -57,3 +62,42 @@ def test_change_password_request_rejects_empty_current_password() -> None:
         ChangePasswordRequest(
             **{"currentPassword": "", "newPassword": "new99zzz"}  # type: ignore[arg-type]
         )
+
+
+# ── phone 정규화 (010-0000-0000 형식 저장) ─────────────────────────────────────
+
+
+def test_update_profile_request_normalizes_phone_to_hyphenated_format() -> None:
+    req = UpdateProfileRequest(phone="01012345678")
+    assert req.phone == "010-1234-5678"
+
+
+def test_update_profile_request_none_phone_stays_none() -> None:
+    """phone 미전송(None) 은 정규화 대상이 아니다 — partial update 시 그대로 유지."""
+    req = UpdateProfileRequest(username="새이름")
+    assert req.phone is None
+
+
+def test_update_profile_request_rejects_invalid_phone() -> None:
+    with pytest.raises(ValidationError):
+        UpdateProfileRequest(phone="02-1234-5678")
+
+
+def test_phone_send_request_normalizes_hyphenated_input() -> None:
+    req = PhoneSendRequest(phone="010-1234-5678")
+    assert req.phone == "010-1234-5678"
+
+
+def test_phone_send_request_normalizes_digit_only_input() -> None:
+    req = PhoneSendRequest(phone="01012345678")
+    assert req.phone == "010-1234-5678"
+
+
+def test_phone_send_request_rejects_invalid_phone() -> None:
+    with pytest.raises(ValidationError):
+        PhoneSendRequest(phone="not-a-phone")
+
+
+def test_phone_verify_request_normalizes_digit_only_input() -> None:
+    req = PhoneVerifyRequest(phone="01012345678")
+    assert req.phone == "010-1234-5678"

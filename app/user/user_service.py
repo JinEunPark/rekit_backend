@@ -12,7 +12,6 @@ JPA 비유: @Service. router(@RestController) 와 모델(@Entity) 사이의 비�
 
 from __future__ import annotations
 
-import secrets
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -25,12 +24,10 @@ from app.user.user_schemas import UpdateProfileRequest
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
-    from app.auth.adapters.ports import SmsSender
+    from app.auth.adapters.ports import PhoneVerificationChallenge, PhoneVerifier
 
-_PHONE_OTP_KEY = "sms:verify:{}"
 _PHONE_OTP_RATE_KEY = "sms:verify:rate:{}"
-_PHONE_OTP_TTL = 300  # 5분
-_PHONE_OTP_RATE_TTL = 60  # 1분 (재발송 제한)
+_PHONE_OTP_RATE_TTL = 60  # 1분 (재발급 제한)
 
 
 class UserService:
@@ -38,11 +35,11 @@ class UserService:
         self,
         repo: UserRepository,
         *,
-        sms_sender: SmsSender | None = None,
+        phone_verifier: PhoneVerifier | None = None,
         redis: Redis | None = None,
     ) -> None:
         self.repo = repo
-        self._sms_sender = sms_sender
+        self._phone_verifier = phone_verifier
         self._redis = redis
 
     def update_profile(self, *, user: User, data: UpdateProfileRequest) -> None:
@@ -69,22 +66,21 @@ class UserService:
         user.username = "(탈퇴한 사용자)"
         user.phone = None
         user.password_hash = ""
-        user.birth_date = None
-        user.gender = None
-        user.ci = None
-        user.di = None
         user.is_active = False
         user.status = UserStatus.WITHDRAWN
         user.withdrawn_at = datetime.now(UTC)
         await self.repo.delete_social_accounts(user.id)
 
-    async def send_phone_verification(self, *, phone: str) -> None:
-        """6자리 OTP 를 생성해 Redis 에 저장하고 SMS 발송. rate-limit: 60초.
+    async def send_phone_verification(self, *, phone: str) -> PhoneVerificationChallenge:
+        """Octomo 인증 QR 을 발급한다. rate-limit: 60초.
+
+        반환값(qr_code)은 프론트가 <img> 로 그대로 표시할 값 — "카메라로 스캔해서
+        문자를 보내주세요" 안내에 쓰인다. 서버가 SMS 를 발송하지 않는다.
 
         Raises:
             OtpRateLimitedError (429): 60초 이내 재요청.
         """
-        assert self._redis is not None and self._sms_sender is not None
+        assert self._redis is not None and self._phone_verifier is not None
 
         locked = await self._redis.set(
             _PHONE_OTP_RATE_KEY.format(phone), "1", nx=True, ex=_PHONE_OTP_RATE_TTL
@@ -92,23 +88,24 @@ class UserService:
         if locked is None:
             raise OtpRateLimitedError()
 
-        code = "".join(secrets.choice("0123456789") for _ in range(6))
-        await self._redis.set(_PHONE_OTP_KEY.format(phone), code, ex=_PHONE_OTP_TTL)
-        await self._sms_sender.send(phone, f"[Rekle] 인증번호: {code}")
+        return await self._phone_verifier.issue_challenge(phone)
 
-    async def verify_phone(self, *, user: User, phone: str, code: str) -> None:
-        """OTP 검증 후 phone / phone_verified_at 업데이트.
+    async def verify_phone(self, *, user: User, phone: str) -> None:
+        """Octomo 로 수신 여부 확인 후 phone / phone_verified_at 갱신.
+
+        QR 방식이라 프론트가 code 를 제출하지 않는다 — 서버가 발급해둔 코드를
+        스스로 재조회해서 Octomo 에 확인한다. `phone_verified_at`이 곧
+        `User.verified`의 유일한 기준이다(회원가입 1차 인증과 첫 주문 전 2차
+        인증을 개념적으로 완전히 통합 — 별도 컬럼 없음).
 
         Raises:
-            OtpInvalidError (422): 코드 불일치 또는 만료.
+            OtpInvalidError (422): 미발급/만료 또는 Octomo 수신 확인 실패.
         """
-        assert self._redis is not None
+        assert self._phone_verifier is not None
 
-        stored = await self._redis.get(_PHONE_OTP_KEY.format(phone))
-        if stored != code:
+        if not await self._phone_verifier.verify(phone):
             raise OtpInvalidError()
 
-        await self._redis.delete(_PHONE_OTP_KEY.format(phone))
         user.phone = phone
         user.phone_verified_at = datetime.now(UTC)
 

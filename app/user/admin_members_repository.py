@@ -49,7 +49,7 @@ class AdminMembersRepository:
                 select(
                     func.count(User.id).label("total"),
                     func.count(User.id)
-                    .filter(User.identity_verified_at.is_not(None))
+                    .filter(User.phone_verified_at.is_not(None))
                     .label("verified"),
                     func.count(User.id)
                     .filter(User.created_at >= week_start)
@@ -88,11 +88,14 @@ class AdminMembersRepository:
             base = base.where(User.status == params.status)
         if params.q:
             pattern = f"%{params.q}%"
+            # phone 은 010-0000-0000 형식으로 저장되므로, 하이픈 없이 검색해도
+            # 매칭되도록 컬럼/검색어 양쪽 모두 하이픈을 제거하고 비교한다.
+            phone_pattern = f"%{params.q.replace('-', '')}%"
             base = base.where(
                 or_(
                     User.username.ilike(pattern),
                     User.email.ilike(pattern),
-                    User.phone.ilike(pattern),
+                    func.replace(User.phone, "-", "").ilike(phone_pattern),
                     User.login_id.ilike(pattern),
                 )
             )

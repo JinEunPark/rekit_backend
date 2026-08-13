@@ -61,7 +61,7 @@ async def get_or_create_user(
         agreed_terms_at=now,
         agreed_privacy_at=now,
         identity_verified_at=now,  # 주문 테스트용
-        phone="01012345678",
+        phone="010-1234-5678",
         phone_verified_at=now,
     )
     session.add(user)
@@ -319,7 +319,7 @@ async def seed_address(session: AsyncSession, user: User) -> Address:
     addr = Address(
         user_id=user.id,
         recipient=user.username,
-        phone="01012345678",
+        phone="010-1234-5678",
         zipcode="06236",
         address1="서울특별시 강남구 테헤란로 123",
         address2="101동 202호",

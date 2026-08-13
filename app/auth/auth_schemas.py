@@ -316,8 +316,8 @@ class UserResponse(BaseModel):
 
     `from_attributes=True` 로 ORM 객체에서 직접 매핑된다 — 라우터는
     UserResponse.model_validate(user) 한 줄로 변환한다.
-    `verified` 는 User.verified @property (= identity_verified_at IS NOT NULL) 가
-    그대로 들어온다. eco_kg 는 별도 집계 — 지금은 0 fallback.
+    `verified` 는 User.verified @property (= phone_verified_at IS NOT NULL, Octomo
+    휴대폰 인증 완료 여부) 가 그대로 들어온다. eco_kg 는 별도 집계 — 지금은 0 fallback.
     """
 
     model_config = ConfigDict(from_attributes=True)

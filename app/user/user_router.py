@@ -17,6 +17,7 @@ from app.user.models import User
 from app.user.user_schemas import (
     ChangePasswordRequest,
     PhoneSendRequest,
+    PhoneSendResponse,
     PhoneVerifyRequest,
     UpdateProfileRequest,
     WithdrawRequest,
@@ -72,44 +73,50 @@ async def withdraw_me(
     user: User = Depends(get_active_user),
     service: UserService = Depends(get_user_service),
 ) -> None:
-    """계정 비활성화 + CI/DI 파기. 주문 데이터는 전자상거래법에 따라 5년 보존."""
+    """계정 비활성화. 주문 데이터는 전자상거래법에 따라 5년 보존."""
     await service.withdraw(user=user, password=body.password)
 
 
 @router.post(
     "/me/phone/send-verification",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="휴대폰 인증번호 발송",
+    response_model=PhoneSendResponse,
+    response_model_by_alias=True,
+    status_code=status.HTTP_200_OK,
+    summary="Octomo 인증 QR 발급",
     dependencies=[Depends(get_active_user)],
 )
 async def send_phone_verification(
     body: PhoneSendRequest,
     service: UserService = Depends(get_user_service),
-) -> None:
-    """6자리 OTP를 SMS로 발송. 60초 이내 재요청 시 429.
+) -> PhoneSendResponse:
+    """Octomo 인증 QR 발급. 프론트가 QR 을 보여주고 "카메라로 스캔" 안내.
+
+    서버는 SMS 를 발송하지 않는다 — 사용자가 QR 스캔으로 열린 문자 앱에서
+    직접 전송해야 한다.
 
     Errors:
     - OtpRateLimitedError (429): 60초 이내 재요청.
     """
-    await service.send_phone_verification(phone=body.phone)
+    challenge = await service.send_phone_verification(phone=body.phone)
+    return PhoneSendResponse(qr_code=challenge.qr_code)
 
 
 @router.post(
     "/me/phone/verify",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="휴대폰 인증번호 확인",
+    summary="휴대폰 인증 확인",
 )
 async def verify_phone(
     body: PhoneVerifyRequest,
     user: User = Depends(get_active_user),
     service: UserService = Depends(get_user_service),
 ) -> None:
-    """OTP 검증 후 user.phone / phone_verified_at 업데이트.
+    """Octomo 수신 확인 후 user.phone / phone_verified_at 업데이트.
 
     Errors:
-    - OtpInvalidError (422): 코드 불일치 또는 만료(5분).
+    - OtpInvalidError (422): 미발급/만료 또는 Octomo 수신 확인 실패.
     """
-    await service.verify_phone(user=user, phone=body.phone, code=body.code)
+    await service.verify_phone(user=user, phone=body.phone)
 
 
 @router.post(

@@ -23,8 +23,8 @@ from app.address.address_repository import AddressRepository
 from app.address.address_service import AddressService
 from app.admin.dashboard_service import DashboardService
 from app.admin.sales_service import SalesService
-from app.auth.adapters.console_sms import ConsoleSmsSender
 from app.auth.adapters.oauth_factory import build_oauth_provider
+from app.auth.adapters.octomo import OctomoPhoneVerifier
 from app.auth.adapters.ports import OAuthProvider
 from app.auth.auth_repository import AuthRepository
 from app.auth.auth_service import AuthService
@@ -144,17 +144,14 @@ async def get_auth_service(
     return AuthService(AuthRepository(session), email_sender=email_sender, redis=get_redis())
 
 
-@lru_cache
-def _cached_sms_sender() -> ConsoleSmsSender:
-    """프로세스 단위 싱글턴 SMS 어댑터."""
-    return ConsoleSmsSender()
-
-
 async def get_user_service(
     session: AsyncSession = Depends(db_session),
 ) -> UserService:
-    """UserService 팩토리. session → UserRepository → UserService + SmsSender + Redis."""
-    return UserService(UserRepository(session), sms_sender=_cached_sms_sender(), redis=get_redis())
+    """UserService 팩토리. session → UserRepository → UserService + PhoneVerifier + Redis."""
+    redis = get_redis()
+    return UserService(
+        UserRepository(session), phone_verifier=OctomoPhoneVerifier(redis), redis=redis
+    )
 
 
 async def get_address_service(

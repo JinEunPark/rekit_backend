@@ -37,7 +37,7 @@ class Address(Base, TimestampMixin):
     phone: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
-        comment="수령인 연락처 (배송 안내용)",
+        comment="수령인 연락처 (배송 안내용, 010-0000-0000 형식)",
     )
     zipcode: Mapped[str] = mapped_column(
         String(10),

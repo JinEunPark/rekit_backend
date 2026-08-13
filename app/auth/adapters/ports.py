@@ -1,6 +1,6 @@
 """auth 모듈의 외부 통합 ports (Protocol).
 
-본인인증 PG(TOSS/NICE/KCB)와 소셜 OAuth(Kakao/Naver/Google) 같은 외부 시스템은
+Octomo(전화번호 인증)와 소셜 OAuth(Kakao/Naver/Google) 같은 외부 시스템은
 service 가 직접 import 하지 않고 이 Protocol 에만 의존한다.
 구현체는 `app.auth.adapters.<provider>.py` 에 두고,
 와이어링은 `app.core.deps` 에서 한다.
@@ -27,47 +27,37 @@ class SocialProfile:
 
 
 @dataclass(frozen=True)
-class IdentityVerifyResult:
-    """본인인증 PG 결과. CI/DI 는 암호화 저장 책임은 service."""
+class PhoneVerificationChallenge:
+    """전화번호 인증 1단계(issue) 결과 — 프론트에 그대로 반환된다."""
 
-    ci: str
-    di: str
-    name: str
-    phone: str
-    birth_date: str  # YYYY-MM-DD
-    gender: str  # MALE / FEMALE
+    code: str  # Octomo /message/exists 조회에 쓰이는 원본 값
+    qr_code: str  # "data:image/png;base64,..." — 프론트가 <img> 로 바로 표시
 
 
 # ── Port (Protocol) ─────────────────────────────────────
 
 
-class OtpSender(Protocol):
-    """SMS OTP 발송기 — 회원가입/비번재설정 1차 인증."""
+class PhoneVerifier(Protocol):
+    """전화번호 소유 확인 — Octomo MO 인증(QR 방식) 어댑터 인터페이스.
 
-    async def send(self, phone: str) -> str:
-        """OTP 발송 후 verify_token 반환."""
-        ...
-
-    async def verify(self, verify_token: str, code: str) -> bool:
-        """code 일치 여부."""
-        ...
-
-
-class SmsSender(Protocol):
-    """SMS 단순 발송기 — OTP 코드 생성·저장은 service 책임.
-
-    실제 발송 어댑터(NHN Cloud, Aligo 등)로 교체 시 이 Protocol 구현체만 바꾸면 된다.
+    서버가 SMS 를 발송하지 않는다. issue_challenge 는 코드를 생성·저장하고
+    그 코드가 담긴 SMS QR 이미지를 Octomo 에서 발급받아 반환할 뿐 — 실제
+    발송(스캔 후 전송)은 사용자가 직접 한다. verify 는 "그 문자가 실제로
+    도착했는지" PG(Octomo) 에 조회한다.
     """
 
-    async def send(self, phone: str, message: str) -> None:
-        """phone 으로 message 를 SMS 발송한다."""
+    async def issue_challenge(self, phone: str) -> PhoneVerificationChallenge:
+        """코드를 생성·저장하고, 그 코드의 SMS QR 을 발급해 함께 반환한다."""
         ...
 
+    async def verify(self, phone: str) -> bool:
+        """이 phone 에 대해 발급해둔 코드가 담긴 메시지가 최근 도착했는지 확인한다.
 
-class IdentityVerifier(Protocol):
-    """본인인증 PG 어댑터 — TOSS/NICE/KCB 통합 인터페이스."""
-
-    async def verify_callback(self, payload: dict[str, str]) -> IdentityVerifyResult: ...
+        QR 방식이라 사용자는 코드 값 자체를 본 적이 없다 — 그래서 `code`를
+        인자로 받지 않는다. 검증 대상 코드는 `issue_challenge`가 저장해둔
+        값을 내부적으로 재조회한다.
+        """
+        ...
 
 
 class OAuthProvider(Protocol):

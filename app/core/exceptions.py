@@ -120,7 +120,7 @@ class EmailTakenError(BusinessError):
 class IdentityRequiredError(BusinessError):
     code = "IDENTITY_REQUIRED"
     http_status = status.HTTP_422_UNPROCESSABLE_ENTITY
-    message = "본인인증이 필요합니다."
+    message = "휴대폰 인증이 필요합니다."
 
 
 class ProductNotFoundError(BusinessError):

@@ -1,3 +1,3 @@
-from app.user.models import Gender, User, UserRole
+from app.user.models import User, UserRole
 
-__all__ = ["Gender", "User", "UserRole"]
+__all__ = ["User", "UserRole"]

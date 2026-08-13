@@ -1,15 +1,15 @@
 import enum
-from datetime import date, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, Identity, String
+from sqlalchemy import Boolean, DateTime, Enum, Identity, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from app.address.models import Address
-    from app.auth.models import IdentityVerification, SocialAccount
+    from app.auth.models import SocialAccount
     from app.cart.models import CartItem
     from app.order.models import Order
 
@@ -30,22 +30,16 @@ class UserStatus(enum.StrEnum):
     WITHDRAWN = "WITHDRAWN"
 
 
-class Gender(enum.StrEnum):
-    """본인인증 결과로만 채워지는 성별. 회원가입 단계에서는 받지 않음."""
-
-    MALE = "MALE"
-    FEMALE = "FEMALE"
-
-
 class User(Base, TimestampMixin):
     """플랫폼 사용자(구매자/관리자 통합 테이블).
 
-    인증 단계는 3가지로 나뉜다 (요구사항정의서 §2.4):
-    - 1차 SMS 인증 — 회원가입 시 필수, `phone_verified_at` 기록
-    - 2차 본인인증 — 첫 주문 직전 1회, `identity_verified_at` + CI/DI 저장
-    - 3차 카드 본인확인 — PG 가 처리, 우리 DB 에는 저장 X
+    인증 단계는 2가지로 나뉜다 (요구사항정의서 §2.4):
+    - 1차 휴대폰 인증(Octomo) — 회원가입 후 언제든 1회, `phone_verified_at` 기록.
+      첫 주문 전 재인증을 요구하지 않는다 — 이 하나가 곧 `User.verified` 기준.
+    - 2차 카드 본인확인 — PG 가 처리, 우리 DB 에는 저장 X
 
-    탈퇴 시 CI/DI 즉시 파기, 거래 정보는 5년 보존(전자상거래법).
+    (과거 CI/DI 기반 본인인증은 법적 의무가 아니고 신뢰 가능한 대체 수단도
+    없어 폐기함 — Octomo 전화번호 인증으로 대체.)
     """
 
     __tablename__ = "users"
@@ -82,7 +76,7 @@ class User(Base, TimestampMixin):
     phone: Mapped[str | None] = mapped_column(
         String(20),
         nullable=True,
-        comment="휴대폰 번호 (하이픈 제거 정규화). SMS 인증 후에만 신뢰 가능",
+        comment="휴대폰 번호 (010-0000-0000 형식으로 정규화). SMS 인증 후에만 신뢰 가능",
     )
     role: Mapped[UserRole] = mapped_column(
         Enum(UserRole, native_enum=False, length=20),
@@ -134,38 +128,11 @@ class User(Base, TimestampMixin):
         comment="마케팅 정보 수신 동의 시각 (선택). 미동의면 NULL",
     )
 
-    # ── SMS 인증 (회원가입과 분리된 별도 흐름) ──────────────────
+    # ── 휴대폰 인증 (Octomo) — 1차/2차 통합, 회원가입 후 언제든 1회 ─────
     phone_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
-        comment="SMS 인증 통과 시각. NULL 이면 미인증 상태",
-    )
-
-    # ── 본인인증 (첫 주문 직전 1회) — CI/DI 는 암호화 저장 (서비스 레이어) ───
-    identity_verified_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-        comment="본인인증 완료 시각. NULL 이면 주문 진입 전 인증 강제",
-    )
-    ci: Mapped[str | None] = mapped_column(
-        String(255),
-        nullable=True,
-        comment="Connecting Information(88B). 동일인 식별용 — 암호화 저장 필수",
-    )
-    di: Mapped[str | None] = mapped_column(
-        String(255),
-        nullable=True,
-        comment="Duplicate Information(64B). 동일 사이트 중복 가입 차단용 — 암호화 저장",
-    )
-    birth_date: Mapped[date | None] = mapped_column(
-        Date,
-        nullable=True,
-        comment="본인인증 결과 저장. 만 14세 미만 차단 판정에 사용",
-    )
-    gender: Mapped[Gender | None] = mapped_column(
-        Enum(Gender, native_enum=False, length=10),
-        nullable=True,
-        comment="본인인증 결과 저장. 통계 외 용도로 사용 금지",
+        comment="휴대폰 인증(Octomo) 통과 시각. NULL 이면 미인증 — User.verified 의 유일한 기준",
     )
     withdrawn_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
@@ -180,14 +147,11 @@ class User(Base, TimestampMixin):
         back_populates="user", cascade="all, delete-orphan"
     )
     orders: Mapped[list["Order"]] = relationship(back_populates="user")
-    identity_verifications: Mapped[list["IdentityVerification"]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
-    )
     social_accounts: Mapped[list["SocialAccount"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 
     @property
     def verified(self) -> bool:
-        """본인인증 통과 여부. 응답 DTO 가 `from_attributes` 로 가져간다."""
-        return self.identity_verified_at is not None
+        """휴대폰 인증(Octomo) 통과 여부. 응답 DTO 가 `from_attributes` 로 가져간다."""
+        return self.phone_verified_at is not None
