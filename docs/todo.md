@@ -1,5 +1,39 @@
 # Rekle Backend TODO — 디자인 시스템 기반 구현 계획
 
+## 후속 조치 (2026-08-14 세션 정리)
+
+> Octomo 휴대폰 인증 마이그레이션 + 전화번호 010-0000-0000 정규화 + 재고 SOLD_OUT
+> 자동전환 작업 완료 후 사용자가 직접 처리해야 할 항목. 완료하면 체크.
+
+- [ ] **[보안/긴급] Octomo API 키 재발급** — 작업 중 로컬 `.claude/settings.json`에
+      평문으로 남아있던 게 발견됨(`89068e69...`). git 히스토리엔 안 올라갔지만
+      `.env`에 저장된 현재 활성 키와 동일한 값이라, Octomo 콘솔
+      (https://octomo.octoverse.kr) 에서 재발급 후 `.env` 교체 권장.
+- [ ] **[결제] Toss Payments 실키 발급/설정** — 현재 `.env` 가 `USE_FAKE_PG=true`
+      이고 `TOSS_CLIENT_KEY`/`TOSS_SECRET_KEY` 는 비어 있음(Fake 게이트웨이로만
+      동작 중). 실연동 전 토스페이먼츠 콘솔에서 키 발급 → `.env`에 등록 →
+      `USE_FAKE_PG=false` 전환 필요.
+- [ ] **[DB] Alembic 마이그레이션 배포 반영** — `6105137b8e93`(CI/DI 제거 →
+      Octomo 전화인증 대체)가 로컬 dev DB엔 이미 적용돼 있음(`alembic current`
+      == head). staging/production 에는 아직 미적용 — 배포 전
+      `.venv/bin/alembic upgrade head` 실행 필요.
+- [ ] **[데이터] 기존 전화번호 백필 검토** — 전화번호 저장 형식을
+      `010-0000-0000`(하이픈 포함)으로 통일했지만, 기존에 이미 저장된 값
+      (하이픈 없음)은 자동으로 재포맷되지 않음. `users`/`addresses`/`orders`
+      세 테이블을 완전히 통일하려면 별도 데이터 마이그레이션 필요 — 우선순위는
+      낮음(신규 저장/검색은 이미 하이픈 무관하게 동작).
+- [ ] **[검증] Octomo 인증 플로우 실사용 확인** — 이번 세션에서 발견한 버그
+      2건(QR 발급/exists 조회가 200 아닌 201 반환, 성공 후 Redis 키 삭제 안 되던
+      것)이 전부 "실제 키로 붙여봐야 드러나는" 종류였음. 실 API 키로 QR
+      발급→스캔→전송까지 한 번 더 end-to-end 확인 권장.
+- [ ] **[협업] 세션 간 작업 충돌 주의** — 이번 세션 도중 다른 세션이 동시에
+      같은 파일(`app/payment/adapters/ports.py`)을 건드려, NicePay 전환 준비로
+      클래스명만 바꾸고 나머지 파일은 그대로 둔 채(임포트 에러 유발) 남겨둔
+      적이 있었음(현재는 원복 완료). 여러 세션을 동시에 돌릴 땐 자주
+      커밋/푸시하고, 새 세션 시작 전 `git pull`로 동기화 권장.
+
+---
+
 > **분석 기준**: `/Volumes/A/web_projects/rekle` 프론트 디자인 (Vue 3 mockup, `_design/buyer/*`, `_design/admin/*`)
 > **현 백엔드 상태** (2026-07-04 기준):
 > - **구현 완료**: auth 전체(이메일 인증 가입 포함) / users (PATCH·DELETE /me + 휴대폰 인증 변경) / catalog (DB 동적 카테고리, bulk 조회) / admin catalog CRUD(이미지 단건 수정 포함) / admin dashboard·orders·members·sales / cart / favorites / address(label/memo) / order (환불요청·배송조회 포함) / payment (init·confirm·webhook) / uploads / **help(공지·FAQ·문의) 신규 완료 — 로그인 필수 전환 + 답변 등록 + 내 문의 조회 추가** / **Redis 인프라 신규 완료**
