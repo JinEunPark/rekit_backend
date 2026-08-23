@@ -54,12 +54,16 @@ services:
     networks:
       - default
       - seaweedfs_default
+      - rekit_edge
     command: >
       sh -c "alembic upgrade head &&
              gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:8000 --access-logfile - --error-logfile -"
 
 networks:
   seaweedfs_default:
+    external: true
+  # nginx가 컨테이너명(rekle-app)으로 접근하기 위한 공유 네트워크 (rekit/nginx 참고)
+  rekit_edge:
     external: true
 
 volumes:
