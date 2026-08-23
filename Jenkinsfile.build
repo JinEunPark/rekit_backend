@@ -1,0 +1,32 @@
+pipeline {
+    agent any
+
+    environment {
+        REGISTRY   = '127.0.0.1:5000'
+        IMAGE_NAME = 'rekit-backend'
+    }
+
+    stages {
+        stage('Build & Push') {
+            steps {
+                script {
+                    env.IMAGE_TAG = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                }
+                sh """
+                    docker build \
+                      -t ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} \
+                      -t ${REGISTRY}/${IMAGE_NAME}:latest \
+                      .
+                    docker push ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+                    docker push ${REGISTRY}/${IMAGE_NAME}:latest
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "이미지 push 완료: ${REGISTRY}/${IMAGE_NAME}:${env.IMAGE_TAG} (+ latest). 배포는 rekit-backend-deploy 잡에서 IMAGE_TAG=${env.IMAGE_TAG} 로 수동 실행."
+        }
+    }
+}
