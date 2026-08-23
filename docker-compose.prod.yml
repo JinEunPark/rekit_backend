@@ -40,9 +40,12 @@ services:
       DEBUG: "false"
       DATABASE_URL: postgresql+asyncpg://rekle:${POSTGRES_PASSWORD}@postgres:5432/rekle
       REDIS_URL: redis://redis:6379/0
-      # seaweedfs는 이 프로젝트가 띄우지 않고, rekit/seaweedfs (seaweedfs_default 네트워크)에
-      # 떠있는 기존 인스턴스를 그대로 씀 — 중복 기동 방지
-      S3_ENDPOINT_URL: http://seaweedfs:8333
+      # S3_ENDPOINT_URL은 여기서 고정하지 않고 .env(secrets/rekit_backend.env)를 그대로 씀.
+      # presigned URL 서명에 host가 포함되므로 브라우저가 실제로 접근하는 공개 주소
+      # (nginx가 /s3/ 로 프록시하는 rekit.co.kr)여야 함 — seaweedfs:8333은 도커 내부에서만
+      # 통하는 호스트라 클라이언트가 접근 못 함 (S3_BUCKET 등 나머지 S3 설정도 .env에 있음).
+      # seaweedfs 자체는 이 프로젝트가 띄우지 않고, rekit/seaweedfs (seaweedfs_default
+      # 네트워크)에 떠있는 기존 인스턴스를 그대로 씀 — 중복 기동 방지.
     # nginx가 127.0.0.1:8000으로 리버스 프록시하는 구조 (todo.md 참고) — 외부 미노출
     ports:
       - "127.0.0.1:8000:8000"
