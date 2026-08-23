@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: rekle-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rekle
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: rekle
+      TZ: Asia/Seoul
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rekle"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: rekle-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    image: 127.0.0.1:5000/rekit-backend:latest
+    container_name: rekle-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      DEBUG: "false"
+      DATABASE_URL: postgresql+asyncpg://rekle:${POSTGRES_PASSWORD}@postgres:5432/rekle
+      REDIS_URL: redis://redis:6379/0
+      # seaweedfs는 이 프로젝트가 띄우지 않고, rekit/seaweedfs (seaweedfs_default 네트워크)에
+      # 떠있는 기존 인스턴스를 그대로 씀 — 중복 기동 방지
+      S3_ENDPOINT_URL: http://seaweedfs:8333
+    # nginx가 127.0.0.1:8000으로 리버스 프록시하는 구조 (todo.md 참고) — 외부 미노출
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - default
+      - seaweedfs_default
+    command: >
+      sh -c "alembic upgrade head &&
+             gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:8000 --access-logfile - --error-logfile -"
+
+networks:
+  seaweedfs_default:
+    external: true
+
+volumes:
+  postgres_data:
+  redis_data:
