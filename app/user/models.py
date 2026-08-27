@@ -139,6 +139,13 @@ class User(Base, TimestampMixin):
         nullable=True,
         comment="회원탈퇴 처리 시각. NULL 이면 활성 계정",
     )
+    has_password: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+        comment="사용자가 아는 실제 비밀번호 보유 여부. 소셜 전용 가입 시 False"
+        " (password_hash 는 추측 불가한 더미값) — DELETE /users/me 본인확인 방식 분기 기준",
+    )
 
     addresses: Mapped[list["Address"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

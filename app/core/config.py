@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     google_redirect_uri: str | None = None
     # 소셜 신규가입용 임시 토큰 만료 (분). JWT 로 단명 발급.
     social_signup_token_expire_minutes: int = 15
+    # 소셜 전용 계정 탈퇴 재인증 토큰 만료 (분). JWT 로 단명 발급.
+    withdrawal_token_expire_minutes: int = 10
 
     # 문의 알림 수신 이메일. None 이면 email_from 으로 fallback.
     help_admin_email: str | None = None

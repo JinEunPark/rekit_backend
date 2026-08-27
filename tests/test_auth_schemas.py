@@ -157,8 +157,10 @@ def test_user_response_serializes_login_id_and_eco_kg_as_camel_case() -> None:
         email="a@b.com",
         verified=False,
         role=UserRole.USER,
+        has_password=True,
     )
     dumped = resp.model_dump(by_alias=True)
     assert dumped["loginId"] == "eunyoung_kim"
     assert dumped["username"] == "박은영"
     assert dumped["ecoKg"] == 0
+    assert dumped["hasPassword"] is True

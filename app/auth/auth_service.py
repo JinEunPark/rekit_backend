@@ -45,6 +45,7 @@ from app.core.security import (
     create_email_verified_token,
     create_refresh_token,
     create_social_signup_token,
+    create_withdrawal_token,
     decode_email_verified_token,
     decode_social_signup_token,
     decode_token,
@@ -344,6 +345,34 @@ class AuthService:
             suggested_name=profile.name,
         )
 
+    async def reverify_social_for_withdrawal(
+        self,
+        *,
+        user: User,
+        provider: SocialProvider,
+        oauth: OAuthProvider,
+        code: str,
+        state: str | None = None,
+    ) -> str:
+        """탈퇴 직전 소셜 재인증 — has_password=False 계정 전용.
+
+        비밀번호가 없는 계정은 본인 확인 수단이 없어, 탈퇴 직전 소셜 로그인을
+        다시 태워 PG 가 돌려준 social_id 가 **로그인된 본인**의 SocialAccount 와
+        일치하는지 확인한다. 다른 사람의 소셜 계정이거나 미연결이면 거절.
+
+        Returns:
+            withdrawal_token — DELETE /users/me 의 withdrawalToken 에 실어 보낼 단명 JWT.
+
+        Raises:
+            InvalidCredentialsError (401): social_id 가 본인 계정에 연결돼 있지 않음.
+            SocialEmailRequiredError (422) / SocialOAuthFailedError (502): PG 통신 실패.
+        """
+        profile = await oauth.exchange_code(code, state)
+        existing = await self.repo.get_social_account(provider, profile.social_id)
+        if existing is None or existing.user_id != user.id:
+            raise InvalidCredentialsError()
+        return create_withdrawal_token(user_id=user.id)
+
     def _login_existing(self, user: User) -> SocialLoginResult:
         """기존 사용자 로그인 결과 — needs_sign_up=False 분기 두 곳(직접 매칭 / 이메일 자동연결)
         에서 공통 사용."""
@@ -404,6 +433,7 @@ class AuthService:
             username=username,
             email=email,
             password_hash=hash_password(random_password),
+            has_password=False,
             role=UserRole.USER,
             is_active=True,
             must_change_password=False,
@@ -550,6 +580,9 @@ async def _bg_apply_temp_password(
                 return
             user.password_hash = hash_password(temp_password)
             user.must_change_password = True
+            # 소셜 전용 계정도 이 시점부터 실제 비밀번호를 알게 됨 — 이후 탈퇴는
+            # 비밀번호 확인 경로로 전환 (withdrawal_token 재인증 불필요).
+            user.has_password = True
             await session.commit()
         except Exception:
             await session.rollback()

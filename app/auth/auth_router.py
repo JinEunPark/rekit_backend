@@ -32,12 +32,14 @@ from app.auth.auth_schemas import (
     TokenResponse,
     VerifyCodeRequest,
     VerifyCodeResponse,
+    WithdrawalReauthResponse,
 )
 from app.auth.auth_service import AuthService
 from app.auth.models import SocialProvider
 from app.core.config import settings
-from app.core.deps import get_auth_service, get_oauth_provider
+from app.core.deps import get_active_user, get_auth_service, get_oauth_provider
 from app.core.exceptions import TokenExpiredError
+from app.user.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -351,6 +353,40 @@ async def social_callback(
         token_type="bearer",
         must_change_password=result.must_change_password,
     )
+
+
+@router.post(
+    "/social/{provider}/reauth-for-withdrawal",
+    response_model=WithdrawalReauthResponse,
+    response_model_by_alias=True,
+    status_code=status.HTTP_200_OK,
+    summary="탈퇴 전 소셜 재인증 — withdrawalToken 발급 (has_password=False 계정 전용)",
+)
+async def social_reauth_for_withdrawal(
+    body: SocialCallbackRequest,
+    provider: SocialProvider = Path(description="kakao | naver | google"),
+    oauth: OAuthProvider = Depends(get_oauth_provider),
+    service: AuthService = Depends(get_auth_service),
+    user: User = Depends(get_active_user),
+) -> WithdrawalReauthResponse:
+    """소셜 전용 계정(비밀번호 없음) 탈퇴 직전 본인 확인.
+
+    프론트가 탈퇴 확인 단계에서 소셜 로그인 동의 화면을 다시 태워 받은 code 를
+    그대로 전달하면, PG 재교환 결과가 **로그인된 본인**의 SocialAccount 와
+    일치할 때만 withdrawalToken 발급. DELETE /users/me 의 withdrawalToken 필드에
+    그대로 실어 보내면 됨 (has_password=True 계정은 이 절차 대신 password 사용).
+
+    Auth required. 비밀번호 계정에는 필요 없는 절차 — has_password=True 면 프론트가
+    이 엔드포인트를 호출할 필요 없음.
+
+    Errors → exception_handler:
+    - InvalidCredentialsError (401): 다른 계정의 소셜 인증이거나 미연결.
+    - SocialEmailRequiredError (422) / SocialOAuthFailedError (502): PG 통신 실패.
+    """
+    token = await service.reverify_social_for_withdrawal(
+        user=user, provider=provider, oauth=oauth, code=body.code, state=body.state
+    )
+    return WithdrawalReauthResponse(withdrawal_token=token)
 
 
 @router.post(

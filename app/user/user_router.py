@@ -74,7 +74,9 @@ async def withdraw_me(
     service: UserService = Depends(get_user_service),
 ) -> None:
     """계정 비활성화. 주문 데이터는 전자상거래법에 따라 5년 보존."""
-    await service.withdraw(user=user, password=body.password)
+    await service.withdraw(
+        user=user, password=body.password, withdrawal_token=body.withdrawal_token
+    )
 
 
 @router.post(

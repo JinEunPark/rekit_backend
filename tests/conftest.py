@@ -59,6 +59,7 @@ def make_user(
     password_hash: str = "$2b$12$dummy",
     is_active: bool = True,
     must_change_password: bool = False,
+    has_password: bool = True,
 ) -> User:
     """테스트용 User 인스턴스 팩토리. DB 저장 없이 메모리에서만 사용.
 
@@ -74,6 +75,7 @@ def make_user(
         role=UserRole.USER,
         is_active=is_active,
         must_change_password=must_change_password,
+        has_password=has_password,
         agreed_terms_at=now,
         agreed_privacy_at=now,
     )

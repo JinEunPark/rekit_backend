@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from app.core.exceptions import InvalidCredentialsError, OtpInvalidError, OtpRateLimitedError
-from app.core.security import hash_password, verify_password
+from app.core.security import decode_withdrawal_token, hash_password, verify_password
 from app.user.models import User, UserStatus
 from app.user.user_repository import UserRepository
 from app.user.user_schemas import UpdateProfileRequest
@@ -53,14 +53,37 @@ class UserService:
         if not verify_password(raw, hashed):
             raise InvalidCredentialsError()
 
-    async def withdraw(self, *, user: User, password: str) -> None:
-        """비밀번호 확인 후 PII 전체 익명화 + 소셜 계정 삭제.
+    async def withdraw(
+        self,
+        *,
+        user: User,
+        password: str | None = None,
+        withdrawal_token: str | None = None,
+    ) -> None:
+        """본인 확인 후 PII 전체 익명화 + 소셜 계정 삭제.
+
+        본인 확인 방식은 `user.has_password` 로 분기 — 소셜 전용 가입(더미
+        비밀번호라 사용자가 알 수 없음)은 `withdrawal_token`으로,
+        일반 가입은 `password`로 확인한다.
 
         - 재가입 가능하도록 email·login_id 를 unique 안전한 값으로 교체
         - 주문 데이터는 전자상거래법 5년 보존 의무로 유지 (orders 스냅샷은 별도 배치로 익명화)
         - 소셜 계정(email_at_link PII 포함)은 즉시 삭제
+
+        Raises:
+            InvalidCredentialsError (401): 비밀번호 불일치, 또는 필요한 확인 수단 누락.
+            TokenExpiredError (401): withdrawal_token 만료/위조.
         """
-        self._assert_password(password, user.password_hash)
+        if user.has_password:
+            if not password:
+                raise InvalidCredentialsError()
+            self._assert_password(password, user.password_hash)
+        else:
+            if not withdrawal_token:
+                raise InvalidCredentialsError()
+            payload = decode_withdrawal_token(withdrawal_token)
+            if int(payload["sub"]) != user.id:
+                raise InvalidCredentialsError()
         user.email = f"withdrawn_{user.id}@deleted"
         user.login_id = f"withdrawn_{user.id}"
         user.username = "(탈퇴한 사용자)"

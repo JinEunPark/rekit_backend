@@ -44,6 +44,7 @@ def _make_user(
     *,
     plain_password: str = "abc12345",
     must_change: bool = False,
+    has_password: bool = True,
 ) -> User:
     now = datetime.now(UTC)
     u = User(
@@ -54,6 +55,7 @@ def _make_user(
         role=UserRole.USER,
         is_active=True,
         must_change_password=must_change,
+        has_password=has_password,
         agreed_terms_at=now,
         agreed_privacy_at=now,
     )
@@ -190,6 +192,59 @@ async def test_withdraw_raises_when_password_mismatch() -> None:
     assert user.is_active is True
     assert user.withdrawn_at is None
     assert user.email == "test@example.com"
+
+
+# ── withdraw: 소셜 전용 계정 (has_password=False) ──────────────────────────────
+
+
+async def test_withdraw_password_holder_without_password_raises() -> None:
+    """has_password=True 인데 password 를 안 보내면 거절 — withdrawal_token 으로 우회 불가."""
+    user = _make_user(has_password=True)
+    service, _ = _make_service()
+
+    with pytest.raises(InvalidCredentialsError):
+        await service.withdraw(user=user, password=None, withdrawal_token="whatever")
+
+    assert user.is_active is True
+
+
+async def test_withdraw_social_only_without_withdrawal_token_raises() -> None:
+    """has_password=False 인데 withdrawal_token 없이 password 만 보내면 거절."""
+    user = _make_user(has_password=False)
+    service, _ = _make_service()
+
+    with pytest.raises(InvalidCredentialsError):
+        await service.withdraw(user=user, password="anything", withdrawal_token=None)
+
+    assert user.is_active is True
+
+
+async def test_withdraw_social_only_with_valid_withdrawal_token_succeeds() -> None:
+    """has_password=False + 본인 앞으로 발급된 withdrawal_token → 비밀번호 없이 탈퇴 성공."""
+    from app.core.security import create_withdrawal_token
+
+    user = _make_user(has_password=False)
+    service, _ = _make_service()
+    token = create_withdrawal_token(user_id=user.id)
+
+    await service.withdraw(user=user, password=None, withdrawal_token=token)
+
+    assert user.is_active is False
+    assert user.status == UserStatus.WITHDRAWN
+
+
+async def test_withdraw_social_only_with_token_for_other_user_raises() -> None:
+    """withdrawal_token 의 sub 가 다른 user_id 면 거절 — 토큰 재사용/도용 방지."""
+    from app.core.security import create_withdrawal_token
+
+    user = _make_user(has_password=False)
+    service, _ = _make_service()
+    token_for_someone_else = create_withdrawal_token(user_id=user.id + 999)
+
+    with pytest.raises(InvalidCredentialsError):
+        await service.withdraw(user=user, password=None, withdrawal_token=token_for_someone_else)
+
+    assert user.is_active is True
 
 
 def test_change_password_does_not_match_new_password_against_old_hash() -> None:

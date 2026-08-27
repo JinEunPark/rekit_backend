@@ -207,6 +207,18 @@ class SocialCallbackRequest(BaseModel):
     )
 
 
+class WithdrawalReauthResponse(BaseModel):
+    """POST /auth/social/{provider}/reauth-for-withdrawal 응답.
+
+    소셜 전용 계정(has_password=False)이 DELETE /users/me 호출 전 본인 확인용으로
+    받는 단명 토큰 — WithdrawRequest.withdrawalToken 에 그대로 실어 보낸다.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    withdrawal_token: str = Field(serialization_alias="withdrawalToken")
+
+
 class SocialCallbackResponse(BaseModel):
     """소셜 콜백 응답 — login OR needsSignUp 두 갈래.
 
@@ -329,6 +341,11 @@ class UserResponse(BaseModel):
     phone: str | None = Field(default=None, description="휴대폰. 본인인증 후 채워짐")
     verified: bool = Field(description="본인인증 완료 여부")
     role: UserRole = Field(description="권한")
+    has_password: bool = Field(
+        serialization_alias="hasPassword",
+        description="실제 비밀번호 보유 여부. False면 소셜 전용 계정 — "
+        "DELETE /users/me 호출 전 reauth-for-withdrawal 로 withdrawalToken 발급 필요",
+    )
     eco_kg: int = Field(
         default=0,
         serialization_alias="ecoKg",

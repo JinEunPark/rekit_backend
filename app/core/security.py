@@ -137,3 +137,32 @@ def create_email_verified_token(
 def decode_email_verified_token(token: str) -> dict[str, Any]:
     """create_email_verified_token 으로 발급한 토큰 검증 + payload 반환."""
     return decode_token(token, expected_type=_EMAIL_VERIFIED_TOKEN_TYPE)
+
+
+# ── 소셜 전용 계정 탈퇴 재인증 토큰 ─────────────────────────────────
+# 비밀번호가 없는(has_password=False) 계정이 DELETE /users/me 를 호출하기 전,
+# 소셜 로그인을 다시 태워 본인 SocialAccount 와 일치함을 확인하면 발급.
+# 단명 (10분) — 탈퇴 확인창에서 바로 이어서 쓰는 용도라 길게 둘 필요 없음.
+
+_WITHDRAWAL_TOKEN_TYPE = "withdrawal"
+
+
+def create_withdrawal_token(
+    *,
+    user_id: int,
+    expires_in: timedelta | None = None,
+) -> str:
+    now = datetime.now(UTC)
+    exp = now + (expires_in or timedelta(minutes=settings.withdrawal_token_expire_minutes))
+    payload = {
+        "sub": str(user_id),
+        "iat": now,
+        "exp": exp,
+        "type": _WITHDRAWAL_TOKEN_TYPE,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def decode_withdrawal_token(token: str) -> dict[str, Any]:
+    """create_withdrawal_token 으로 발급한 토큰 검증 + payload 반환."""
+    return decode_token(token, expected_type=_WITHDRAWAL_TOKEN_TYPE)

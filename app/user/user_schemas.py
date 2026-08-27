@@ -29,9 +29,23 @@ class UpdateProfileRequest(BaseModel):
 
 
 class WithdrawRequest(BaseModel):
-    """DELETE /users/me 요청 바디. 비밀번호 재확인으로 본인 확인."""
+    """DELETE /users/me 요청 바디. 본인 확인 방식은 User.has_password 로 분기.
 
-    password: str = Field(min_length=1, description="현재 비밀번호 (본인 확인용)")
+    - has_password=True (일반 가입): `password` 필수
+    - has_password=False (소셜 전용 가입): POST /auth/social/{provider}/
+      reauth-for-withdrawal 로 미리 발급받은 `withdrawalToken` 필수
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    password: str | None = Field(
+        default=None, min_length=1, description="현재 비밀번호 (비밀번호 계정만 필수)"
+    )
+    withdrawal_token: str | None = Field(
+        default=None,
+        validation_alias="withdrawalToken",
+        description="소셜 전용 계정 탈퇴 전 재인증 토큰 (소셜 전용 계정만 필수)",
+    )
 
 
 class PhoneSendRequest(BaseModel):

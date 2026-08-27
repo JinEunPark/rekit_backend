@@ -399,6 +399,77 @@ def test_create_and_decode_social_signup_token_roundtrip() -> None:
     assert payload["type"] == "social-signup"
 
 
+# ── reverify_social_for_withdrawal ───────────────────────
+
+
+async def test_reverify_social_for_withdrawal_succeeds_when_account_matches() -> None:
+    """탈퇴 직전 재인증 — 본인 SocialAccount 와 일치하면 withdrawal_token 발급."""
+    from app.core.security import decode_withdrawal_token
+
+    user = make_user(user_id=10, has_password=False)
+    repo = _FakeAuthRepo(user=user)
+    repo._socials.append(
+        SocialAccount(
+            user_id=user.id,
+            provider=SocialProvider.NAVER,
+            social_id="naver-abc",
+            email_at_link=user.email,
+        )
+    )
+    oauth = _FakeOAuth(
+        SocialProfile(provider="naver", social_id="naver-abc", email=user.email, name="이름")
+    )
+    service = _make_service(repo)
+
+    token = await service.reverify_social_for_withdrawal(
+        user=user, provider=SocialProvider.NAVER, oauth=oauth, code="c"
+    )
+
+    payload = decode_withdrawal_token(token)
+    assert int(payload["sub"]) == user.id
+
+
+async def test_reverify_social_for_withdrawal_raises_when_no_matching_account() -> None:
+    """PG 가 돌려준 social_id 가 아예 연결된 적 없는 경우 — 거절."""
+    user = make_user(user_id=10, has_password=False)
+    repo = _FakeAuthRepo(user=user)  # SocialAccount 없음
+    oauth = _FakeOAuth(
+        SocialProfile(provider="naver", social_id="unlinked", email=user.email, name=None)
+    )
+    service = _make_service(repo)
+
+    with pytest.raises(InvalidCredentialsError):
+        await service.reverify_social_for_withdrawal(
+            user=user, provider=SocialProvider.NAVER, oauth=oauth, code="c"
+        )
+
+
+async def test_reverify_social_for_withdrawal_raises_when_account_belongs_to_other_user() -> None:
+    """social_id 는 존재하지만 다른 user 소유 — 본인 확인 실패로 거절."""
+    user = make_user(user_id=10, has_password=False)
+    other_user_id = 999
+    repo = _FakeAuthRepo(user=user)
+    repo._socials.append(
+        SocialAccount(
+            user_id=other_user_id,
+            provider=SocialProvider.KAKAO,
+            social_id="kakao-owned-by-other",
+            email_at_link="other@example.com",
+        )
+    )
+    oauth = _FakeOAuth(
+        SocialProfile(
+            provider="kakao", social_id="kakao-owned-by-other", email=user.email, name=None
+        )
+    )
+    service = _make_service(repo)
+
+    with pytest.raises(InvalidCredentialsError):
+        await service.reverify_social_for_withdrawal(
+            user=user, provider=SocialProvider.KAKAO, oauth=oauth, code="c"
+        )
+
+
 def test_decode_social_signup_token_rejects_other_token_types() -> None:
     """access 토큰을 social-signup 자리에 못 씀."""
     from app.core.security import create_access_token
@@ -406,3 +477,12 @@ def test_decode_social_signup_token_rejects_other_token_types() -> None:
     access = create_access_token(sub="1", claims={})
     with pytest.raises(TokenExpiredError):
         decode_social_signup_token(access)
+
+
+def test_decode_withdrawal_token_rejects_other_token_types() -> None:
+    """access 토큰을 withdrawal_token 자리에 못 씀."""
+    from app.core.security import create_access_token, decode_withdrawal_token
+
+    access = create_access_token(sub="1", claims={})
+    with pytest.raises(TokenExpiredError):
+        decode_withdrawal_token(access)
