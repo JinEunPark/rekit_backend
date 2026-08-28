@@ -17,11 +17,13 @@
       Octomo 전화인증 대체)가 로컬 dev DB엔 이미 적용돼 있음(`alembic current`
       == head). staging/production 에는 아직 미적용 — 배포 전
       `.venv/bin/alembic upgrade head` 실행 필요.
-- [ ] **[데이터] 기존 전화번호 백필 검토** — 전화번호 저장 형식을
-      `010-0000-0000`(하이픈 포함)으로 통일했지만, 기존에 이미 저장된 값
-      (하이픈 없음)은 자동으로 재포맷되지 않음. `users`/`addresses`/`orders`
-      세 테이블을 완전히 통일하려면 별도 데이터 마이그레이션 필요 — 우선순위는
-      낮음(신규 저장/검색은 이미 하이픈 무관하게 동작).
+- [x] **[데이터] 기존 전화번호 백필** — `alembic/versions/ea245030888c_...py`
+      (data-only, 스키마 변경 없음)로 `users.phone`/`addresses.phone`/
+      `orders.recipient_phone` 세 컬럼을 `app/core/phone.py::normalize_phone`
+      규칙(`01[016789]` + 7~8자리 → `010-0000-0000`/`011-000-0000`)과 동일하게
+      SQL 정규식으로 백필. 로컬 dev DB 적용 완료(users 3건/addresses 7건/
+      orders 12건 재포맷 확인), downgrade(하이픈 제거) 왕복 검증 완료.
+      staging/production 배포 시 `alembic upgrade head` 필요.
 - [ ] **[검증] Octomo 인증 플로우 실사용 확인** — 이번 세션에서 발견한 버그
       2건(QR 발급/exists 조회가 200 아닌 201 반환, 성공 후 Redis 키 삭제 안 되던
       것)이 전부 "실제 키로 붙여봐야 드러나는" 종류였음. 실 API 키로 QR
