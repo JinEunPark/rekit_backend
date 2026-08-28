@@ -81,7 +81,29 @@
       "Bash(cd ~/.claude/mcp-servers/nicepay-mcp && npm install && npm run build 2>&1 | tail -n 30)",
       "Read(//Users/bagjin-eun/.claude/mcp-servers/nicepay-mcp/**)",
       "WebFetch(domain:developers.nicepay.co.kr)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:octomo.octoverse.kr)",
+      "Bash(curl -s \"https://api.github.com/repos/Octoverse-corp-official/octomo-sample-code/git/trees/main?recursive=1\")",
+      "Bash(python3 -c ' *)",
+      "Bash(xargs -I{} basename {})",
+      "Bash(mkdir -p /Volumes/A/web_projects/rekle/src/components/auth && ls /Volumes/A/web_projects/rekle/src/components/auth)",
+      "Bash(npx vue-tsc *)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(echo \"TSC_EXIT:$?\")",
+      "Bash(npx oxlint *)",
+      "Bash(echo \"OX_EXIT:$?\")",
+      "Bash(.venv/bin/alembic heads *)",
+      "Bash(awk -F: '$1 < 660')",
+      "Bash(awk -F: '$1 > 680 && $1 < 730')",
+      "Bash(git fetch *)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(git rebase *)",
+      "Bash(python3 -c \"import json; json.load\\(open\\('.claude/settings.json'\\)\\); print\\('valid json'\\)\")",
+      "Bash(python3 -c \"import json; json.load\\(open\\('.claude/settings.json'\\)\\); print\\('valid json ok'\\)\")"
+    ],
+    "additionalDirectories": [
+      "/Volumes/A/web_projects/rekle/src/components",
+      "/Volumes/A/web_projects/rekle/src/api"
     ]
   }
 }
