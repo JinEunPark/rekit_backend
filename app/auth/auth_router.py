@@ -394,7 +394,7 @@ async def social_reauth_for_withdrawal(
     response_model=TokenResponse,
     response_model_by_alias=True,
     status_code=status.HTTP_201_CREATED,
-    summary="소셜 신규가입 완료 (tempToken + 약관 동의 + login_id)",
+    summary="소셜 신규가입 완료 (tempToken + 약관 동의만)",
 )
 async def social_sign_up(
     body: SocialSignUpRequest,
@@ -403,19 +403,17 @@ async def social_sign_up(
 ) -> TokenResponse:
     """소셜 콜백에서 받은 tempToken 으로 신규 가입 마무리. api.md §3.6 후속.
 
-    tempToken 안의 (provider, social_id, email) 은 PG 가 검증한 값이라 신뢰
-    가능. 사용자는 login_id / 표시이름 / 약관만 입력. 가입 후 즉시 로그인 토큰 응답.
+    tempToken 안의 (provider, social_id, email, name) 은 PG 가 검증한 값이라
+    신뢰 가능. login_id 는 서버 자동 생성, 표시이름은 PG 닉네임 그대로 사용 —
+    사용자는 약관 동의만 하면 됨. 가입 후 즉시 로그인 토큰 응답.
 
     Errors:
-    - UsernameTakenError (409) / EmailTakenError (409): 입력 login_id 또는 tempToken 의
-      email 이 이미 사용 중.
+    - EmailTakenError (409): tempToken 의 email 이 이미 사용 중.
     - TokenExpiredError (401): tempToken 만료/위조.
-    - 검증 실패 (422): login_id 형식, 약관 미동의.
+    - 검증 실패 (422): 약관 미동의.
     """
     _, access, refresh = await service.social_sign_up(
         temp_token=body.temp_token,
-        login_id=body.login_id,
-        username=body.username,
         agreed_marketing=body.agreed_marketing,
     )
 

@@ -71,31 +71,17 @@ def test_invalid_provider_path_returns_validation_error(client: TestClient) -> N
 
 
 def test_social_sign_up_rejects_unagreed_terms(client: TestClient) -> None:
-    """필수 약관 미동의 → 422 (Pydantic field_validator 단계에서 거절)."""
+    """필수 약관 미동의 → 422 (Pydantic field_validator 단계에서 거절).
+
+    login_id/username 은 더 이상 입력받지 않음 — 서버 자동생성/PG 닉네임 사용.
+    """
     res = client.post(
         "/api/v1/auth/social/sign-up",
         json={
             "tempToken": "x" * 20,
-            "loginId": "anybody",
-            "username": "이름",
             "agreedTerms": False,
             "agreedPrivacy": True,
         },
     )
     assert res.status_code == 422
     assert res.json()["error"]["code"] == "VALIDATION_ERROR"
-
-
-def test_social_sign_up_rejects_invalid_login_id_pattern(client: TestClient) -> None:
-    """loginId 가 패턴 어긋나면 422."""
-    res = client.post(
-        "/api/v1/auth/social/sign-up",
-        json={
-            "tempToken": "x" * 20,
-            "loginId": "ab",  # 4자 미만
-            "username": "이름",
-            "agreedTerms": True,
-            "agreedPrivacy": True,
-        },
-    )
-    assert res.status_code == 422

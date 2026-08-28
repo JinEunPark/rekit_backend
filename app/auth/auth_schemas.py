@@ -245,25 +245,17 @@ class SocialCallbackResponse(BaseModel):
 
 
 class SocialSignUpRequest(BaseModel):
-    """POST /auth/social/sign-up — 소셜 신규가입 완료 (약관 동의 + login_id 결정).
+    """POST /auth/social/sign-up — 소셜 신규가입 완료 (약관 동의만 입력).
 
-    `tempToken` 안에 (provider, social_id, email) 가 들어있어 OAuth PG 가 검증한
-    값임이 보장된다. 사용자는 login_id / 표시 이름 / 약관 동의만 추가 입력.
+    `tempToken` 안에 (provider, social_id, email, name) 가 들어있어 OAuth PG 가
+    검증한 값임이 보장된다 — login_id 는 서버가 자동 생성(항상 소셜 버튼으로만
+    로그인하니 사람이 기억할 필요 없음), 표시 이름은 PG 가 준 닉네임을 그대로
+    사용해 추가 입력을 없앴다. 사용자는 약관 동의만 하면 된다.
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
     temp_token: str = Field(min_length=10, validation_alias="tempToken")
-    login_id: str = Field(
-        pattern=LOGIN_ID_PATTERN,
-        validation_alias="loginId",
-        description="로그인 아이디 (영문·숫자·_ 4~20자)",
-    )
-    username: str = Field(
-        min_length=USERNAME_MIN_LENGTH,
-        max_length=USERNAME_MAX_LENGTH,
-        description="표시 이름",
-    )
     agreed_terms: bool = Field(validation_alias="agreedTerms")
     agreed_privacy: bool = Field(validation_alias="agreedPrivacy")
     agreed_marketing: bool = Field(default=False, validation_alias="agreedMarketing")

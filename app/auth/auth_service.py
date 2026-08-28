@@ -391,14 +391,14 @@ class AuthService:
         self,
         *,
         temp_token: str,
-        login_id: str,
-        username: str,
         agreed_marketing: bool,
     ) -> tuple[User, str, str]:
         """social_login 의 needsSignUp 응답을 받아 약관 동의 후 신규 가입.
 
-        temp_token 의 (provider, social_id, email) 은 OAuth PG 가 검증한 값이라
-        신뢰 가능. login_id / username / agreed_* 는 클라가 사용자에게 받아 전달.
+        temp_token 의 (provider, social_id, email, name) 은 OAuth PG 가 검증한
+        값이라 신뢰 가능. login_id 는 서버가 자동 생성(소셜 전용 계정은 이 값을
+        직접 타이핑해 로그인할 일이 없어 사람에게 고를 필요가 없음), username 은
+        PG 가 준 닉네임을 그대로 사용 — 둘 다 클라에 추가 입력을 요구하지 않는다.
 
         password_hash 는 더미 — 소셜 로그인만 가능하게 (랜덤 32자 bcrypt). 추후
         find-password 로 임시비번 발급 받으면 ID/PW 로그인도 가능.
@@ -407,7 +407,6 @@ class AuthService:
             (user, access_token, refresh_token).
 
         Raises:
-            UsernameTakenError (409): login_id 중복.
             EmailTakenError (409): email 중복. 정상 흐름에선 social_login 단계에서
                 이메일 매칭으로 자동 연결되니 여기 도달하지 않지만, race condition
                 (tempToken 발급 후 동일 이메일로 다른 가입이 끼어든 경우) 방어용.
@@ -417,11 +416,13 @@ class AuthService:
         provider_value: str = payload["provider"]
         social_id: str = payload["social_id"]
         email: str = payload["email"]
+        name: str | None = payload.get("name")
 
-        if await self.repo.exists_by_login_id(login_id):
-            raise UsernameTakenError()
         if await self.repo.exists_by_email(email):
             raise EmailTakenError()
+
+        login_id = await self._generate_unique_login_id()
+        username = name or "새싹회원"
 
         now = datetime.now(UTC)
         # password_hash 는 항상 hash 형태여야 NOT NULL 제약 통과. 사용자가 추측 불가한
@@ -474,6 +475,19 @@ class AuthService:
             expires_in=timedelta(days=refresh_days),
         )
         return access, refresh
+
+    async def _generate_unique_login_id(self) -> str:
+        """소셜 전용 계정용 login_id 자동 생성.
+
+        화면에 노출되지 않고 DB unique 제약을 만족시키는 용도뿐 — 소셜 전용
+        계정은 항상 소셜 버튼으로만 로그인해 이 값을 사람이 타이핑할 일이 없다.
+        `social_` + 12자 hex 로 LOGIN_ID_PATTERN(영문·숫자·_ 4~20자) 을 만족.
+        """
+        for _ in range(5):
+            candidate = f"social_{secrets.token_hex(6)}"
+            if not await self.repo.exists_by_login_id(candidate):
+                return candidate
+        raise RuntimeError("login_id 자동 생성 충돌이 5회 연속 발생 — 확률적으로 불가능한 상황")
 
 
 # ── 모듈 헬퍼 ────────────────────────────────────────────

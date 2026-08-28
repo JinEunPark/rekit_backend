@@ -4,11 +4,13 @@ DB 없이 fake repo + fake OAuth provider 로 도메인 로직 검증.
 - 기존 SocialAccount 매칭 → 즉시 로그인
 - 미매칭 → needsSignUp + tempToken
 - 이메일 동의 누락 → SocialEmailRequiredError
-- social_sign_up: tempToken → User + SocialAccount 생성 + 토큰
-- 중복 login_id / email → UsernameTakenError / EmailTakenError
+- social_sign_up: tempToken → User(login_id 자동생성/username=PG 닉네임) + SocialAccount + 토큰
+- 중복 email → EmailTakenError
 """
 
 from __future__ import annotations
+
+import re
 
 import httpx
 import pytest
@@ -23,7 +25,6 @@ from app.core.exceptions import (
     SocialEmailRequiredError,
     SocialOAuthFailedError,
     TokenExpiredError,
-    UsernameTakenError,
 )
 from app.core.security import (
     create_social_signup_token,
@@ -303,6 +304,7 @@ async def test_social_login_raises_invalid_credentials_when_linked_user_inactive
 
 
 async def test_social_sign_up_creates_user_and_social_account() -> None:
+    """login_id/username 을 입력받지 않고 서버가 자동 생성/PG 닉네임으로 채운다."""
     repo = _FakeAuthRepo()
     service = _make_service(repo)
 
@@ -315,14 +317,14 @@ async def test_social_sign_up_creates_user_and_social_account() -> None:
 
     user, access, refresh = await service.social_sign_up(
         temp_token=temp,
-        login_id="welcome01",
-        username="환영",
         agreed_marketing=True,
     )
 
-    # User 생성됨
-    assert user.login_id == "welcome01"
+    # User 생성됨 — login_id 는 자동 생성(패턴만 검증), username 은 PG 닉네임 그대로
+    assert re.fullmatch(r"social_[0-9a-f]{12}", user.login_id)
+    assert user.username == "환영"
     assert user.email == "welcome@example.com"
+    assert user.has_password is False
     assert user.agreed_marketing_at is not None
     # SocialAccount 도 같이
     assert len(repo.added_socials) == 1
@@ -335,22 +337,18 @@ async def test_social_sign_up_creates_user_and_social_account() -> None:
     assert access and refresh
 
 
-async def test_social_sign_up_rejects_duplicate_login_id() -> None:
-    existing = make_user(user_id=1, login_id="taken", email="other@example.com")
-    repo = _FakeAuthRepo(user=existing)
+async def test_social_sign_up_falls_back_to_default_username_when_name_missing() -> None:
+    """PG 가 닉네임 동의를 안 줘 name=None 인 경우 — 기본 표시이름으로 대체."""
+    repo = _FakeAuthRepo()
     service = _make_service(repo)
 
     temp = create_social_signup_token(
-        provider="naver", social_id="n1", email="new@example.com", name=None
+        provider="naver", social_id="n1", email="noname@example.com", name=None
     )
 
-    with pytest.raises(UsernameTakenError):
-        await service.social_sign_up(
-            temp_token=temp,
-            login_id="taken",
-            username="아무개",
-            agreed_marketing=False,
-        )
+    user, _, _ = await service.social_sign_up(temp_token=temp, agreed_marketing=False)
+
+    assert user.username == "새싹회원"
 
 
 async def test_social_sign_up_rejects_duplicate_email() -> None:
@@ -364,12 +362,7 @@ async def test_social_sign_up_rejects_duplicate_email() -> None:
     )
 
     with pytest.raises(EmailTakenError):
-        await service.social_sign_up(
-            temp_token=temp,
-            login_id="newuser",
-            username="신규",
-            agreed_marketing=False,
-        )
+        await service.social_sign_up(temp_token=temp, agreed_marketing=False)
 
 
 async def test_social_sign_up_rejects_expired_token() -> None:
@@ -380,8 +373,6 @@ async def test_social_sign_up_rejects_expired_token() -> None:
     with pytest.raises(TokenExpiredError):
         await service.social_sign_up(
             temp_token="invalid.jwt.string",
-            login_id="newuser",
-            username="신규",
             agreed_marketing=False,
         )
 
