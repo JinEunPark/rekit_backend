@@ -10,6 +10,9 @@ services:
       TZ: Asia/Seoul
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # SSH 터널(ssh -L 5432:localhost:5432)로만 접근 — loopback 바인딩이라 외부/LAN 직접 노출 없음
+    ports:
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U rekle"]
       interval: 5s
