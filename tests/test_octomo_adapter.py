@@ -17,9 +17,11 @@ class _FakeRedis:
 
     def __init__(self) -> None:
         self._store: dict[str, str] = {}
+        self.ex: dict[str, int | None] = {}
 
     async def set(self, key: str, value: str, *, ex: int | None = None) -> str:
         self._store[key] = value
+        self.ex[key] = ex
         return "OK"
 
     async def get(self, key: str) -> str | None:
@@ -75,6 +77,29 @@ async def test_issue_challenge_generates_16_char_hex_code() -> None:
     assert all(c in "0123456789abcdef" for c in challenge.code)
     stored = await redis.get("octomo:phone-code:01012345678")
     assert stored == challenge.code
+
+
+async def test_issue_challenge_code_ttl_outlives_octomo_within_minutes_window() -> None:
+    """Redis 코드 TTL 은 Octomo withinMinutes 창보다 길어야 한다.
+
+    (회귀: 둘이 정확히 5분으로 같아서, 사용자가 4분 59초에 문자를 보내면 Octomo
+    쪽에선 아직 유효한데 로컬 코드가 먼저 만료돼 verify() 가 무조건 422 로 떨어짐.
+    시간 판정의 권한은 Octomo 에 있어야 하고, 로컬 TTL 은 그보다 여유를 둔다.)
+    """
+    from app.auth.adapters.octomo import _WITHIN_MINUTES
+
+    verifier, redis = _make_verifier()
+    client = _mock_client(_qr_response())
+
+    with (
+        patch("app.auth.adapters.octomo.settings") as mock_settings,
+        patch("httpx.AsyncClient", return_value=client),
+    ):
+        mock_settings.octomo_api_key = "test_key"
+        await verifier.issue_challenge("01012345678")
+
+    ttl = redis.ex["octomo:phone-code:01012345678"]
+    assert ttl is not None and ttl > _WITHIN_MINUTES * 60
 
 
 async def test_issue_challenge_hyphenated_phone_uses_digit_only_redis_key() -> None:

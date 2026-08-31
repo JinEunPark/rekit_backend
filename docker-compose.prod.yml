@@ -43,6 +43,12 @@ services:
       DEBUG: "false"
       DATABASE_URL: postgresql+asyncpg://rekle:${POSTGRES_PASSWORD}@postgres:5432/rekle
       REDIS_URL: redis://redis:6379/0
+      # 엣지 nginx 가 docker 네트워크(rekit_edge)의 자기 컨테이너 IP 로 접속하므로 gunicorn
+      # 기본값(127.0.0.1)으론 X-Forwarded-Proto 를 신뢰하지 않는다 → HTTPS 뒤에서도
+      # request.url.scheme 이 http 로 잡혀 트레일링 슬래시 등 리다이렉트가 http:// Location
+      # 을 만들어 스킴 다운그레이드 발생. app 8000 은 loopback 바인딩(외부 미노출)이고 nginx
+      # 만 접근하므로 "*" 로 열어도 안전. (gunicorn 이 이 env 를 --forwarded-allow-ips 로 읽음)
+      FORWARDED_ALLOW_IPS: "*"
       # S3_ENDPOINT_URL은 여기서 고정하지 않고 .env(secrets/rekit_backend.env)를 그대로 씀.
       # presigned URL 서명에 host가 포함되므로 브라우저가 실제로 접근하는 공개 주소
       # (nginx가 /s3/ 로 프록시하는 rekit.co.kr)여야 함 — seaweedfs:8333은 도커 내부에서만

@@ -105,13 +105,18 @@ class UserService:
         """
         assert self._redis is not None and self._phone_verifier is not None
 
-        locked = await self._redis.set(
-            _PHONE_OTP_RATE_KEY.format(phone), "1", nx=True, ex=_PHONE_OTP_RATE_TTL
-        )
+        rate_key = _PHONE_OTP_RATE_KEY.format(phone)
+        locked = await self._redis.set(rate_key, "1", nx=True, ex=_PHONE_OTP_RATE_TTL)
         if locked is None:
             raise OtpRateLimitedError()
 
-        return await self._phone_verifier.issue_challenge(phone)
+        try:
+            return await self._phone_verifier.issue_challenge(phone)
+        except Exception:
+            # 발급 실패(Octomo 오류 등) 시 락을 해제 — 안 그러면 60초간 재시도가
+            # 전부 429 로 막힌다. 락은 "성공적으로 QR 을 발급했다" 는 의미여야 한다.
+            await self._redis.delete(rate_key)
+            raise
 
     async def verify_phone(self, *, user: User, phone: str) -> None:
         """Octomo 로 수신 여부 확인 후 phone / phone_verified_at 갱신.

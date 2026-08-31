@@ -23,13 +23,18 @@ class _FakeUserRepo:
 class _FakePhoneVerifier:
     """issue_challenge/verify 호출을 기록하는 fake. verify 결과는 미리 설정."""
 
-    def __init__(self, *, verify_result: bool = True) -> None:
+    def __init__(
+        self, *, verify_result: bool = True, issue_error: Exception | None = None
+    ) -> None:
         self.issued: list[str] = []
         self.verified: list[str] = []
         self.verify_result = verify_result
+        self.issue_error = issue_error
 
     async def issue_challenge(self, phone: str) -> PhoneVerificationChallenge:
         self.issued.append(phone)
+        if self.issue_error is not None:
+            raise self.issue_error
         return PhoneVerificationChallenge(code="abc123", qr_code="data:image/png;base64,fake")
 
     async def verify(self, phone: str) -> bool:
@@ -67,10 +72,10 @@ class _FakeRedis:
 
 
 def _make_service(
-    *, verify_result: bool = True
+    *, verify_result: bool = True, issue_error: Exception | None = None
 ) -> tuple[UserService, _FakePhoneVerifier, _FakeRedis]:
     repo = _FakeUserRepo()
-    verifier = _FakePhoneVerifier(verify_result=verify_result)
+    verifier = _FakePhoneVerifier(verify_result=verify_result, issue_error=issue_error)
     redis = _FakeRedis()
     service = UserService(repo, phone_verifier=verifier, redis=redis)  # type: ignore[arg-type]
     return service, verifier, redis
@@ -118,6 +123,24 @@ async def test_send_phone_verification_rate_limited_within_60s_raises() -> None:
 
     # rate-limit 에 걸린 두 번째 호출은 verifier 까지 도달하지 않아야 함
     assert verifier.issued == ["01012345678"]
+
+
+async def test_send_phone_verification_releases_rate_lock_when_issue_fails() -> None:
+    """Octomo 발급이 실패하면 rate-limit 락을 남기지 않는다 — 재시도가 429 로 막히면 안 됨.
+
+    (회귀: 락을 Octomo 호출 전에 잡고 실패 시 해제 안 해서, 첫 요청이 500 나면
+    이후 60초간 모든 재시도가 OtpRateLimitedError 로 떨어지던 버그)
+    """
+    service, verifier, _ = _make_service(issue_error=RuntimeError("Octomo down"))
+
+    with pytest.raises(RuntimeError):
+        await service.send_phone_verification(phone="01012345678")
+
+    # 두 번째 호출은 429 가 아니라 실제 발급 경로(verifier)까지 다시 도달해야 한다
+    with pytest.raises(RuntimeError):
+        await service.send_phone_verification(phone="01012345678")
+
+    assert verifier.issued == ["01012345678", "01012345678"]
 
 
 # ── verify_phone ──────────────────────────────────────────────────────────────
