@@ -14,15 +14,16 @@
       - ✅ **Task 1·2 완료 (2026-08-31, 커밋 `233a264`)** — 웹훅 검증을 "조회 재확인" 방식으로 교체
         (`verify_webhook_signature` 제거 → `gateway.get_payment()`), 웹훅 status 8종 처리 +
         `EXPIRED` 추가, 부분취소 `PARTIAL_CANCELLED` 정정
-      - ✅ **Task 3·4 완료 (2026-09-04, 미커밋)** — `TossPaymentGateway.cancel()`
+      - ✅ **Task 3·4 완료 (2026-09-04, 커밋 `636f00f`)** — `TossPaymentGateway.cancel()`
         (`POST /v1/payments/{paymentKey}/cancel`, `Idempotency-Key`, `{code,message}` 파싱) +
         `PaymentService.cancel_payment()` + repo `update_status_cancelled` +
         `order_service.cancel_order`/`request_refund`·`admin_order_service.cancel_order` 가
         PAID/PREPARING 이면 PG 취소 먼저 호출(실패 시 롤백), PENDING 은 스킵. deps 와이어링.
-        502 passed / ruff 0 / mypy 0
+        503 passed / ruff 0 / mypy 0
+      - ✅ **Fake 게이트웨이 제거 (2026-09-04, 커밋 `282c34c`)** — `use_fake_pg` 토글 삭제, 항상 실제 토스
       - ✅ **결정**: clientKey 는 프론트 env(`VITE_TOSS_CLIENT_KEY`)로 — 백엔드 `toss_client_key` 불필요
-      - ✅ **키 반영 (2026-09-04)**: 본인 계정 테스트 키 `.env` 세팅 (`TOSS_SECRET_KEY=test_gsk_GePWvyJ…`,
-        `USE_FAKE_PG=false`), 프론트 `.env.local` `VITE_TOSS_CLIENT_KEY=test_gck_GjLJoQ…`. 둘 다 gitignore
+      - ✅ **키 반영 (2026-09-04)**: 본인 계정 테스트 키 `.env` 세팅 (`TOSS_SECRET_KEY=test_gsk_GePWvyJ…`),
+        프론트 `.env.local` `VITE_TOSS_CLIENT_KEY=test_gck_GjLJoQ…`. 둘 다 gitignore
       - [ ] **Task 5 — confirm 하드닝** : 4xx 응답 `{code,message}` → `_raise_toss_failure()` 재사용 +
         `payment.fail_reason` 저장 + `status=FAILED`. confirm 에 `Idempotency-Key` 헤더 (`cancel` 은 이미 있음)
       - [ ] **Task 6 — 정리** : dead code `app/payment/ports.py` 삭제, `docs/api.md` §10.1/§10.2 를
@@ -37,6 +38,48 @@
         `src/api/payments.ts`, `src/composables/usePaymentHandoff.ts`, `src/config/payments.ts`,
         `src/views/checkout/PaymentReturnView.vue` 생성됨). successUrl 랜딩 → `POST /payments/confirm` 호출,
         failUrl 페이지, 시크릿 키 프론트 유입 금지
+
+### [결제] 내가 직접 해봐야 할 수동 테스트 (2026-09-05~)
+
+> 자동 테스트로 못 잡는 것 = 실제 토스 API 호출·웹훅·프론트 위젯 결합. 개발자센터 결제내역이 최종 증거.
+> 사전: 백엔드 `.env` `TOSS_SECRET_KEY` 세팅됨 · `.venv/bin/uvicorn app.main:app --reload` · 프론트 `npm run dev`
+
+**A. 환경/설정 스모크**
+- [ ] `TOSS_SECRET_KEY` 없이 `/payments/confirm` 호출 → `PAYMENT_FAILED`(422, "Toss secret key가 설정되지 않았습니다") 나는지
+- [ ] 개발자센터 → 웹훅에 `https://{로컬터널 or 도메인}/api/v1/payments/webhooks/toss` 등록 (이벤트 `PAYMENT_STATUS_CHANGED`). 로컬이면 ngrok 등 터널 필요
+- [ ] 결제창 허용 도메인에 `localhost:5173` (또는 dev 도메인) 등록
+
+**B. 결제 해피 패스 (카드)**
+- [ ] 주문서 → 결제 → `/payments/init` 201, 토스 위젯 뜸 (본인 `test_gck_*`)
+- [ ] 토스 테스트 카드로 승인 → successUrl 리다이렉트 (`?paymentKey&orderId&amount`)
+- [ ] `/payments/confirm` 200 → `payments` 행 `PAID` + 카드메타(`card_company`/`card_last4`) 채워짐, `orders` `PAID`
+- [ ] **개발자센터 결제내역에 "승인" 1건** (본인 상점 장부에 찍히는지 = 본인 키 정상 증거)
+- [ ] 결제완료 이메일 수신
+- [ ] 재고: 주문 시 차감 → 결제 성공 후 그대로 유지
+
+**C. 결제 실패/멱등**
+- [ ] 위젯에서 취소(뒤로가기) → failUrl 페이지, 주문은 `PENDING` 유지 (30분 후 자동 만료 취소)
+- [ ] `confirm` 에 틀린 `amount` → `PAYMENT_FAILED`(422) "금액 불일치"
+- [ ] 같은 주문에 `confirm` 두 번 → 두 번째도 200(멱등), 토스 승인 1건만
+- [ ] 가상계좌를 (혹시 위젯에서 고를 수 있으면) 선택 → `confirm` 이 "DONE 이 아님"으로 422 거절
+
+**D. 주문 취소 → PG 환불 (Task 3·4 핵심 검증)**
+- [ ] `PAID` 주문 `POST /api/v1/orders/{order_number}/cancel` → 200, `payments` `CANCELLED`, `orders` `CANCELLED`, 재고 복구(+수량)
+- [ ] **개발자센터 결제내역에 "취소" 표시** + `cancels[]` 에 전액
+- [ ] 같은 주문 다시 `cancel` → `ORDER_CANCEL_FORBIDDEN` (이미 취소, 토스 재호출 없음)
+- [ ] `PENDING` 주문(결제 전) `cancel` → 200, 토스 호출 없이 `CANCELLED` (개발자센터에 아무것도 안 뜸)
+- [ ] 관리자 `POST /api/v1/admin/orders/{order_number}/cancel` (`{"reason":"..."}`) → 동일 + 토스 취소 사유에 reason 전달됐는지
+- [ ] `DELIVERED` 주문 `POST /api/v1/orders/{order_number}/refund/request` → `REFUNDED` + 토스 취소. 재고는 복구 안 됨(정상)
+- [ ] (선택) 토스가 취소 거절하는 상황 재현(예: 이미 콘솔에서 수동취소한 결제를 우리가 cancel) → 422, **주문 상태가 롤백되어 그대로인지** (전환 안 됨 확인)
+
+**E. 웹훅 (Task 1·2 핵심 검증)**
+- [ ] 결제하면 서버 로그에 `PAYMENT_STATUS_CHANGED` 웹훅 수신 기록 (이미 confirm 으로 PAID면 멱등 무시)
+- [ ] **개발자센터에서 결제를 수동 취소** → `CANCELED` 웹훅 도착 → 우리 `payments` `CANCELLED` + `orders` `CANCELLED` + 재고 복구 자동으로 되는지 (조회 재확인 방식 동작 증거)
+- [ ] 개발자센터 웹훅 "재전송" → 멱등 (이중 재고 복구/상태 재전환 없음)
+- [ ] 백엔드를 잠깐 껐다 켠 상태에서 웹훅 도착 → 토스가 재시도해서 결국 처리되는지 (5xx→재시도)
+
+**F. 결과 기록**
+- [ ] 통과/실패를 이 목록에 체크, 실패 케이스는 별도 이슈로
 - [ ] **[DB] Alembic 마이그레이션 배포 반영** — `6105137b8e93`(CI/DI 제거 →
       Octomo 전화인증 대체)가 로컬 dev DB엔 이미 적용돼 있음(`alembic current`
       == head). staging/production 에는 아직 미적용 — 배포 전
