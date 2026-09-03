@@ -11,26 +11,28 @@
       (https://octomo.octoverse.kr) 에서 재발급 후 `.env` 교체 권장.
 - [ ] **[결제] 토스페이먼츠 실연동** — 전체 이해: **[docs/payment_dev_state.md](payment_dev_state.md)** ·
       작업 가이드: **[docs/toss_integration.md](toss_integration.md)** (Task 1~8, 왜→뭘바꾸나→검증→완료 4단)
-      - ✅ **Task 1·2 완료 (2026-08-31)** — 웹훅 검증을 "조회 재확인" 방식으로 교체
+      - ✅ **Task 1·2 완료 (2026-08-31, 커밋 `233a264`)** — 웹훅 검증을 "조회 재확인" 방식으로 교체
         (`verify_webhook_signature` 제거 → `gateway.get_payment()`), 웹훅 status 8종 처리 +
-        `EXPIRED` 추가, 부분취소 `PARTIAL_CANCELLED` 정정. 483 passed / ruff 0 / mypy 0. **미커밋**
-      - ✅ **결정**: clientKey 는 프론트 env(`VITE_TOSS_CLIENT_KEY`)로 — 백엔드는 `toss_client_key`
-        필드 불필요, `/payments/init` 응답에 `client_key` 안 내림 (원래 Task 6 의 A 파트 스킵)
-      - [ ] **Task 3 — `TossPaymentGateway.cancel()`** : `POST /v1/payments/{paymentKey}/cancel`,
-        `Idempotency-Key` 헤더, `{code,message}` 파싱. `TossCancelResult` DTO + Protocol/Fake 추가
-      - [ ] **Task 4 — 취소/환불에 PG cancel 연결** : `PaymentService.cancel_payment()` 신설 →
-        `order_service.cancel_order`/`request_refund`, `admin_order_service.cancel_order` 가 PAID 이상이면
-        호출 (지금은 DB 상태만 바꾸고 토스에 환불요청 안 함). repo `update_status_cancelled`, deps 와이어링
-      - [ ] **Task 5 — confirm 하드닝** : 4xx 응답 `{code,message}` → `PaymentFailedError` 메시지 +
-        `payment.fail_reason` 저장 + `status=FAILED`. confirm 에 `Idempotency-Key` 헤더
+        `EXPIRED` 추가, 부분취소 `PARTIAL_CANCELLED` 정정
+      - ✅ **Task 3·4 완료 (2026-09-04, 미커밋)** — `TossPaymentGateway.cancel()`
+        (`POST /v1/payments/{paymentKey}/cancel`, `Idempotency-Key`, `{code,message}` 파싱) +
+        `PaymentService.cancel_payment()` + repo `update_status_cancelled` +
+        `order_service.cancel_order`/`request_refund`·`admin_order_service.cancel_order` 가
+        PAID/PREPARING 이면 PG 취소 먼저 호출(실패 시 롤백), PENDING 은 스킵. deps 와이어링.
+        502 passed / ruff 0 / mypy 0
+      - ✅ **결정**: clientKey 는 프론트 env(`VITE_TOSS_CLIENT_KEY`)로 — 백엔드 `toss_client_key` 불필요
+      - ✅ **키 반영 (2026-09-04)**: 본인 계정 테스트 키 `.env` 세팅 (`TOSS_SECRET_KEY=test_gsk_GePWvyJ…`,
+        `USE_FAKE_PG=false`), 프론트 `.env.local` `VITE_TOSS_CLIENT_KEY=test_gck_GjLJoQ…`. 둘 다 gitignore
+      - [ ] **Task 5 — confirm 하드닝** : 4xx 응답 `{code,message}` → `_raise_toss_failure()` 재사용 +
+        `payment.fail_reason` 저장 + `status=FAILED`. confirm 에 `Idempotency-Key` 헤더 (`cancel` 은 이미 있음)
       - [ ] **Task 6 — 정리** : dead code `app/payment/ports.py` 삭제, `docs/api.md` §10.1/§10.2 를
         실제 구현에 맞게 갱신(`/verify`→`/confirm`, `data` envelope 제거, `PENDING_PAYMENT`→`PENDING`)
-      - [ ] **Task 7 (선택) — 계좌이체(가상계좌)** : `PaymentStatus.WAITING_FOR_DEPOSIT` +
-        `DEPOSIT_CALLBACK` 웹훅 처리 + 환불계좌(`refundReceiveAccount`) 입력 스키마. **MVP 포함 여부 결정 필요**
-      - [ ] **부분취소** 지금 구현할지 결정 — 빼면 전액취소만, Task 4 단순화
-      - [ ] **운영** : 개발자센터에서 본인 계정 토스 키(`test_gsk_...` / `live_gsk_...`, `docs` 없는 것) 발급 →
-        백엔드 `.env` `TOSS_SECRET_KEY` + `USE_FAKE_PG=false`, 웹훅 URL `https://{도메인}/api/v1/payments/webhooks/toss` 등록,
-        결제창 허용 도메인 등록. clientKey(gck)와 secretKey(gsk)는 **같은 계정 세트**여야 함
+      - ✅ **결정 (2026-09-04): 가상계좌 안 함** — `confirm` 이 토스 `status != "DONE"` 거절
+        (입금 전 주문 확정 방지). 실시간 계좌이체(BANK, 즉시 DONE)는 그대로 사용 가능
+      - [ ] **부분취소 재고 정책** — `cancel_amount` 경로는 어댑터·서비스에 있으나 order/admin 은 전액만 호출.
+        부분취소 시 라인별 재고 복구 정책 미정
+      - [ ] **운영** : 웹훅 URL `https://{도메인}/api/v1/payments/webhooks/toss` 등록 (이벤트 `PAYMENT_STATUS_CHANGED`),
+        결제창 허용 도메인 등록. 오픈 시 `live_gsk_*` 로 교체 (전자결제 심사 완료 후)
       - [ ] **프론트(rekle 레포)** : 토스 위젯 연동 마무리 (2026-08-31 핸드오프 프롬프트 전달됨 —
         `src/api/payments.ts`, `src/composables/usePaymentHandoff.ts`, `src/config/payments.ts`,
         `src/views/checkout/PaymentReturnView.vue` 생성됨). successUrl 랜딩 → `POST /payments/confirm` 호출,

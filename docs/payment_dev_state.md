@@ -16,18 +16,17 @@ Java/Spring 비유: `Service` = `@Service`, `Repository` = Spring Data JPA Repos
 |---|---|
 | 결제 도메인 모델 / 스키마 / 라우터 / 서비스 | ✅ 구현 완료 |
 | `init` → `confirm` → `webhook` 플로우 (멱등성, FOR UPDATE 락, 재고 복구) | ✅ 구현 + 테스트 |
-| 웹훅 검증 (조회 재확인 방식) | ✅ 2026-08-31 완료 |
-| `FakePaymentGateway` 로 로컬 결제 (항상 성공) | ✅ `USE_FAKE_PG=true` |
-| `TossPaymentGateway.confirm` / `get_payment` 실제 HTTP 호출 | ✅ 구현됨 (실키로 미검증) |
-| **토스 실제 키 / 상점 계약** | ❌ `.env` 비어 있음 |
-| **PG 결제 취소·환불 실호출** (`cancel`) | ❌ 미구현 — 주문 취소 시 DB 상태만 바뀜 |
-| **프론트엔드 결제 위젯 연동** | ❌ 미연동 — `OrderView.vue` 는 주문 생성 후 바로 완료 페이지로 |
-| confirm 실패 사유 저장 / `Idempotency-Key` 헤더 | ❌ Task 5 |
-| 가상계좌(계좌이체) 입금대기 흐름 | ❌ 미구현 (`WAITING_FOR_DEPOSIT` 상태 없음) |
-| `config.py` 의 `toss_client_key` 필드 | ❌ 없음 (`.env.example` 엔 있음) |
-| `docs/api.md` §10 | ⚠️ 옛 설계 기준 — 실제 구현과 불일치 (`/verify`→`/confirm` 등) |
+| 웹훅 검증 (조회 재확인 방식) | ✅ 2026-08-31 (커밋 `233a264`) |
+| **PG 결제 취소·환불 실호출** (`cancel`) | ✅ 2026-09-04 — `cancel()` 구현 + order/admin 연결 (미커밋) |
+| `TossPaymentGateway.confirm` / `get_payment` / `cancel` 실제 HTTP 호출 | ✅ 구현됨 |
+| **토스 테스트 키** | ✅ 본인 계정 `test_gsk_*` `.env` 반영, `USE_FAKE_PG=false` |
+| **프론트엔드 결제 위젯 연동** | 🔶 스캐폴딩 생성됨 (`src/api/payments.ts` 등), 마무리 필요 |
+| confirm 실패 사유 저장 / confirm `Idempotency-Key` 헤더 | ❌ Task 5 (`cancel` 은 이미 헤더 있음) |
+| 가상계좌 입금대기 흐름 | ⛔ **안 함** (2026-09-04 결정). `confirm` 이 `status != DONE` 거절 |
+| 부분취소 시 라인별 재고 복구 | ❌ 정책 미정 (전액 취소만 order/admin 에서 호출) |
+| `docs/api.md` §10.1/§10.2 | ⚠️ 옛 설계 — `/verify`→`/confirm` 등 불일치 (§10.3·§10.4 는 갱신됨) |
 
-**한 줄 결론**: 백엔드 로직은 거의 다 됐고, 실연동을 막는 건 ①실제 키 ②취소 API ③프론트 위젯.
+**한 줄 결론**: 백엔드 결제/취소 로직 완료. 남은 건 ①프론트 위젯 마무리 ②웹훅 URL 등록 ③오픈 시 라이브 키.
 
 ---
 
@@ -78,18 +77,28 @@ Java/Spring 비유: `Service` = `@Service`, `Repository` = Spring Data JPA Repos
   (이때 `payment.pg_tid` 가 아직 없으므로 `orderId` fallback 조회 + 카드 메타도 채움)
 - `get_payment()` → `ABORTED`/`EXPIRED` 이면 → Payment FAILED + Order 취소 + 재고 복구
 
-### 1-3. 결제 후 취소/환불 (❌ 현재 미완성)
+### 1-3. 결제 후 취소/환불 (✅ 2026-09-04 구현)
 
 ```
-사용자: POST /orders/{n}/cancel  ─► order_service.cancel_order()
-                                    · _CANCELLABLE_STATUSES 확인
-                                    · increment_stock (재고 복구)
-                                    · order.status = CANCELLED
-                                    ⚠️ 여기서 토스 취소 API 를 안 부른다 → 돈이 안 돌아감
+사용자: POST /orders/{order_number}/cancel  ─► order_service.cancel_order()
+관리자: POST /admin/orders/{order_number}/cancel ─► admin_order_service.cancel_order()
+환불:   POST /orders/{order_number}/refund/request ─► order_service.request_refund()
+   │
+   ├─ 주문 FOR UPDATE 락 + 취소 가능 상태 확인
+   ├─ order.status in {PAID, PREPARING} (또는 환불은 DELIVERED)
+   │     └─► payment_service.cancel_payment(order.id, reason=...)
+   │           ├─ PAID Payment FOR UPDATE 락 조회 (없으면 멱등 return)
+   │           ├─ gateway.cancel(payment_key=pg_tid, reason, cancel_amount=None)
+   │           │     └─► POST /v1/payments/{paymentKey}/cancel  (Idempotency-Key)
+   │           │           4xx → PaymentFailedError({code,message})  ← 전체 트랜잭션 롤백
+   │           │           네트워크 → PaymentGatewayUnknownError(502)
+   │           └─ Payment → CANCELLED / PARTIAL_CANCELLED, cancelled_at
+   ├─ PENDING (결제 전) 이면 PG 호출 없이 통과
+   ├─ increment_stock (재고 복구) — 환불(DELIVERED)은 재고 복구 안 함
+   └─ order.status = CANCELLED / REFUNDED
 ```
 
-토스 쪽에서 관리자가 수동 취소하면 그 웹훅(`get_payment()` → `CANCELED`)으로 우리 DB 는
-맞춰지지만, **우리 서비스가 능동적으로 환불을 거는 경로가 없다.** → Task 3·4.
+PG 취소가 거절되면 예외가 전파돼 **주문 상태 전환도 롤백**된다 (같은 트랜잭션).
 
 ---
 
@@ -199,10 +208,15 @@ Java/Spring 비유: `Service` = `@Service`, `Repository` = Spring Data JPA Repos
 | `CANCELED` | Payment→CANCELLED + `_restore_order_stock_and_cancel` |
 | `PARTIAL_CANCELED` | Payment→PARTIAL_CANCELLED (재고 복구 안 함 — 라인별 정책 미정) |
 | `ABORTED` / `EXPIRED` | Payment→FAILED, `fail_reason="토스 결제 상태: {status}"` + 재고 복구 + 주문 취소 |
-| `READY` / `IN_PROGRESS` / `WAITING_FOR_DEPOSIT` | 무시 (로그만) — 확정 전 |
+| `READY` / `IN_PROGRESS` / `WAITING_FOR_DEPOSIT` | 무시 (로그만) — 확정 전. 가상계좌 미지원이라 `WAITING_FOR_DEPOSIT` 은 실제로 안 옴 |
 
 **PAID 인 결제에 도착한 웹훅**: `DONE` 재수신 → 멱등 무시. `CANCELED`/`PARTIAL_CANCELED` →
 아래 취소 로직으로 통과. 그 외 → 경고 로그 + 무시.
+
+#### `cancel_payment(order_id, *, reason, cancel_amount=None)` — [payment_service.py](../app/payment/payment_service.py)
+order 모듈이 취소·환불 시 호출. `get_by_order_id_with_lock` 로 PAID Payment 조회 →
+없으면 조용히 return(결제 전 / 이미 취소 — 멱등) → `pg_tid` 없으면 `PaymentFailedError` →
+`gateway.cancel()` → `repo.update_status_cancelled()`. PG 예외는 그대로 전파돼 호출부 롤백.
 
 #### `_restore_order_stock_and_cancel(order_id)` — [L266](../app/payment/payment_service.py#L266)
 `get_order_by_id_with_lock` (**Order 행 락**) → 이미 CANCELLED 면 return(재고 이중 복구 방지)
@@ -219,9 +233,8 @@ Java/Spring 비유: `Service` = `@Service`, `Repository` = Spring Data JPA Repos
 |---|---|
 | `TossConfirmResult` (dataclass) | `confirm()` 반환. `method, pg_tid, paid_at, card_company, card_last4, installment_months, approval_number` |
 | `TossPaymentResult` (dataclass) | `get_payment()` 반환. 위 + `status`, `total_amount`, `balance_amount`(취소 가능 잔액) |
-| `PaymentGateway` (Protocol) | `async confirm(*, payment_key, order_id, amount)`, `async get_payment(*, payment_key)` |
-
-> `cancel()` 은 아직 이 Protocol 에 없다 → Task 3 에서 추가.
+| `TossCancelResult` (dataclass) | `cancel()` 반환. `status`(CANCELED/PARTIAL_CANCELED), `cancelled_amount`, `balance_amount`, `transaction_key` |
+| `PaymentGateway` (Protocol) | `async confirm(...)`, `async get_payment(*, payment_key)`, `async cancel(*, payment_key, reason, cancel_amount=None)` |
 
 ### 2-6. [app/payment/adapters/toss.py](../app/payment/adapters/toss.py) — 토스 REST 어댑터
 
@@ -229,20 +242,30 @@ Java/Spring 비유: `Service` = `@Service`, `Repository` = Spring Data JPA Repos
 - `_auth_header()` — `settings.toss_secret_key` 없으면 `PaymentFailedError`.
   `Authorization: Basic base64(secretKey + ":")`
 - `_parse_toss_datetime(raw)` — ISO-8601(`+09:00`/`Z`) → tz-aware `datetime`
+- `_raise_toss_failure(resp, prefix)` — 에러 응답 body `{code, message}` → `PaymentFailedError`
 - `TossPaymentGateway.confirm()`:
   - `POST /v1/payments/confirm` body `{paymentKey, orderId, amount}`
   - `httpx.TransportError` → `PaymentGatewayUnknownError`
   - status != 200 → `PaymentFailedError` (⚠️ 아직 `{code, message}` 파싱 안 함 — Task 5)
+  - **응답 `status != "DONE"` → `PaymentFailedError`** (가상계좌 `WAITING_FOR_DEPOSIT` 등
+    즉시 승인 아닌 건 거절 — 입금 전 주문 확정 방지)
   - `approvedAt` 없으면 `PaymentFailedError`
 - `TossPaymentGateway.get_payment()`:
   - `GET /v1/payments/{paymentKey}`
   - `TransportError` OR status != 200 → `PaymentGatewayUnknownError` (상태 불명 → 웹훅 재시도 유도)
+- `TossPaymentGateway.cancel()`:
+  - `POST /v1/payments/{paymentKey}/cancel`, `Idempotency-Key: cancel-{paymentKey}-{amount|full}`
+  - body `{cancelReason, cancelAmount?}` (cancelAmount 생략 = 전액)
+  - status != 200 → `_raise_toss_failure()` (`{code, message}` 포함 `PaymentFailedError`)
+  - `TransportError` → `PaymentGatewayUnknownError` (취소 성공 여부 불명)
 
-### 2-7. [app/payment/adapters/fake.py](../app/payment/adapters/fake.py) — 개발용
+### 2-7. ~~개발용 Fake 어댑터~~ (2026-09-04 제거)
 
-`FakePaymentGateway` — `confirm`/`get_payment` 둘 다 항상 성공(`DONE`, 개발카드 0000).
-`USE_FAKE_PG=true` 일 때 주입. 맨 아래 `_: PaymentGateway = FakePaymentGateway()` 로
-import 시점에 Protocol 정합성 체크.
+`app/payment/adapters/fake.py` (`FakePaymentGateway`) + `settings.use_fake_pg` 토글은
+**삭제됨**. 본인 계정 토스 테스트 키를 쓰면 되므로 불필요. `get_payment_service` 는 항상
+`TossPaymentGateway` 를 주입한다.
+단위 테스트는 `tests/test_payment_service.py` 안의 **테스트 전용** `_FakeGateway`(모듈 로컬)로
+계속 격리한다 — 이건 앱 어댑터가 아니라 테스트 픽스처.
 
 ### 2-8. [app/payment/payment_repository.py](../app/payment/payment_repository.py) — DB 접근
 
@@ -258,36 +281,43 @@ import 시점에 Protocol 정합성 체크.
 | `get_order_by_id(_with_lock)` | 선택 | 웹훅 취소 시 주문+items 락 |
 | `save` | — | `add` + `flush` + `refresh` (PK 할당). **commit 은 `deps.db_session` 에서** |
 | `update_status_paid(payment, result)` | — | PAID 전환 + 메타 저장 + `flush` |
+| `update_status_cancelled(payment, result)` | — | 취소 성공 후 `CANCELLED`/`PARTIAL_CANCELLED` + `cancelled_at` |
 | `update_order_paid(order)` | — | Order → PAID + `paid_at` |
 | `increment_stock(product_id, qty)` | — | 원자적 `UPDATE products SET stock = stock + :q`. SOLD_OUT→ACTIVE 자동 복원 |
 
 > 트랜잭션 경계: 요청 1개 = 세션 1개 = 트랜잭션 1개. `db_session` 의존성이 요청 끝에
 > `commit`/`rollback`. 서비스는 `flush` 만 하고 `commit` 안 한다 (= JPA `EntityManager` 패턴).
 
-### 2-9. [app/core/deps.py:244](../app/core/deps.py#L244) — 와이어링
+### 2-9. [app/core/deps.py](../app/core/deps.py) — 와이어링
 
 ```python
 async def get_payment_service(session=Depends(db_session), email_sender=Depends(get_email_sender)):
-    if settings.use_fake_pg:
-        gateway = FakePaymentGateway()
-    else:
-        gateway = TossPaymentGateway()
-    return PaymentService(PaymentRepository(session), gateway, email_sender)
+    return PaymentService(PaymentRepository(session), TossPaymentGateway(), email_sender)
+
+async def get_order_service(session=..., payment_service=Depends(get_payment_service)):
+    return OrderService(OrderRepository(session), payment_service)   # 취소 시 PG 환불 위해
+
+async def get_admin_order_service(session=..., payment_service=Depends(get_payment_service)):
+    return AdminOrderService(AdminOrderRepository(session), payment_service)
 ```
+
+`get_order_service` / `get_admin_order_service` 가 `get_payment_service` 를 주입받는다.
+FastAPI 가 `db_session` 을 dedupe 하므로 order·payment 가 **같은 세션 = 같은 트랜잭션**.
+`OrderService(repo, payment_service=None)` 처럼 None 도 허용 — PG 상호작용 안 보는 단위 테스트용.
 
 ### 2-10. [app/core/config.py:73](../app/core/config.py#L73) — 환경변수
 
 | 설정 | 기본값 | `.env` 키 | 비고 |
 |---|---|---|---|
-| `toss_secret_key` | `None` | `TOSS_SECRET_KEY` | 서버↔토스 Basic 인증 |
-| `use_fake_pg` | `False` | `USE_FAKE_PG` | true 면 Fake 게이트웨이 |
-| ~~`toss_client_key`~~ | — | `TOSS_CLIENT_KEY` | **코드에 필드 없음.** `.env.example` 엔 존재 → Task 6 |
+| `toss_secret_key` | `None` | `TOSS_SECRET_KEY` | 서버↔토스 Basic 인증 (`test_gsk_*` / `live_gsk_*`) |
+
+clientKey 는 프론트 전용(`VITE_TOSS_CLIENT_KEY`) — 백엔드에 `toss_client_key` 필드 없음(의도적).
+`use_fake_pg` 토글은 2026-09-04 제거 — 항상 실제 토스를 호출한다.
 
 ### 2-11. [app/payment/ports.py](../app/payment/ports.py) — ⚠️ DEAD CODE
 
-`PaymentInitResult` / `PaymentVerifyResult` / 옛 `PaymentGateway`(cancel·verify_webhook_signature
-포함). **어디서도 import 안 됨.** `adapters/ports.py` 와 이름이 겹쳐 헷갈림.
-Task 3 에서 `cancel` 만들 때 이 파일 삭제 검토.
+`PaymentInitResult` / `PaymentVerifyResult` / 옛 `PaymentGateway`. **어디서도 import 안 됨.**
+`adapters/ports.py` 와 이름이 겹쳐 헷갈림. → Task 6 에서 삭제 예정.
 
 ---
 
@@ -374,8 +404,9 @@ CREATE INDEX ix_payments_order_id ON payments(order_id);
 
 | 파일 | 유형 | 커버 |
 |---|---|---|
-| [tests/test_payment_service.py](../tests/test_payment_service.py) | 단위 | `PaymentService` 전체. `_FakeGateway`(status 파라미터화) + `_FakePaymentRepo` |
-| [tests/test_toss_adapter.py](../tests/test_toss_adapter.py) | 단위 | `TossPaymentGateway.confirm` / `get_payment` — `unittest.mock.patch` 로 `httpx.AsyncClient` 교체 |
+| [tests/test_payment_service.py](../tests/test_payment_service.py) | 단위 | `PaymentService` 전체 (init/confirm/webhook/cancel_payment). 모듈 로컬 `_FakeGateway`(status·cancel 파라미터화) + `_FakePaymentRepo` |
+| [tests/test_toss_adapter.py](../tests/test_toss_adapter.py) | 단위 | `TossPaymentGateway.confirm` / `get_payment` / `cancel` — `unittest.mock.patch` 로 `httpx.AsyncClient` 교체 |
+| [tests/test_order_service.py](../tests/test_order_service.py) · [test_admin_order_service.py](../tests/test_admin_order_service.py) | 단위 | 취소/환불 ↔ `cancel_payment` 연동 (`_SpyPaymentService`), PG 실패 시 롤백 |
 | [tests/integration/test_payment_service.py](../tests/integration/test_payment_service.py) | 통합 | 실 Postgres 동시성 (웹훅 재전송, 동시 confirm, 레이스) |
 | [tests/integration/test_payment_repository.py](../tests/integration/test_payment_repository.py) | 통합 | 리포지토리 쿼리 정확성 |
 
@@ -385,26 +416,24 @@ CREATE INDEX ix_payments_order_id ON payments(order_id);
 docker compose up -d postgres && .venv/bin/pytest tests/integration/test_payment_service.py -v
 ```
 
-현재 483 passed / ruff 0 / mypy 0.
+현재 502 passed / ruff 0 / mypy 0.
 
 ---
 
-## 7. 아직 mock / 미완성인 것 (중요)
+## 7. 남은 것 (중요)
 
-1. **프론트엔드 결제 미연동** — `rekle/src/views/checkout/OrderView.vue` 의 `pay()` 는
-   `orders.create()` 후 바로 `/checkout/complete` 로 이동. `/payments/init`·`/confirm`
-   호출 없음. 토스 위젯 SDK 로딩도 없음. API 클라이언트(`rekle/src/api/admin/payments.ts`)는
-   존재하지만 **buyer 플로우에 연결 안 됨** (경로도 `api/admin/` 아래라 위치가 이상함).
-   → 결제는 지금 "주문서 = 계좌이체 무통장입금" 문구만 있고 실제 PG 를 안 탄다.
-2. **PG 취소/환불 실호출 없음** — §1-3 참고. Task 3·4.
-3. **토스 실제 계약 / 키** — `.env` 비어 있고 `USE_FAKE_PG` 만 true. Task 6.
-4. **confirm 실패 사유 미저장** — 토스 `{code, message}` 무시. `Idempotency-Key` 헤더 없음. Task 5.
-5. **가상계좌(계좌이체)** — `WAITING_FOR_DEPOSIT` 상태·`DEPOSIT_CALLBACK` 처리·환불계좌
-   입력 전부 없음. 주문서 UI 는 "계좌이체"라고 써있지만 백엔드 흐름은 카드 기준.
-6. **웹훅 IP 화이트리스트** — 없음. 현재는 "조회 재확인"만으로 방어.
-7. **`docs/api.md` §10** — 옛 설계 문서. `/payments/verify`(→실제 `/confirm`),
-   `data` envelope, `PENDING_PAYMENT`(→`PENDING`), `method: "card"`(→`CARD`) 등 불일치.
-   실제 스펙은 이 문서 §2 를 신뢰.
+1. **프론트엔드 결제 위젯 마무리** — `rekle` 레포에 스캐폴딩(`src/api/payments.ts`,
+   `src/config/payments.ts`, `usePaymentHandoff.ts`, `PaymentReturnView.vue`,
+   `PaymentFailView.vue`, `OrderView.vue` 수정) 생성됨. successUrl 랜딩 → `POST /payments/confirm`
+   호출 흐름 완성 + 502(확인 중) 처리 필요.
+2. **confirm 하드닝 (Task 5)** — 토스 `{code, message}` 를 `_raise_toss_failure()` 로 파싱해
+   `payment.fail_reason` 저장 + `status=FAILED`. confirm 에 `Idempotency-Key` 헤더 (`cancel` 은 이미 있음).
+3. **부분취소 재고 정책** — `cancel_amount` 경로는 어댑터·서비스에 있으나 order/admin 은 전액만 호출.
+4. **웹훅 IP 화이트리스트** — 없음. 현재는 "조회 재확인"만으로 방어.
+6. **웹훅 URL / 결제창 도메인 등록** — 개발자센터에서 (`https://{도메인}/api/v1/payments/webhooks/toss`).
+7. **`docs/api.md` §10.1/§10.2** — 옛 설계. `/payments/verify`(→`/confirm`), `data` envelope,
+   `PENDING_PAYMENT`(→`PENDING`) 등 불일치. §10.3(웹훅)·§10.4(취소)·§9.4·§9.5 는 갱신됨.
+8. **dead code `app/payment/ports.py`** 삭제 (Task 6).
 
 ---
 
@@ -443,13 +472,14 @@ docker compose up -d postgres && .venv/bin/pytest tests/integration/test_payment
 | `ABORTED` | 승인 실패 |
 | `EXPIRED` | 유효시간(30분) 경과 |
 
-#### 결제 취소 (cancel) — ❌ 미구현, Task 3
+#### 결제 취소 (cancel) — `TossPaymentGateway.cancel` ✅ 2026-09-04
 - 문서: https://docs.tosspayments.com/reference#결제-취소
 - `POST /v1/payments/{paymentKey}/cancel`
-- 헤더: `Authorization: Basic ...`, `Idempotency-Key: {고유값}`
+- 헤더: `Authorization: Basic ...`, `Idempotency-Key: cancel-{paymentKey}-{amount|full}`
 - body: `{ "cancelReason": str(≤200, 필수), "cancelAmount": number|null(null=전액),
-  "refundReceiveAccount": {bank, accountNumber, holderName}(가상계좌 필수), "taxFreeAmount": number }`
-- 응답: `Payment` 객체, `cancels[]` 배열에 취소건별 `transactionKey`, `cancelAmount`, `canceledAt`
+  "refundReceiveAccount": {bank, accountNumber, holderName}(가상계좌 필수 — 미구현), "taxFreeAmount": number }`
+- 응답: `Payment` 객체, `cancels[]` 배열에 취소건별 `transactionKey`, `cancelAmount`, `canceledAt`.
+  `status` 는 `CANCELED`(전액) / `PARTIAL_CANCELED`, `balanceAmount` 는 남은 취소 가능액
 
 ### 8-2. 웹훅
 - 문서: https://docs.tosspayments.com/guides/v2/webhook ,

@@ -980,42 +980,33 @@ GET /orders/{id}
 ### 9.4 주문 취소
 
 ```
-POST /orders/{id}/cancel
+POST /orders/{order_number}/cancel
 ```
 
-**Auth required** · 본인 주문, status가 `결제완료` or `준비중`일 때만
+**Auth required** · 본인 주문, status가 `PENDING`/`PAID`/`PREPARING` 일 때만. Body 없음.
 
-**Body**
-```json
-{ "reason": "단순 변심" }
-```
+`SHIPPING` 이후는 환불 절차 (9.5)로.
 
-`배송중` 이후는 환불 절차 (9.5)로.
-
-PG에 결제 취소 요청 (Payment 7.4 호출).
+**구현**: `PAID`/`PREPARING`(결제 완료)이면 먼저 토스 전액 취소를 호출한다
+(`PaymentService.cancel_payment` → `POST /v1/payments/{paymentKey}/cancel`).
+PG 가 거절하면 그 예외가 전파돼 주문 취소 자체가 롤백된다. `PENDING`(결제 전)은
+PG 호출 없이 상태만 전환. 이후 재고 복구 + `order.status = CANCELLED`.
 
 **Response 200**: 갱신된 order
 
 ### 9.5 환불 신청
 
 ```
-POST /orders/{id}/refund
+POST /orders/{order_number}/refund/request
 ```
 
-**Auth required**
+**Auth required** · 본인 주문, status가 `DELIVERED` 일 때만. Body 없음.
 
-**Body**
-```json
-{
-  "reason": "동작 불량",
-  "items": [ { "productId": "p1", "qty": 1 } ],   // 부분 환불 시
-  "imageIds": ["img_xxx"]                           // 첨부 이미지 (별도 업로드)
-}
-```
+**구현**: 토스 전액 환불을 호출한 뒤(`PaymentService.cancel_payment`) `order.status = REFUNDED`.
+PG 가 거절하면 예외 전파, 상태 전환 안 됨. 배송 완료된 실물의 재고는 복구하지 않는다.
+부분 환불·첨부 이미지·운영자 승인 단계는 아직 미구현 (Phase 2).
 
-상태 → `환불요청` → 운영자 승인 후 `환불완료`.
-
-**Response 201**: 생성된 refund 요청
+**Response 200**: 갱신된 order
 
 ### 9.6 배송 조회
 
@@ -1142,37 +1133,27 @@ POST /payments/webhooks/toss
 **Response 200** — 정상 처리 시.
 조회 API 호출 실패(네트워크/5xx) 시 **502** 를 반환해 토스가 웹훅을 재시도하게 한다.
 
-### 10.4 결제 취소
+### 10.4 결제 취소 / 환불
 
-```
-POST /payments/{id}/cancel
-```
+**독립 엔드포인트 없음.** 결제 취소는 주문 취소/환불 플로우 안에서 일어난다:
 
-**Auth required** · 운영자 또는 사용자 본인
+- 사용자: `POST /orders/{order_number}/cancel` (§9.4), `POST /orders/{order_number}/refund/request` (§9.5)
+- 관리자: `POST /admin/orders/{order_number}/cancel`
 
-**Body**
-```json
-{ "reason": "주문 취소", "amount": null }   // null이면 전액
-```
+이 엔드포인트들이 내부적으로 `PaymentService.cancel_payment(order_id, reason, cancel_amount=None)`
+를 호출한다:
 
-서버 → PG 취소 API → 응답.
+1. 주문의 `PAID` Payment 를 `FOR UPDATE` 락으로 조회 (없으면 멱등 통과 — 결제 전이거나 이미 취소됨)
+2. `pg_tid` 없으면 `PAYMENT_FAILED`
+3. `POST https://api.tosspayments.com/v1/payments/{paymentKey}/cancel`
+   - 헤더: `Authorization: Basic`, `Idempotency-Key: cancel-{paymentKey}-{amount|full}`
+   - body: `{ "cancelReason": "...", "cancelAmount": <생략 시 전액> }`
+   - 4xx → 토스 `{code, message}` 를 담은 `PAYMENT_FAILED` (422)
+   - 네트워크 오류 → `PAYMENT_GATEWAY_UNKNOWN` (502)
+4. 성공 시 Payment → `CANCELLED`(전액) / `PARTIAL_CANCELLED`(잔액 남음), `cancelled_at` 기록
 
-**Response 200**
-
-### 10.5 부분/전체 환불
-
-```
-POST /payments/{id}/refund
-```
-
-**Auth required** · 보통 운영자가 호출 (사용자는 9.5 환불 신청)
-
-**Body**
-```json
-{ "amount": 180000, "reason": "동작 불량 환불" }
-```
-
-**Response 200**
+> `cancel_amount`(부분 취소) 파라미터는 어댑터·서비스 레벨엔 있으나 현재 주문/관리자 플로우는
+> 전액 취소만 호출한다. 부분 취소 시 라인별 재고 복구 정책은 미정.
 
 ---
 
