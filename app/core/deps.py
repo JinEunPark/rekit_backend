@@ -245,15 +245,9 @@ async def get_payment_service(
     session: AsyncSession = Depends(db_session),
     email_sender: EmailSender = Depends(get_email_sender),
 ) -> PaymentService:
-    gateway: PaymentGateway
-    if settings.use_fake_pg:
-        from app.payment.adapters.fake import FakePaymentGateway
+    from app.payment.adapters.toss import TossPaymentGateway
 
-        gateway = FakePaymentGateway()
-    else:
-        from app.payment.adapters.toss import TossPaymentGateway
-
-        gateway = TossPaymentGateway()
+    gateway: PaymentGateway = TossPaymentGateway()
     return PaymentService(PaymentRepository(session), gateway, email_sender)
 
 

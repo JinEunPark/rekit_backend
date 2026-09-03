@@ -70,11 +70,9 @@ class Settings(BaseSettings):
     # 문의 알림 수신 이메일. None 이면 email_from 으로 fallback.
     help_admin_email: str | None = None
 
-    # ── 결제 PG ───────────────────────────────────────────
+    # ── 결제 PG (토스페이먼츠) ────────────────────────────
+    # 시크릿 키(주문서형·결제창형 연동 = gsk). 서버↔토스 Basic 인증.
     toss_secret_key: str | None = None
-    # True 로 설정하면 TossPaymentGateway 대신 FakePaymentGateway 를 사용.
-    # 로컬/개발 환경 전용. 운영(production)에서는 반드시 False.
-    use_fake_pg: bool = False
 
     # ── 전화번호 인증 (Octomo) ─────────────────────────────
     octomo_api_key: str | None = None
