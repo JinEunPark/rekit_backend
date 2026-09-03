@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.catalog.catalog_utils import stock_increment_status_case
 from app.catalog.models import Product
 from app.order.models import Order, OrderStatus
-from app.payment.adapters.ports import TossConfirmResult
+from app.payment.adapters.ports import TossCancelResult, TossConfirmResult
 from app.payment.models import Payment, PaymentStatus
 from app.user.models import User
 
@@ -137,6 +137,17 @@ class PaymentRepository:
         payment.card_last4 = result.card_last4
         payment.installment_months = result.installment_months
         payment.approval_number = result.approval_number
+        await self._session.flush()
+
+    async def update_status_cancelled(
+        self, payment: Payment, result: TossCancelResult
+    ) -> None:
+        """PG 취소 성공 후 Payment 상태 전환. 잔액이 남으면 부분취소로 본다."""
+        partial = result.status == "PARTIAL_CANCELED" or result.balance_amount > 0
+        payment.status = (
+            PaymentStatus.PARTIAL_CANCELLED if partial else PaymentStatus.CANCELLED
+        )
+        payment.cancelled_at = datetime.now(UTC)
         await self._session.flush()
 
     async def get_user_email(self, user_id: int) -> str | None:

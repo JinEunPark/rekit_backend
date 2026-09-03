@@ -27,14 +27,20 @@ from app.order.admin_order_schemas import (
 )
 from app.order.models import Order, OrderStatus
 from app.payment.models import PaymentStatus
+from app.payment.payment_service import PaymentService
 
 _CANCELLABLE = {OrderStatus.PENDING, OrderStatus.PAID, OrderStatus.PREPARING}
+_PAID_STATUSES = {OrderStatus.PAID, OrderStatus.PREPARING}
 _MANUAL_SETTABLE = {OrderStatus.PREPARING, OrderStatus.SHIPPING, OrderStatus.DELIVERED}
 
 
 class AdminOrderService:
-    def __init__(self, repo: AdminOrderRepository) -> None:
+    def __init__(
+        self, repo: AdminOrderRepository, payment_service: PaymentService | None = None
+    ) -> None:
         self._repo = repo
+        # None 이면 PG 취소를 건너뛴다 (단위 테스트용). 운영 와이어링은 항상 주입.
+        self._payment_service = payment_service
 
     async def list_orders(self, params: AdminOrderListParams) -> AdminOrderListResponse:
         orders, total = await self._repo.get_list(params)
@@ -92,6 +98,11 @@ class AdminOrderService:
             raise OrderNotFoundError()
         if order.status not in _CANCELLABLE:
             raise OrderCancelForbiddenError()
+
+        if order.status in _PAID_STATUSES and self._payment_service is not None:
+            await self._payment_service.cancel_payment(
+                order.id, reason=body.reason or "관리자 주문 취소"
+            )
 
         for item in order.items:
             await self._repo.increment_stock(item.product_id, item.quantity)

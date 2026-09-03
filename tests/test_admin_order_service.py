@@ -76,6 +76,20 @@ class _FakeAdminOrderRepo:
         self.increment_calls.append((product_id, quantity))
 
 
+class _SpyPaymentService:
+    """AdminOrderService → payment_service.cancel_payment 호출 기록 스파이."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def cancel_payment(
+        self, order_id: int, *, reason: str, cancel_amount: int | None = None
+    ) -> None:
+        self.calls.append(
+            {"order_id": order_id, "reason": reason, "cancel_amount": cancel_amount}
+        )
+
+
 def _make_service(order: Order | None) -> AdminOrderService:
     return AdminOrderService(_FakeAdminOrderRepo(order))  # type: ignore[arg-type]
 
@@ -149,3 +163,32 @@ class TestAdminCancelOrder:
             await service.cancel_order(order.order_number, AdminOrderCancelRequest())
 
         assert repo.increment_calls == []
+
+    @pytest.mark.asyncio
+    async def test_cancel_paid_order_triggers_pg_cancel_with_reason(self):
+        """PAID 주문 관리자 취소 시 PG 취소를 호출하고 body.reason 을 전달한다."""
+        order = _make_order()
+        order.id = 5
+        order.status = OrderStatus.PAID
+        spy = _SpyPaymentService()
+        service = AdminOrderService(_FakeAdminOrderRepo(order), spy)  # type: ignore[arg-type]
+
+        await service.cancel_order(
+            order.order_number, AdminOrderCancelRequest(reason="재고 파손")
+        )
+
+        assert len(spy.calls) == 1
+        assert spy.calls[0]["order_id"] == 5
+        assert spy.calls[0]["reason"] == "재고 파손"
+
+    @pytest.mark.asyncio
+    async def test_cancel_pending_order_skips_pg_cancel(self):
+        """PENDING(결제 전) 주문은 PG 취소를 호출하지 않는다."""
+        order = _make_order()
+        order.status = OrderStatus.PENDING
+        spy = _SpyPaymentService()
+        service = AdminOrderService(_FakeAdminOrderRepo(order), spy)  # type: ignore[arg-type]
+
+        await service.cancel_order(order.order_number, AdminOrderCancelRequest())
+
+        assert spy.calls == []

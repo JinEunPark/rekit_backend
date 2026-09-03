@@ -49,6 +49,16 @@ class TossPaymentResult:
     approval_number: str | None
 
 
+@dataclass
+class TossCancelResult:
+    """PG 결제 취소(POST /v1/payments/{paymentKey}/cancel) 결과."""
+
+    status: str  # CANCELED(전액) / PARTIAL_CANCELED(부분)
+    cancelled_amount: int  # 이번 호출로 취소된 금액
+    balance_amount: int  # 취소 후 남은 취소 가능 잔액. 0 이면 전액 취소 완료
+    transaction_key: str | None  # cancels[].transactionKey (환불 추적용)
+
+
 class PaymentGateway(Protocol):
     """PG 어댑터 인터페이스. Toss / PortOne / KG이니시스 교체 가능."""
 
@@ -67,5 +77,20 @@ class PaymentGateway(Protocol):
 
         조회 자체에 실패하면(네트워크/5xx) PaymentGatewayUnknownError 를 던진다 —
         상태 불명이므로 웹훅을 재시도시켜야 한다.
+        """
+        ...
+
+    async def cancel(
+        self,
+        *,
+        payment_key: str,
+        reason: str,
+        cancel_amount: int | None = None,  # None = 전액 취소
+    ) -> TossCancelResult:
+        """결제 취소/환불. cancel_amount 미지정 시 전액.
+
+        - PG 가 거절하면(이미 취소됨·잔액 부족 등) PaymentFailedError
+        - 네트워크/타임아웃이면 PaymentGatewayUnknownError (취소 성공 여부 불명)
+        - Idempotency-Key 로 재시도 시 이중 취소 방지
         """
         ...

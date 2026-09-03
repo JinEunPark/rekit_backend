@@ -263,6 +263,35 @@ class PaymentService:
                 "웹훅 수신 — 확정 전 상태 %s, 대기: pg_tid=%s", status, payment.pg_tid
             )
 
+    async def cancel_payment(
+        self,
+        order_id: int,
+        *,
+        reason: str,
+        cancel_amount: int | None = None,
+    ) -> None:
+        """주문의 PAID 결제를 PG 에서 취소/환불한다. order 모듈이 취소·환불 시 호출.
+
+        - PAID 결제가 없으면(결제 전 PENDING 주문, 이미 취소됨) 조용히 return — 멱등
+        - PG 취소 성공 시 Payment 를 CANCELLED / PARTIAL_CANCELLED 로 전환
+        - PG 거절/네트워크 오류는 예외가 전파돼 주문 취소 트랜잭션을 롤백시킨다
+        """
+        payments = await self._repo.get_by_order_id_with_lock(order_id)
+        paid = next(
+            (p for p in payments if p.status == PaymentStatus.PAID), None
+        )
+        if paid is None:
+            return
+        if not paid.pg_tid:
+            raise PaymentFailedError("결제 거래 ID(pg_tid)가 없어 취소할 수 없습니다.")
+
+        result = await self._gateway.cancel(
+            payment_key=paid.pg_tid,
+            reason=reason,
+            cancel_amount=cancel_amount,
+        )
+        await self._repo.update_status_cancelled(paid, result)
+
     async def _restore_order_stock_and_cancel(self, order_id: int) -> None:
         """결제 실패/취소 웹훅 시 주문을 취소하고 재고를 복구한다.
 

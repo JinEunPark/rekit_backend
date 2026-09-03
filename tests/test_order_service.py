@@ -228,17 +228,35 @@ class FakeOrderRepository:
 # ── 헬퍼 ────────────────────────────────────────────────────────────
 
 
+class _SpyPaymentService:
+    """order_service → payment_service.cancel_payment 호출을 기록하는 스파이."""
+
+    def __init__(self, *, raises: Exception | None = None) -> None:
+        self.raises = raises
+        self.calls: list[dict[str, object]] = []
+
+    async def cancel_payment(
+        self, order_id: int, *, reason: str, cancel_amount: int | None = None
+    ) -> None:
+        self.calls.append(
+            {"order_id": order_id, "reason": reason, "cancel_amount": cancel_amount}
+        )
+        if self.raises is not None:
+            raise self.raises
+
+
 def _make_service(
     *,
     products: list[Product] | None = None,
     addresses: list[Address] | None = None,
     orders: list[Order] | None = None,
     shipments: list[Shipment] | None = None,
+    payment_service: _SpyPaymentService | None = None,
 ) -> OrderService:
     repo = FakeOrderRepository(
         products=products, addresses=addresses, orders=orders, shipments=shipments
     )
-    return OrderService(repo)  # type: ignore[arg-type]
+    return OrderService(repo, payment_service)  # type: ignore[arg-type]
 
 
 # ── get_quote ────────────────────────────────────────────────────────
@@ -711,6 +729,41 @@ class TestCancelOrder:
         assert repo.locked_read_calls == 1
         assert repo.unlocked_read_calls == 0
 
+    async def test_cancel_paid_order_triggers_pg_cancel(self) -> None:
+        """PAID 주문 취소 시 payment_service.cancel_payment(전액) 을 호출한다."""
+        order = make_order(order_id=7, status=OrderStatus.PAID)
+        spy = _SpyPaymentService()
+        service = _make_service(orders=[order], payment_service=spy)
+
+        await service.cancel_order(user_id=1, order_number=order.order_number)
+
+        assert len(spy.calls) == 1
+        assert spy.calls[0]["order_id"] == 7
+        assert spy.calls[0]["cancel_amount"] is None
+
+    async def test_cancel_pending_order_skips_pg_cancel(self) -> None:
+        """PENDING(결제 전) 주문은 PG 취소를 호출하지 않는다."""
+        order = make_order(status=OrderStatus.PENDING)
+        spy = _SpyPaymentService()
+        service = _make_service(orders=[order], payment_service=spy)
+
+        await service.cancel_order(user_id=1, order_number=order.order_number)
+
+        assert spy.calls == []
+
+    async def test_cancel_paid_order_aborts_when_pg_cancel_fails(self) -> None:
+        """PG 취소가 실패하면 예외가 전파되고 주문 상태는 그대로 유지된다."""
+        from app.core.exceptions import PaymentFailedError
+
+        order = make_order(status=OrderStatus.PAID)
+        spy = _SpyPaymentService(raises=PaymentFailedError("이미 취소된 결제"))
+        service = _make_service(orders=[order], payment_service=spy)
+
+        with pytest.raises(PaymentFailedError):
+            await service.cancel_order(user_id=1, order_number=order.order_number)
+
+        assert order.status == OrderStatus.PAID
+
 
 # ── list_orders ──────────────────────────────────────────────────────
 
@@ -846,6 +899,31 @@ class TestRequestRefund:
 
         assert result.status == OrderStatus.REFUNDED
         assert result.cancelled_at is not None
+
+    async def test_request_refund_triggers_pg_cancel(self) -> None:
+        """환불 요청 시 payment_service.cancel_payment(전액) 을 호출한다."""
+        order = make_order(order_id=3, user_id=1, status=OrderStatus.DELIVERED)
+        spy = _SpyPaymentService()
+        service = _make_service(orders=[order], payment_service=spy)
+
+        await service.request_refund(user_id=1, order_number=order.order_number)
+
+        assert len(spy.calls) == 1
+        assert spy.calls[0]["order_id"] == 3
+        assert spy.calls[0]["cancel_amount"] is None
+
+    async def test_request_refund_aborts_when_pg_cancel_fails(self) -> None:
+        """PG 환불이 실패하면 예외가 전파되고 주문은 DELIVERED 로 유지된다."""
+        from app.core.exceptions import PaymentFailedError
+
+        order = make_order(order_id=1, user_id=1, status=OrderStatus.DELIVERED)
+        spy = _SpyPaymentService(raises=PaymentFailedError("환불 한도 초과"))
+        service = _make_service(orders=[order], payment_service=spy)
+
+        with pytest.raises(PaymentFailedError):
+            await service.request_refund(user_id=1, order_number=order.order_number)
+
+        assert order.status == OrderStatus.DELIVERED
 
     async def test_request_refund_non_delivered_forbidden(self) -> None:
         """DELIVERED 가 아닌 상태 → RefundForbiddenError."""

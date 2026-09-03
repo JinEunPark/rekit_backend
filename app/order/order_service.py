@@ -40,17 +40,26 @@ from app.order.order_schemas import (
     ShipmentResponse,
 )
 from app.order.shipment import ShipmentMethod
+from app.payment.payment_service import PaymentService
 
 # PENDING / PAID / PREPARING 상태만 취소 허용
 _CANCELLABLE_STATUSES = {OrderStatus.PENDING, OrderStatus.PAID, OrderStatus.PREPARING}
+
+# 결제가 이미 이뤄진 상태 — 주문 취소 시 PG 환불도 함께 호출해야 한다
+_PAID_STATUSES = {OrderStatus.PAID, OrderStatus.PREPARING}
 
 # 결제 미완료 PENDING 주문 유효 시간 (지연 평가 방식)
 _PAYMENT_TIMEOUT = timedelta(minutes=30)
 
 
 class OrderService:
-    def __init__(self, repo: OrderRepository) -> None:
+    def __init__(
+        self, repo: OrderRepository, payment_service: PaymentService | None = None
+    ) -> None:
         self._repo = repo
+        # None 이면 PG 취소를 건너뛴다 (PG 상호작용을 검증하지 않는 단위 테스트용).
+        # 운영 와이어링(deps.get_order_service)은 항상 주입한다.
+        self._payment_service = payment_service
 
     # ── 견적 ────────────────────────────────────────────────────────
 
@@ -198,14 +207,18 @@ class OrderService:
     # ── 환불 요청 ────────────────────────────────────────────────────
 
     async def request_refund(self, user_id: int, order_number: str) -> OrderResponse:
-        """DELIVERED 상태 주문에 대해 환불을 요청한다 (MVP: 상태만 REFUNDED 로 전환).
+        """DELIVERED 상태 주문에 대해 환불을 요청한다.
 
-        실제 PG 취소 호출은 payment 모듈 책임으로 추후 연동.
+        PG 전액 환불을 호출한 뒤 REFUNDED 로 전환한다. PG 가 거절하면 예외가 전파돼
+        상태 전환은 일어나지 않는다. 배송 완료된 실물의 재고는 복구하지 않는다.
         """
         order = await self._get_order_for_user(user_id, order_number)
 
         if order.status != OrderStatus.DELIVERED:
             raise RefundForbiddenError()
+
+        if self._payment_service is not None:
+            await self._payment_service.cancel_payment(order.id, reason="구매자 환불 요청")
 
         order.status = OrderStatus.REFUNDED
         order.cancelled_at = datetime.now(UTC)
@@ -217,7 +230,9 @@ class OrderService:
     async def cancel_order(self, user_id: int, order_number: str) -> OrderResponse:
         """PENDING/PAID/PREPARING 상태 주문을 취소한다.
 
-        PAID 이상의 결제 취소(PG 호출)는 payment 모듈 책임이며, 여기서는 상태만 전환.
+        결제가 이뤄진 상태(PAID/PREPARING)면 PG 전액 취소를 먼저 호출한다 —
+        PG 가 거절하면 예외가 전파돼 취소 자체가 롤백된다. PENDING(결제 전)은
+        PG 호출 없이 상태만 전환한다.
         더블클릭/자동 재시도로 인한 동시 취소를 막기 위해 SELECT FOR UPDATE 를 사용한다.
         """
         order = await self._repo.get_by_order_number_with_lock(order_number)
@@ -226,6 +241,9 @@ class OrderService:
 
         if order.status not in _CANCELLABLE_STATUSES:
             raise OrderCancelForbiddenError()
+
+        if order.status in _PAID_STATUSES and self._payment_service is not None:
+            await self._payment_service.cancel_payment(order.id, reason="구매자 주문 취소")
 
         for item in order.items:
             await self._repo.increment_stock(item.product_id, item.quantity)

@@ -235,12 +235,6 @@ async def get_favorites_service(
     return FavoritesService(FavoritesRepository(session))
 
 
-async def get_order_service(
-    session: AsyncSession = Depends(db_session),
-) -> OrderService:
-    return OrderService(OrderRepository(session))
-
-
 async def get_payment_service(
     session: AsyncSession = Depends(db_session),
     email_sender: EmailSender = Depends(get_email_sender),
@@ -249,6 +243,13 @@ async def get_payment_service(
 
     gateway: PaymentGateway = TossPaymentGateway()
     return PaymentService(PaymentRepository(session), gateway, email_sender)
+
+
+async def get_order_service(
+    session: AsyncSession = Depends(db_session),
+    payment_service: PaymentService = Depends(get_payment_service),
+) -> OrderService:
+    return OrderService(OrderRepository(session), payment_service)
 
 
 async def get_admin_catalog_service(
@@ -265,8 +266,9 @@ async def get_admin_members_service(
 
 async def get_admin_order_service(
     session: AsyncSession = Depends(db_session),
+    payment_service: PaymentService = Depends(get_payment_service),
 ) -> AdminOrderService:
-    return AdminOrderService(AdminOrderRepository(session))
+    return AdminOrderService(AdminOrderRepository(session), payment_service)
 
 
 async def get_dashboard_service(

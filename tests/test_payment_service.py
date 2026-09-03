@@ -15,6 +15,7 @@ from app.core.exceptions import OrderNotFoundError, PaymentFailedError, PaymentG
 from app.order.models import Order, OrderItem, OrderStatus
 from app.payment.adapters.ports import (
     PaymentGateway,
+    TossCancelResult,
     TossConfirmResult,
     TossPaymentResult,
 )
@@ -99,14 +100,17 @@ class _FakeGateway:
         should_timeout: bool = False,
         payment_status: str = "DONE",
         get_payment_raises: bool = False,
+        cancel_raises: Exception | None = None,
     ) -> None:
         self.should_fail = should_fail
         self.should_timeout = should_timeout
         # get_payment(웹훅 재조회)이 반환할 토스 결제 상태
         self.payment_status = payment_status
         self.get_payment_raises = get_payment_raises
+        self.cancel_raises = cancel_raises
         self.confirm_call_count: int = 0
         self.get_payment_call_count: int = 0
+        self.cancel_calls: list[dict[str, object]] = []
 
     async def confirm(
         self, *, payment_key: str, order_id: str, amount: int
@@ -141,6 +145,22 @@ class _FakeGateway:
             card_last4="1234",
             installment_months=0,
             approval_number="12345678",
+        )
+
+    async def cancel(
+        self, *, payment_key: str, reason: str, cancel_amount: int | None = None
+    ) -> TossCancelResult:
+        self.cancel_calls.append(
+            {"payment_key": payment_key, "reason": reason, "cancel_amount": cancel_amount}
+        )
+        if self.cancel_raises is not None:
+            raise self.cancel_raises
+        partial = cancel_amount is not None
+        return TossCancelResult(
+            status="PARTIAL_CANCELED" if partial else "CANCELED",
+            cancelled_amount=cancel_amount or 300_000,
+            balance_amount=100_000 if partial else 0,
+            transaction_key="txn_fake",
         )
 
 
@@ -245,6 +265,15 @@ class _FakePaymentRepo:
         payment.card_last4 = result.card_last4
         payment.installment_months = result.installment_months
         payment.approval_number = result.approval_number
+
+    async def update_status_cancelled(
+        self, payment: Payment, result: TossCancelResult
+    ) -> None:
+        partial = result.status == "PARTIAL_CANCELED" or result.balance_amount > 0
+        payment.status = (
+            PaymentStatus.PARTIAL_CANCELLED if partial else PaymentStatus.CANCELLED
+        )
+        payment.cancelled_at = datetime.now(UTC)
 
     async def update_order_paid(self, order: Order) -> None:
         order.status = OrderStatus.PAID
@@ -1093,3 +1122,74 @@ async def test_webhook_propagates_gateway_unknown_error_when_refetch_fails() -> 
         )
 
     assert payment.status == PaymentStatus.READY  # 전이 안 됨
+
+
+# ── cancel_payment (주문 취소/환불 시 order 모듈이 호출) ──────────────
+
+
+async def test_cancel_payment_calls_gateway_and_marks_cancelled() -> None:
+    """PAID 결제 전액 취소 → gateway.cancel 호출 + Payment CANCELLED."""
+    paid = make_payment(order_id=1, status=PaymentStatus.PAID, pg_tid="pk_paid")
+    repo = _FakePaymentRepo(payments=[paid])
+    gw = _FakeGateway()
+    service = PaymentService(repo, gw, _FakeEmailSender())  # type: ignore[arg-type]
+
+    await service.cancel_payment(1, reason="구매자 취소")
+
+    assert len(gw.cancel_calls) == 1
+    assert gw.cancel_calls[0]["payment_key"] == "pk_paid"
+    assert gw.cancel_calls[0]["cancel_amount"] is None
+    assert paid.status == PaymentStatus.CANCELLED
+    assert paid.cancelled_at is not None
+
+
+async def test_cancel_payment_partial_marks_partial_cancelled() -> None:
+    """부분 취소 금액을 넘기면 Payment PARTIAL_CANCELLED."""
+    paid = make_payment(order_id=1, status=PaymentStatus.PAID, pg_tid="pk_paid")
+    repo = _FakePaymentRepo(payments=[paid])
+    gw = _FakeGateway()
+    service = PaymentService(repo, gw, _FakeEmailSender())  # type: ignore[arg-type]
+
+    await service.cancel_payment(1, reason="부분 환불", cancel_amount=100_000)
+
+    assert gw.cancel_calls[0]["cancel_amount"] == 100_000
+    assert paid.status == PaymentStatus.PARTIAL_CANCELLED
+
+
+async def test_cancel_payment_no_paid_payment_is_noop() -> None:
+    """PAID 결제가 없으면(결제 전 / 이미 취소) gateway 를 부르지 않고 조용히 끝낸다."""
+    ready = make_payment(order_id=1, status=PaymentStatus.READY, pg_tid=None)
+    repo = _FakePaymentRepo(payments=[ready])
+    gw = _FakeGateway()
+    service = PaymentService(repo, gw, _FakeEmailSender())  # type: ignore[arg-type]
+
+    await service.cancel_payment(1, reason="취소")
+
+    assert gw.cancel_calls == []
+    assert ready.status == PaymentStatus.READY
+
+
+async def test_cancel_payment_missing_pg_tid_raises() -> None:
+    """PAID 인데 pg_tid 가 없으면 취소 불가 — PaymentFailedError."""
+    paid = make_payment(order_id=1, status=PaymentStatus.PAID, pg_tid=None)
+    repo = _FakePaymentRepo(payments=[paid])
+    gw = _FakeGateway()
+    service = PaymentService(repo, gw, _FakeEmailSender())  # type: ignore[arg-type]
+
+    with pytest.raises(PaymentFailedError):
+        await service.cancel_payment(1, reason="취소")
+
+    assert gw.cancel_calls == []
+
+
+async def test_cancel_payment_propagates_gateway_rejection() -> None:
+    """PG 가 취소를 거절하면 예외가 전파돼 상태 전환이 안 된다 (호출부 롤백)."""
+    paid = make_payment(order_id=1, status=PaymentStatus.PAID, pg_tid="pk_paid")
+    repo = _FakePaymentRepo(payments=[paid])
+    gw = _FakeGateway(cancel_raises=PaymentFailedError("이미 취소된 결제"))
+    service = PaymentService(repo, gw, _FakeEmailSender())  # type: ignore[arg-type]
+
+    with pytest.raises(PaymentFailedError):
+        await service.cancel_payment(1, reason="취소")
+
+    assert paid.status == PaymentStatus.PAID  # 전환 안 됨
