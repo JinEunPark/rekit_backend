@@ -100,12 +100,14 @@ class _NoopEmailSender:
         del to, subject, body
 
 
-def _toss_payment_result(payment_key: str, status: str) -> TossPaymentResult:
+def _toss_payment_result(
+    payment_key: str, status: str, *, total_amount: int = 0
+) -> TossPaymentResult:
     return TossPaymentResult(
         status=status,
         method="카드",
         pg_tid=payment_key,
-        total_amount=0,
+        total_amount=total_amount,
         balance_amount=0,
         approved_at=datetime.now(UTC),
         card_company="신한카드",
@@ -116,8 +118,11 @@ def _toss_payment_result(payment_key: str, status: str) -> TossPaymentResult:
 
 
 class _NoopGateway:
-    def __init__(self, *, payment_status: str = "DONE") -> None:
+    def __init__(
+        self, *, payment_status: str = "DONE", payment_total_amount: int = 0
+    ) -> None:
         self.payment_status = payment_status
+        self.payment_total_amount = payment_total_amount
 
     async def confirm(self, *, payment_key: str, order_id: str, amount: int) -> TossConfirmResult:
         del order_id, amount
@@ -132,7 +137,9 @@ class _NoopGateway:
         )
 
     async def get_payment(self, *, payment_key: str) -> TossPaymentResult:
-        return _toss_payment_result(payment_key, self.payment_status)
+        return _toss_payment_result(
+            payment_key, self.payment_status, total_amount=self.payment_total_amount
+        )
 
 
 class _CountingGateway:
@@ -511,7 +518,7 @@ async def test_webhook_fallback_and_confirm_race_does_not_double_process(
                 repo = PaymentRepository(session)
                 service = PaymentService(
                     repo,
-                    _NoopGateway(),  # type: ignore[arg-type]
+                    _NoopGateway(payment_total_amount=total_amount),  # type: ignore[arg-type]
                     _NoopEmailSender(),  # type: ignore[arg-type]
                 )
                 await service.handle_webhook(webhook_payload)

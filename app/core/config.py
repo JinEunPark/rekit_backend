@@ -72,7 +72,8 @@ class Settings(BaseSettings):
 
     # ── 결제 PG (토스페이먼츠) ────────────────────────────
     # 시크릿 키(주문서형·결제창형 연동 = gsk). 서버↔토스 Basic 인증.
-    toss_secret_key: str | None = None
+    # Fake 게이트웨이 제거로 결제·웹훅이 항상 실 토스를 호출 → 필수값(누락 시 부팅 실패).
+    toss_secret_key: str
 
     # ── 전화번호 인증 (Octomo) ─────────────────────────────
     octomo_api_key: str | None = None

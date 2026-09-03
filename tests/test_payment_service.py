@@ -99,6 +99,7 @@ class _FakeGateway:
         should_fail: bool = False,
         should_timeout: bool = False,
         payment_status: str = "DONE",
+        payment_total_amount: int = 300_000,
         get_payment_raises: bool = False,
         cancel_raises: Exception | None = None,
     ) -> None:
@@ -106,6 +107,8 @@ class _FakeGateway:
         self.should_timeout = should_timeout
         # get_payment(웹훅 재조회)이 반환할 토스 결제 상태
         self.payment_status = payment_status
+        # get_payment 이 반환할 토스 결제 금액 (로컬 Payment.amount 와 대조됨)
+        self.payment_total_amount = payment_total_amount
         self.get_payment_raises = get_payment_raises
         self.cancel_raises = cancel_raises
         self.confirm_call_count: int = 0
@@ -138,7 +141,7 @@ class _FakeGateway:
             status=self.payment_status,
             method="카드",
             pg_tid=payment_key,
-            total_amount=300_000,
+            total_amount=self.payment_total_amount,
             balance_amount=0,
             approved_at=datetime.now(UTC),
             card_company="신한카드",
@@ -1103,6 +1106,50 @@ async def test_webhook_in_progress_status_is_ignored() -> None:
 
     assert payment.status == PaymentStatus.READY
     assert order.status == OrderStatus.PENDING
+
+
+async def test_webhook_done_amount_mismatch_does_not_transition_to_paid() -> None:
+    """웹훅 재조회 금액이 로컬 Payment.amount 와 다르면 PAID 로 전이하지 않는다.
+
+    웹훅은 프론트 confirm 콜백이 유실됐을 때 결제를 확정하는 유일한 경로가 된다.
+    confirm 이 금액을 검증하듯 웹훅 경로도 검증해야, 다른 결제거래의 paymentKey 로
+    주문이 잘못 확정되는 걸 막는다.
+    """
+    order = make_order(order_id=1, status=OrderStatus.PENDING)
+    payment = make_payment(order_id=1, status=PaymentStatus.READY, pg_tid="pk_amt")
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    gw = _FakeGateway(payment_status="DONE", payment_total_amount=1_000)
+    service = PaymentService(repo, gw, _FakeEmailSender())  # type: ignore[arg-type]
+
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_amt", "status": "DONE"},
+        )
+    )
+
+    assert payment.status == PaymentStatus.READY
+    assert order.status == OrderStatus.PENDING
+    assert order.paid_at is None
+
+
+async def test_webhook_done_amount_match_transitions_to_paid() -> None:
+    """웹훅 재조회 금액이 로컬 Payment.amount 와 일치하면 정상적으로 PAID 전이된다."""
+    order = make_order(order_id=1, status=OrderStatus.PENDING)
+    payment = make_payment(order_id=1, status=PaymentStatus.READY, pg_tid="pk_ok")
+    repo = _FakePaymentRepo(orders=[order], payments=[payment])
+    gw = _FakeGateway(payment_status="DONE", payment_total_amount=payment.amount)
+    service = PaymentService(repo, gw, _FakeEmailSender())  # type: ignore[arg-type]
+
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_ok", "status": "DONE"},
+        )
+    )
+
+    assert payment.status == PaymentStatus.PAID
+    assert order.status == OrderStatus.PAID
 
 
 async def test_webhook_propagates_gateway_unknown_error_when_refetch_fails() -> None:

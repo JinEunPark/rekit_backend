@@ -1124,7 +1124,8 @@ POST /payments/webhooks/toss
 `status` 를 믿지 않고, `paymentKey` 로 결제 조회 API(`GET /v1/payments/{paymentKey}`)를
 호출해 **실제 상태**를 가져와 그 결과로만 전이한다.
 
-- 조회 결과 `DONE` → Payment PAID + Order PAID
+- 조회 결과 `DONE` → **금액 일치 검증**(`totalAmount == Payment.amount`) 후 Payment PAID + Order PAID.
+  불일치 시 전이하지 않고 200 반환(다른 결제거래의 `paymentKey` 방어) + `logger.error`
 - `CANCELED` → Payment CANCELLED + Order 취소 + 재고 복구
 - `PARTIAL_CANCELED` → Payment PARTIAL_CANCELLED (재고 정책 미정, 현재 스킵)
 - `ABORTED` / `EXPIRED` → Payment FAILED + Order 취소 + 재고 복구

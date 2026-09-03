@@ -197,6 +197,12 @@ class PaymentService:
 
         # 웹훅 body 대신 조회 API 로 실제 상태를 가져온다.
         remote = await self._gateway.get_payment(payment_key=payment_key)
+        logger.info(
+            "토스 웹훅 수신 — event=%s payment_key=%s remote_status=%s",
+            payload.event_type,
+            payment_key,
+            remote.status,
+        )
 
         # FOR UPDATE 락 — 웹훅 재전송으로 동일 이벤트가 동시에 도착할 때 이중 처리 방지
         payment = await self._repo.get_by_pg_tid_with_lock(payment_key)
@@ -234,6 +240,17 @@ class PaymentService:
             return
 
         if status == _TOSS_DONE:
+            # 웹훅이 confirm 콜백을 대신해 결제를 확정하는 경로 — confirm 과 동일하게
+            # 금액 일치를 검증한다. 불일치면 다른 결제거래의 paymentKey 이므로 전이하지
+            # 않는다 (재시도해도 결과가 같으니 라우터는 200 으로 소진).
+            if remote.total_amount != payment.amount:
+                logger.error(
+                    "웹훅 DONE 금액 불일치 — 전이 거부: payment_key=%s 토스=%s 로컬=%s",
+                    payment.pg_tid or remote.pg_tid,
+                    remote.total_amount,
+                    payment.amount,
+                )
+                return
             payment.status = PaymentStatus.PAID
             payment.pg_tid = payment.pg_tid or remote.pg_tid  # fallback 경로일 때만 채움
             # 웹훅이 confirm 보다 먼저 도착한 경우 영수증 메타데이터도 여기서 채운다.

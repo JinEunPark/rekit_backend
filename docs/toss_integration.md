@@ -237,9 +237,21 @@ tosspayments-integration-guide  (claude mcp list 로 확인)
 ### 운영 (콘솔)
 
 - ✅ 본인 계정 테스트 키 발급 → 백엔드 `.env` `TOSS_SECRET_KEY`, 프론트 `.env.local` `VITE_TOSS_CLIENT_KEY`
-- [ ] 개발자센터 → 웹훅 URL `https://{도메인}/api/v1/payments/webhooks/toss` 등록 (`PAYMENT_STATUS_CHANGED`)
+- [ ] **`TOSS_SECRET_KEY` 를 운영 시크릿(`~/rekit/secrets/rekit_backend.env`)에 추가** —
+  2026-09-04 `config.py` 에서 필수값으로 변경됨. 누락 시 앱이 부팅 실패한다(silent 방지)
+- [ ] 개발자센터 → 웹훅 URL `https://{도메인}/api/v1/payments/webhooks/toss` 등록 (`PAYMENT_STATUS_CHANGED` 만)
+- [ ] 엣지 nginx(`~/rekit/nginx`) 에서 `/api/v1/payments/webhooks/toss` 를 인증 없이 통과시키는지 확인
 - [ ] 결제창 허용 도메인 등록
-- [ ] 오픈: 전자결제 심사 완료 후 `live_gsk_*` / `live_gck_*` 로 교체
+- [ ] 오픈: 전자결제 심사 완료 후 `live_gsk_*` / `live_gck_*` 로 교체 → 웹훅도 라이브 MID 로 재등록
+
+### 웹훅 하드닝 (2026-09-04 완료)
+
+- `handle_webhook` `DONE` 전이 시 **금액 검증** 추가 — 재조회 `totalAmount != Payment.amount` 면
+  전이 거부 + `logger.error`. 웹훅이 confirm 콜백 유실을 대신 확정하는 경로이므로 confirm 과
+  동일한 금액 가드가 필요.
+- 웹훅 수신 시 `logger.info("토스 웹훅 수신 — event=... remote_status=...")` — "웹훅 미수신 vs
+  수신했으나 처리 안 됨" 을 로그로 구분(runbook 대응).
+- 테스트: `test_payment_service.py` `test_webhook_done_amount_mismatch_*` / `_match_*`.
 
 ### end-to-end 검증 (프론트 위젯 마무리 후)
 
