@@ -10,7 +10,11 @@ from fastapi import BackgroundTasks
 from app.common.email import EmailSender
 from app.core.exceptions import OrderNotFoundError, PaymentFailedError
 from app.order.models import OrderStatus
-from app.payment.adapters.ports import PaymentGateway, TossConfirmResult
+from app.payment.adapters.ports import (
+    PaymentGateway,
+    TossConfirmResult,
+    TossPaymentResult,
+)
 from app.payment.models import Payment, PaymentStatus, PgProvider
 from app.payment.payment_repository import PaymentRepository
 from app.payment.payment_schemas import (
@@ -28,6 +32,9 @@ _TOSS_DONE = "DONE"
 _TOSS_CANCELED = "CANCELED"
 _TOSS_PARTIAL_CANCELED = "PARTIAL_CANCELED"
 _TOSS_ABORTED = "ABORTED"
+_TOSS_EXPIRED = "EXPIRED"
+# 승인 전 과도기 상태 — 웹훅으로 도착해도 확정 전이므로 무시하고 다음 웹훅을 기다린다.
+_TOSS_PENDING_STATUSES = frozenset({"READY", "IN_PROGRESS", "WAITING_FOR_DEPOSIT"})
 
 
 class PaymentService:
@@ -170,68 +177,91 @@ class PaymentService:
             installment_months=ready_payment.installment_months,
         )
 
-    def verify_webhook(self, body: bytes, signature: str) -> bool:
-        """웹훅 HMAC 서명 검증. router 가 _gateway 에 직접 접근하지 않도록 위임."""
-        return self._gateway.verify_webhook_signature(body, signature)
-
     async def handle_webhook(self, payload: TossWebhookPayload) -> None:
-        """PG 웹훅 처리. 멱등성 보장 — 이미 PAID 면 skip.
+        """PG 웹훅 처리.
 
-        eventType "PAYMENT_STATUS_CHANGED" 만 처리.
-        data.status 에 따라 PAID/CANCELLED/FAILED 전환.
+        토스 결제 웹훅에는 서명이 없어서 body 를 신뢰할 수 없다. paymentKey 로
+        결제 조회 API 를 호출해 **실제 상태**를 재확인하고, 그 결과로만 전이한다.
+        멱등성 보장 — 이미 확정된 결제면 skip.
+
+        조회 자체에 실패하면 PaymentGatewayUnknownError 가 전파돼 라우터가 5xx 를
+        반환하고, 토스가 웹훅을 재시도한다.
         """
         if payload.event_type != _EVENT_PAYMENT_STATUS_CHANGED:
             return
 
         data = payload.data
-        pg_tid: str | None = data.get("paymentKey")
-        if not pg_tid:
+        payment_key: str | None = data.get("paymentKey")
+        if not payment_key:
             return
 
+        # 웹훅 body 대신 조회 API 로 실제 상태를 가져온다.
+        remote = await self._gateway.get_payment(payment_key=payment_key)
+
         # FOR UPDATE 락 — 웹훅 재전송으로 동일 이벤트가 동시에 도착할 때 이중 처리 방지
-        payment = await self._repo.get_by_pg_tid_with_lock(pg_tid)
+        payment = await self._repo.get_by_pg_tid_with_lock(payment_key)
         if payment is None:
             # confirm이 아직 실행 안 된 경우 pg_tid가 DB에 없을 수 있음 — orderId로 fallback
             order_number: str | None = data.get("orderId")
             if not order_number:
                 return
-            payment = await self._repo.get_ready_payment_by_order_number_with_lock(order_number)
+            payment = await self._repo.get_ready_payment_by_order_number_with_lock(
+                order_number
+            )
             if payment is None:
                 return
 
-        pg_status: str = data.get("status", "")
+        await self._apply_remote_payment_status(payment, remote)
 
-        # PAID 상태에서 도착하는 웹훅은 pg_status별로 구분해 처리한다.
-        # - DONE 재수신: 멱등 무시
-        # - CANCELED/PARTIAL_CANCELED: 정상 환불 이벤트 — 아래 공통 로직으로 통과
-        # - ABORTED: PG에서 나올 수 없는 조합, 방어적 무시
-        if payment.status == PaymentStatus.PAID:
-            if pg_status == _TOSS_DONE:
-                return  # 중복 DONE 웹훅 — 기존 멱등성 동작 유지
-            if pg_status in (_TOSS_CANCELED, _TOSS_PARTIAL_CANCELED):
-                pass  # PAID 이후 정상 취소/환불 — 아래 공통 로직으로 흘려보냄
-            else:
-                # ABORTED 가 PAID 이후 도착 — PG 쪽에서 나올 수 없는 조합
-                logger.warning("PAID 결제에 ABORTED 웹훅 도착 — 무시: pg_tid=%s", pg_tid)
-                return
+    async def _apply_remote_payment_status(
+        self, payment: Payment, remote: TossPaymentResult
+    ) -> None:
+        """토스 결제 조회 결과(remote.status)로 로컬 payment/order 상태를 전이한다."""
+        status = remote.status
 
-        if pg_status == _TOSS_DONE:
+        # 이미 확정된 결제 — DONE 재수신은 멱등 무시. 취소류(CANCELED/PARTIAL_CANCELED)만
+        # 아래 공통 로직으로 흘려보낸다.
+        if payment.status == PaymentStatus.PAID and status not in (
+            _TOSS_CANCELED,
+            _TOSS_PARTIAL_CANCELED,
+        ):
+            if status != _TOSS_DONE:
+                logger.warning(
+                    "PAID 결제에 예상 밖 상태 %s — 무시: pg_tid=%s",
+                    status,
+                    payment.pg_tid,
+                )
+            return
+
+        if status == _TOSS_DONE:
             payment.status = PaymentStatus.PAID
-            payment.pg_tid = payment.pg_tid or pg_tid  # fallback 경로일 때만 채움
+            payment.pg_tid = payment.pg_tid or remote.pg_tid  # fallback 경로일 때만 채움
+            # 웹훅이 confirm 보다 먼저 도착한 경우 영수증 메타데이터도 여기서 채운다.
+            if payment.paid_at is None:
+                payment.paid_at = remote.approved_at
+                payment.card_company = remote.card_company
+                payment.card_last4 = remote.card_last4
+                payment.installment_months = remote.installment_months
+                payment.approval_number = remote.approval_number
             order = await self._repo.get_order_by_id(payment.order_id)
             if order is not None and order.status == OrderStatus.PENDING:
                 await self._repo.update_order_paid(order)
-        elif pg_status in (_TOSS_CANCELED, _TOSS_PARTIAL_CANCELED):
+        elif status == _TOSS_CANCELED:
             payment.status = PaymentStatus.CANCELLED
-            if pg_status == _TOSS_CANCELED:
-                # 부분취소(PARTIAL_CANCELED)는 라인별 부분 환불 개념이 아직 모델에
-                # 없어 전체 재고 복구 대상이 아님 — 현재는 의도적으로 스킵.
-                # TODO: 부분 취소 시 라인별 재고 복구 정책 미정.
-                await self._restore_order_stock_and_cancel(payment.order_id)
-        elif pg_status == _TOSS_ABORTED:
-            payment.status = PaymentStatus.FAILED
-            payment.fail_reason = data.get("failure", {}).get("message")
             await self._restore_order_stock_and_cancel(payment.order_id)
+        elif status == _TOSS_PARTIAL_CANCELED:
+            # 부분 취소는 라인별 부분 환불 개념이 아직 모델에 없어 재고 복구 대상이 아님.
+            # TODO: 부분 취소 시 라인별 재고 복구 정책 미정.
+            payment.status = PaymentStatus.PARTIAL_CANCELLED
+        elif status in (_TOSS_ABORTED, _TOSS_EXPIRED):
+            payment.status = PaymentStatus.FAILED
+            payment.fail_reason = f"토스 결제 상태: {status}"
+            await self._restore_order_stock_and_cancel(payment.order_id)
+        elif status in _TOSS_PENDING_STATUSES:
+            # 아직 승인 전 — 확정 웹훅을 기다린다.
+            logger.info(
+                "웹훅 수신 — 확정 전 상태 %s, 대기: pg_tid=%s", status, payment.pg_tid
+            )
 
     async def _restore_order_stock_and_cancel(self, order_id: int) -> None:
         """결제 실패/취소 웹훅 시 주문을 취소하고 재고를 복구한다.

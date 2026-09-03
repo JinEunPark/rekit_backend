@@ -1120,16 +1120,27 @@ POST /payments/verify
 ### 10.3 PG 웹훅
 
 ```
-POST /payments/webhook/{provider}
+POST /payments/webhooks/toss
 ```
 
-**Public** (단, signature 검증 필수)
+**Public** (인증 없음)
 
-PG가 비동기로 보내는 결과 알림 (재시도 안전 — 멱등 처리 필수).
+토스가 비동기로 보내는 결제 상태 변경 알림 (재시도 안전 — 멱등 처리 필수).
 
-Header `X-PG-Signature`로 위변조 확인.
+**위변조 방지 — 서명이 아니라 재조회로 검증한다.**
+토스 결제 웹훅(`PAYMENT_STATUS_CHANGED` 등)에는 서명 헤더가 없다
+(`tosspayments-webhook-signature` 는 지급대행 이벤트 전용). 서버는 body 의
+`status` 를 믿지 않고, `paymentKey` 로 결제 조회 API(`GET /v1/payments/{paymentKey}`)를
+호출해 **실제 상태**를 가져와 그 결과로만 전이한다.
 
-**Response 200** (어떤 메시지든 200으로 ack — PG가 재시도하지 않도록)
+- 조회 결과 `DONE` → Payment PAID + Order PAID
+- `CANCELED` → Payment CANCELLED + Order 취소 + 재고 복구
+- `PARTIAL_CANCELED` → Payment PARTIAL_CANCELLED (재고 정책 미정, 현재 스킵)
+- `ABORTED` / `EXPIRED` → Payment FAILED + Order 취소 + 재고 복구
+- `READY` / `IN_PROGRESS` / `WAITING_FOR_DEPOSIT` → 무시 (확정 전)
+
+**Response 200** — 정상 처리 시.
+조회 API 호출 실패(네트워크/5xx) 시 **502** 를 반환해 토스가 웹훅을 재시도하게 한다.
 
 ### 10.4 결제 취소
 

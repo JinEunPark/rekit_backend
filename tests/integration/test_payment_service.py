@@ -17,7 +17,7 @@ from app.catalog.models import ConditionGrade, Product, ProductStatus
 from app.core.database import async_session_factory
 from app.order.models import Order, OrderItem, OrderStatus
 from app.order.shipment import ShipmentMethod
-from app.payment.adapters.ports import TossConfirmResult
+from app.payment.adapters.ports import TossConfirmResult, TossPaymentResult
 from app.payment.models import Payment, PaymentMethod, PaymentStatus, PgProvider
 from app.payment.payment_repository import PaymentRepository
 from app.payment.payment_schemas import PaymentConfirmRequest, TossWebhookPayload
@@ -100,7 +100,25 @@ class _NoopEmailSender:
         del to, subject, body
 
 
+def _toss_payment_result(payment_key: str, status: str) -> TossPaymentResult:
+    return TossPaymentResult(
+        status=status,
+        method="카드",
+        pg_tid=payment_key,
+        total_amount=0,
+        balance_amount=0,
+        approved_at=datetime.now(UTC),
+        card_company="신한카드",
+        card_last4="1234",
+        installment_months=0,
+        approval_number="00000000",
+    )
+
+
 class _NoopGateway:
+    def __init__(self, *, payment_status: str = "DONE") -> None:
+        self.payment_status = payment_status
+
     async def confirm(self, *, payment_key: str, order_id: str, amount: int) -> TossConfirmResult:
         del order_id, amount
         return TossConfirmResult(
@@ -113,9 +131,8 @@ class _NoopGateway:
             approval_number="00000000",
         )
 
-    def verify_webhook_signature(self, body: bytes, signature: str) -> bool:
-        del body, signature
-        return True
+    async def get_payment(self, *, payment_key: str) -> TossPaymentResult:
+        return _toss_payment_result(payment_key, self.payment_status)
 
 
 class _CountingGateway:
@@ -137,9 +154,8 @@ class _CountingGateway:
             approval_number="00000000",
         )
 
-    def verify_webhook_signature(self, body: bytes, signature: str) -> bool:
-        del body, signature
-        return True
+    async def get_payment(self, *, payment_key: str) -> TossPaymentResult:
+        return _toss_payment_result(payment_key, "DONE")
 
 
 # ── 동시성 테스트 ───────────────────────────────────────────────────────
@@ -183,7 +199,7 @@ async def test_webhook_aborted_concurrent_delivery_restores_stock_once(
                 repo = PaymentRepository(session)
                 service = PaymentService(
                     repo,
-                    _NoopGateway(),  # type: ignore[arg-type]
+                    _NoopGateway(payment_status="ABORTED"),  # type: ignore[arg-type]
                     _NoopEmailSender(),  # type: ignore[arg-type]
                 )
                 await service.handle_webhook(payload)

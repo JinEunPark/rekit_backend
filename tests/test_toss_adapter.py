@@ -178,3 +178,86 @@ async def test_confirm_connect_error_raises_gateway_unknown_error() -> None:
             await gateway.confirm(
                 payment_key="k", order_id="RK-1", amount=100_000
             )
+
+
+# ── get_payment (웹훅 수신 후 상태 재확인) ─────────────────────────
+
+
+def _mock_get_payment_response(status: str = "DONE") -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "paymentKey": "toss_key_abc",
+        "status": status,
+        "method": "카드",
+        "totalAmount": 300_000,
+        "balanceAmount": 0,
+        "approvedAt": "2026-07-06T12:00:00+09:00",
+        "card": {
+            "issuerCode": "신한카드",
+            "number": "1234567890001234",
+            "installmentPlanMonths": 0,
+            "approveNo": "12345678",
+        },
+    }
+    return resp
+
+
+def _client_with_get(get_result: object) -> AsyncMock:
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    if isinstance(get_result, BaseException):
+        mock_client.get = AsyncMock(side_effect=get_result)
+    else:
+        mock_client.get = AsyncMock(return_value=get_result)
+    return mock_client
+
+
+async def test_get_payment_parses_status_and_metadata() -> None:
+    """조회 응답의 status/카드 정보를 TossPaymentResult 로 파싱한다."""
+    gateway = _make_gateway()
+    mock_client = _client_with_get(_mock_get_payment_response("CANCELED"))
+
+    with (
+        patch("app.payment.adapters.toss.settings") as mock_settings,
+        patch("httpx.AsyncClient", return_value=mock_client),
+    ):
+        mock_settings.toss_secret_key = "test_secret"
+        result = await gateway.get_payment(payment_key="toss_key_abc")
+
+    assert result.status == "CANCELED"
+    assert result.pg_tid == "toss_key_abc"
+    assert result.total_amount == 300_000
+    assert result.card_company == "신한카드"
+    assert result.card_last4 == "1234"
+
+
+async def test_get_payment_non_200_raises_gateway_unknown_error() -> None:
+    """조회가 4xx/5xx 면 상태 불명 — PaymentGatewayUnknownError (웹훅 재시도 유도)."""
+    gateway = _make_gateway()
+    bad = MagicMock()
+    bad.status_code = 404
+    mock_client = _client_with_get(bad)
+
+    with (
+        patch("app.payment.adapters.toss.settings") as mock_settings,
+        patch("httpx.AsyncClient", return_value=mock_client),
+    ):
+        mock_settings.toss_secret_key = "test_secret"
+        with pytest.raises(PaymentGatewayUnknownError):
+            await gateway.get_payment(payment_key="toss_key_abc")
+
+
+async def test_get_payment_network_error_raises_gateway_unknown_error() -> None:
+    """조회 중 네트워크 에러 시 PaymentGatewayUnknownError."""
+    gateway = _make_gateway()
+    mock_client = _client_with_get(httpx.ConnectError("connect failed"))
+
+    with (
+        patch("app.payment.adapters.toss.settings") as mock_settings,
+        patch("httpx.AsyncClient", return_value=mock_client),
+    ):
+        mock_settings.toss_secret_key = "test_secret"
+        with pytest.raises(PaymentGatewayUnknownError):
+            await gateway.get_payment(payment_key="toss_key_abc")

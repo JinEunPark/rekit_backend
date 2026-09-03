@@ -7,7 +7,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app.payment.adapters.ports import PaymentGateway, TossConfirmResult
+from app.payment.adapters.ports import (
+    PaymentGateway,
+    TossConfirmResult,
+    TossPaymentResult,
+)
 
 
 class FakePaymentGateway:
@@ -30,8 +34,19 @@ class FakePaymentGateway:
             approval_number="FAKE-APPROVAL",
         )
 
-    def verify_webhook_signature(self, body: bytes, signature: str) -> bool:
-        return True
+    async def get_payment(self, *, payment_key: str) -> TossPaymentResult:
+        return TossPaymentResult(
+            status="DONE",
+            method="CARD",
+            pg_tid=payment_key,
+            total_amount=0,
+            balance_amount=0,
+            approved_at=datetime.now(UTC),
+            card_company="개발카드",
+            card_last4="0000",
+            installment_months=0,
+            approval_number="FAKE-APPROVAL",
+        )
 
 
 # Protocol 정합성 체크 (import 시점에 검증)

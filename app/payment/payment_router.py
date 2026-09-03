@@ -3,15 +3,14 @@
 api.md 결제 API:
 - POST /payments/init          : 결제창 열기 전 초기화 (인증 필요)
 - POST /payments/confirm       : 토스 성공 콜백 후 confirm (인증 필요)
-- POST /payments/webhooks/toss : 토스 웹훅 수신 (인증 불필요, HMAC 서명 검증)
+- POST /payments/webhooks/toss : 토스 웹훅 수신 (인증 불필요, 수신 후 조회 API 로 재검증)
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, status
 
 from app.core.deps import get_active_user, get_payment_service
-from app.core.exceptions import PaymentFailedError
 from app.payment.payment_schemas import (
     PaymentConfirmRequest,
     PaymentConfirmResponse,
@@ -75,20 +74,16 @@ async def confirm_payment(
     summary="토스 웹훅",
 )
 async def toss_webhook(
-    request: Request,
     body: TossWebhookPayload,
     service: PaymentService = Depends(get_payment_service),
 ) -> dict[str, str]:
-    """토스 PG 웹훅 수신 엔드포인트. 인증 없이 HMAC 서명으로 검증.
+    """토스 PG 웹훅 수신 엔드포인트 (인증 없음).
 
-    서명 실패 시 400 반환 — 토스는 400/500 응답 시 재시도하므로
-    서명 오류는 재시도 없도록 400 으로 즉시 거절.
+    토스 결제 웹훅에는 서명이 없다 (`tosspayments-webhook-signature` 는 지급대행
+    이벤트 전용). 대신 서비스가 paymentKey 로 결제 조회 API 를 호출해 실제 상태를
+    재확인하므로, 위조된 body 로는 상태를 바꿀 수 없다.
+
+    조회 실패 시 PaymentGatewayUnknownError(502) 가 전파되고 토스가 재시도한다.
     """
-    raw_body = await request.body()
-    signature = request.headers.get("TossPayments-Signature", "")
-
-    if not service.verify_webhook(raw_body, signature):
-        raise PaymentFailedError("웹훅 서명 검증 실패")
-
     await service.handle_webhook(body)
     return {"status": "ok"}
