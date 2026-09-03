@@ -2,29 +2,66 @@ pipeline {
     agent any
 
     parameters {
-        string(
-            name: 'IMAGE_TAG',
-            defaultValue: 'latest',
-            description: '배포할 이미지 태그 (레지스트리에 push된 커밋 short sha, 또는 latest). 롤백 시 이전 sha 입력.'
+        // Git Parameter 플러그인 — 레지스트리가 아니라 git 태그 목록에서 고른다.
+        // 최초 1회는 목록이 비어 있을 수 있음 (SCM checkout 이 한 번 돌아야 태그가 채워짐).
+        gitParameter(
+            name: 'VERSION',
+            type: 'PT_TAG',
+            tagFilter: '*',
+            sortMode: 'DESCENDING_SMART',
+            selectedValue: 'TOP',
+            description: '배포할 git 태그. 그대로 두면 가장 최신 태그. 롤백은 이전 태그를 고른다.'
         )
     }
 
     environment {
         COMPOSE_PROJECT = 'rekit-backend'
+        REGISTRY        = '127.0.0.1:5000'
+        IMAGE_NAME      = 'rekit-backend'
         // 저장소에는 커밋하지 않는 운영용 .env — 호스트의 고정 경로에서 배포 시점에 복사해온다
         PROD_ENV_FILE   = '/home/wlsdms/rekit/secrets/rekit_backend.env'
     }
 
     stages {
+        stage('Check image exists') {
+            steps {
+                script {
+                    if (!params.VERSION?.trim()) {
+                        error 'VERSION 이 비었습니다. build 잡을 먼저 실행했는지 확인하세요.'
+                    }
+                }
+                // 태그만 만들고 build 잡을 안 돌린 경우를 여기서 명확히 잡는다
+                sh """
+                    docker manifest inspect ${REGISTRY}/${IMAGE_NAME}:${params.VERSION} > /dev/null \
+                      || { echo '레지스트리에 ${IMAGE_NAME}:${params.VERSION} 이미지가 없습니다 — rekit-backend-build 잡을 이 태그로 먼저 실행'; exit 1; }
+                """
+            }
+        }
+
         stage('Deploy') {
             steps {
-                echo "Deploying 127.0.0.1:5000/rekit-backend:${params.IMAGE_TAG}"
+                echo "Deploying ${REGISTRY}/${IMAGE_NAME}:${params.VERSION}"
                 sh """
                     cp ${PROD_ENV_FILE} .env
-                    IMAGE_TAG=${params.IMAGE_TAG} docker compose -p ${COMPOSE_PROJECT} -f docker-compose.prod.yml pull app
-                    IMAGE_TAG=${params.IMAGE_TAG} docker compose -p ${COMPOSE_PROJECT} -f docker-compose.prod.yml up -d postgres redis app
+                    IMAGE_TAG=${params.VERSION} docker compose -p ${COMPOSE_PROJECT} -f docker-compose.prod.yml pull app
+                    IMAGE_TAG=${params.VERSION} docker compose -p ${COMPOSE_PROJECT} -f docker-compose.prod.yml up -d postgres redis app
                     docker image prune -f
                 """
+            }
+        }
+
+        stage('Health check') {
+            steps {
+                sh '''
+                    for i in $(seq 1 30); do
+                        if curl -fsS http://127.0.0.1:8000/health > /dev/null; then
+                            echo "health OK (${i}회차)"; exit 0
+                        fi
+                        sleep 2
+                    done
+                    echo "헬스체크 실패 — 배포된 컨테이너 로그를 확인하고, 필요하면 deploy 잡에서 이전 태그를 골라 롤백하세요."
+                    exit 1
+                '''
             }
         }
     }
