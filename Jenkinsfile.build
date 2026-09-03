@@ -2,10 +2,14 @@ pipeline {
     agent any
 
     parameters {
-        string(
+        // Git Parameter 플러그인 — git 태그 목록에서 고른다.
+        gitParameter(
             name: 'RELEASE_TAG',
-            defaultValue: '',
-            description: '빌드할 git 태그 (X.Y.Z). 먼저 `git push origin <tag>` 로 올려둔 태그여야 한다.'
+            type: 'PT_TAG',
+            tagFilter: '*',
+            sortMode: 'DESCENDING_SMART',
+            selectedValue: 'TOP',
+            description: '빌드할 git 태그 (X.Y.Z). `git push origin <tag>` 로 올려둔 태그.'
         )
     }
 
@@ -18,22 +22,14 @@ pipeline {
         stage('Checkout tag') {
             steps {
                 script {
-                    if (!params.RELEASE_TAG?.trim()) {
-                        error 'RELEASE_TAG 를 입력하세요 (예: 0.0.1)'
+                    if (!params.RELEASE_TAG?.trim()?.matches(/^\d+\.\d+\.\d+$/)) {
+                        error "RELEASE_TAG 형식 오류: '${params.RELEASE_TAG}' (X.Y.Z 여야 함)"
                     }
+                    env.IMAGE_TAG = params.RELEASE_TAG.trim()
                 }
+                // Jenkins SCM 은 master 를 받아오므로, 빌드 대상 태그의 트리로 명시적으로 이동
                 sh 'git fetch --tags --force --prune'
-                sh "git checkout tags/${params.RELEASE_TAG}"
-                script {
-                    // 이미지 태그 = 지금 체크아웃된 커밋에 정확히 달린 git 태그 (없으면 실패)
-                    env.IMAGE_TAG = sh(
-                        script: 'git describe --tags --exact-match HEAD',
-                        returnStdout: true
-                    ).trim()
-                    if (!env.IMAGE_TAG?.matches(/^\d+\.\d+\.\d+$/)) {
-                        error "HEAD 에 X.Y.Z 형식 태그가 없습니다: '${env.IMAGE_TAG}'"
-                    }
-                }
+                sh "git checkout -f tags/${env.IMAGE_TAG}"
             }
         }
 
@@ -49,7 +45,7 @@ pipeline {
 
     post {
         success {
-            echo "이미지 push 완료: ${REGISTRY}/${IMAGE_NAME}:${env.IMAGE_TAG}. 배포는 rekit-backend-deploy 잡에서 VERSION 드롭다운으로 실행."
+            echo "이미지 push 완료: ${REGISTRY}/${IMAGE_NAME}:${env.IMAGE_TAG}. 배포는 deploy-was 잡에서 VERSION 드롭다운으로."
         }
     }
 }
