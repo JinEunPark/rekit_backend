@@ -24,30 +24,65 @@
       - ✅ **결정**: clientKey 는 프론트 env(`VITE_TOSS_CLIENT_KEY`)로 — 백엔드 `toss_client_key` 불필요
       - ✅ **키 반영 (2026-09-04)**: 본인 계정 테스트 키 `.env` 세팅 (`TOSS_SECRET_KEY=test_gsk_GePWvyJ…`),
         프론트 `.env.local` `VITE_TOSS_CLIENT_KEY=test_gck_GjLJoQ…`. 둘 다 gitignore
-      - [ ] **Task 5 — confirm 하드닝** : 4xx 응답 `{code,message}` → `_raise_toss_failure()` 재사용 +
-        `payment.fail_reason` 저장 + `status=FAILED`. confirm 에 `Idempotency-Key` 헤더 (`cancel` 은 이미 있음)
-      - [ ] **Task 6 — 정리** : dead code `app/payment/ports.py` 삭제, `docs/api.md` §10.1/§10.2 를
-        실제 구현에 맞게 갱신(`/verify`→`/confirm`, `data` envelope 제거, `PENDING_PAYMENT`→`PENDING`)
+      - ✅ **Task 5 완료 (2026-10-02 확인, 커밋 `8d5fbd4`)** — confirm 하드닝. 코드 확인 완료:
+        `adapters/toss.py:81` `Idempotency-Key: confirm-{payment_key}`, `:96` 4xx → `_raise_toss_failure()`,
+        `payment_service.py:159` `fail_reason` 저장 + FAILED 전이
+      - [ ] **Task 6 — 정리 (2건, 서로 독립)**
+        - [ ] `app/payment/ports.py` 삭제 — dead code. 2026-10-02 확인: 레포 전체에서 참조 **0건**
+              (`grep -rn "payment.ports" app/ tests/`). 혼동 주의 — 실제로 쓰이는 Protocol 은
+              `app/payment/adapters/ports.py` 이고 **이건 지우면 안 된다**. 지운 뒤 `pytest`·`mypy app` 로 확인
+        - [ ] 백엔드 `docs/api.md` §10.1/§10.2 를 실제 구현에 맞게 갱신. 현재 문서가 틀린 부분:
+              엔드포인트 `/payments/verify` → **`/payments/confirm`**,
+              응답의 `data` envelope → **없음(평평한 객체)**, 주문 상태 `PENDING_PAYMENT` → **`PENDING`**.
+              실제 스키마는 `app/payment/payment_schemas.py` 가 정답 —
+              init 요청 `{order_number, method}` / 응답 `{payment_id, order_number, amount, customer_name}`,
+              confirm 요청 `{payment_key, order_id, amount}`(`order_id` 는 order_number 문자열 — 토스가 orderId 로 부름) /
+              응답 `{order_number, status, paid_at, card_company, card_last4, installment_months}`
       - ✅ **결정 (2026-09-04): 가상계좌 안 함** — `confirm` 이 토스 `status != "DONE"` 거절
         (입금 전 주문 확정 방지). 실시간 계좌이체(BANK, 즉시 DONE)는 그대로 사용 가능
       - [ ] **부분취소 재고 정책** — `cancel_amount` 경로는 어댑터·서비스에 있으나 order/admin 은 전액만 호출.
         부분취소 시 라인별 재고 복구 정책 미정
-      - [ ] **운영** : 웹훅 URL `https://{도메인}/api/v1/payments/webhooks/toss` 등록 (이벤트 `PAYMENT_STATUS_CHANGED`),
-        결제창 허용 도메인 등록. 오픈 시 `live_gsk_*` 로 교체 (전자결제 심사 완료 후)
-      - [ ] **프론트(rekle 레포)** : 토스 위젯 연동 마무리 (2026-08-31 핸드오프 프롬프트 전달됨 —
-        `src/api/payments.ts`, `src/composables/usePaymentHandoff.ts`, `src/config/payments.ts`,
-        `src/views/checkout/PaymentReturnView.vue` 생성됨). successUrl 랜딩 → `POST /payments/confirm` 호출,
-        failUrl 페이지, 시크릿 키 프론트 유입 금지
+      - [ ] **방치된 PENDING 주문이 영원히 남는다 (프론트 항목과 짝 — `rekle/todo.md` 참고)**
+        - 현상: 주문 생성 시 재고를 먼저 깎는다. 결제창에서 이탈하면 주문은 `PENDING` 으로 남고 재고도 깎인 채다.
+        - 만료 로직은 있다 — `order_service.py:267 _expire_if_abandoned()` (30분 경과 시 CANCELLED + 재고 복구,
+          락 잡고 더블체크하므로 동시성은 안전).
+        - **문제는 호출 지점이 `get_order()` 단 한 곳(`order_service.py:193`)** 이라는 것. 즉 **그 주문의 상세를
+          누군가 다시 열어야만** 만료된다. 목록 조회(`get_order_list`)에선 안 돌고, 스케줄러도 없다.
+          구매자가 결제창 닫고 안 돌아오면 그 재고는 영구히 묶인다.
+        - 선택지: (a) 주문 목록 조회에서도 호출, (b) 상품 재고를 읽는 지점에서 만료 스윕,
+          (c) 주기 작업(APScheduler/cron)으로 일괄 만료. (c) 가 정석이나 스케줄러 인프라가 아직 없다.
+        - 검증: PENDING 주문을 만들고 `created_at` 을 31분 전으로 돌린 뒤, **상세를 열지 않은 상태에서**
+          재고가 복구되는지 확인
+      - [ ] **운영 — 실키 전환 (오픈 직전, 전자결제 심사 완료 후)** : `TOSS_SECRET_KEY` 를 `test_gsk_*` →
+        `live_gsk_*` 로 교체(운영 시크릿 `~/rekit/secrets/rekit_backend.env`), 프론트 `VITE_TOSS_CLIENT_KEY` 도
+        같은 상점의 `live_gck_*` 로 **동시에** 교체해야 한다(한쪽만 바꾸면 `INVALID_API_KEY`).
+        웹훅 URL·결제창 허용 도메인 등록은 2026-09-04 완료됨(아래 수동 테스트 preamble 참고)
+      - ✅ **프론트 위젯 연동 완료** — `rekle` 레포에 `src/api/payments.ts`, `src/config/payments.ts`,
+        `src/composables/usePaymentHandoff.ts`, `src/views/checkout/PaymentReturnView.vue`·`PaymentFailView.vue` 구현됨.
+        남은 프론트 잔여 항목은 `rekle/todo.md` 의 "P1 — 결제" 참고
 
-### [결제] 내가 직접 해봐야 할 수동 테스트 (2026-09-05~)
+### [결제] 내가 직접 해봐야 할 수동 테스트 (2026-09-05, 운영/스테이징 배포 후)
 
 > 자동 테스트로 못 잡는 것 = 실제 토스 API 호출·웹훅·프론트 위젯 결합. 개발자센터 결제내역이 최종 증거.
-> 사전: 백엔드 `.env` `TOSS_SECRET_KEY` 세팅됨 · `.venv/bin/uvicorn app.main:app --reload` · 프론트 `npm run dev`
+>
+> **⚠️ 선행 조건 (2026-10-02 기준) — 아직 배포가 안 끝났다.**
+> 결제 하드닝 커밋들(`4d23e7c` 웹훅 금액검증·`636f00f` 취소/환불·`8d5fbd4` confirm 하드닝)은 master 에
+> 올라가 있지만 **운영에 배포된 적이 없다**. 운영은 태그 `0.0.2`(= "롤백 테스트용 빈 릴리스" 커밋) 기준 이미지로
+> 떠 있었다. 2026-10-02 에 태그 `0.0.3` 을 푸시했고, 이 태그를 Jenkins `build-was` → `deploy-was` 로 올리면
+> 위 결제 커밋들이 **한꺼번에** 운영에 나간다. 그러니 아래 체크리스트는 `0.0.3` 배포 직후에 수행할 것.
+> (배포 여부 확인법: `curl -s https://rekit.co.kr/api/v1/categories | head -c 120` 에 `image_url` 필드가
+> 보이면 0.0.3 이상이 떠 있는 것.)
+>
+> 사전: 프론트 위젯 연동 완료 · 아래 등록 항목 전부 완료(2026-09-04)
+>   - ✅ 개발자센터 웹훅 URL `https://{도메인}/api/v1/payments/webhooks/toss` 등록 (`PAYMENT_STATUS_CHANGED`)
+>   - ✅ 결제창 허용 도메인 등록
+>   - ✅ 엣지 nginx 웹훅 경로 인증 없이 통과
 
-**A. 환경/설정 스모크**
-- [ ] `TOSS_SECRET_KEY` 없이 `/payments/confirm` 호출 → `PAYMENT_FAILED`(422, "Toss secret key가 설정되지 않았습니다") 나는지
-- [ ] 개발자센터 → 웹훅에 `https://{로컬터널 or 도메인}/api/v1/payments/webhooks/toss` 등록 (이벤트 `PAYMENT_STATUS_CHANGED`). 로컬이면 ngrok 등 터널 필요
-- [ ] 결제창 허용 도메인에 `localhost:5173` (또는 dev 도메인) 등록
+**A. 배포/설정 스모크 (가장 먼저)**
+- [ ] 배포 후 앱이 정상 부팅됐는지 — `TOSS_SECRET_KEY` 가 `config.py` 에서 **필수값**이 됐으므로,
+      운영 시크릿(`~/rekit/secrets/rekit_backend.env`)에 없으면 부팅 자체가 실패한다. 헬스체크 200 확인
+- [ ] `GET /api/v1/...` 아무 인증 불필요 엔드포인트로 서버 살아있는지 + 로그에 설정 에러 없는지
+- [ ] (스테이징이면) 스테이징 개발자센터에도 웹훅 URL·허용 도메인 각각 등록됐는지 (MID 별로 따로)
 
 **B. 결제 해피 패스 (카드)**
 - [ ] 주문서 → 결제 → `/payments/init` 201, 토스 위젯 뜸 (본인 `test_gck_*`)
@@ -72,11 +107,19 @@
 - [ ] `DELIVERED` 주문 `POST /api/v1/orders/{order_number}/refund/request` → `REFUNDED` + 토스 취소. 재고는 복구 안 됨(정상)
 - [ ] (선택) 토스가 취소 거절하는 상황 재현(예: 이미 콘솔에서 수동취소한 결제를 우리가 cancel) → 422, **주문 상태가 롤백되어 그대로인지** (전환 안 됨 확인)
 
-**E. 웹훅 (Task 1·2 핵심 검증)**
-- [ ] 결제하면 서버 로그에 `PAYMENT_STATUS_CHANGED` 웹훅 수신 기록 (이미 confirm 으로 PAID면 멱등 무시)
+**E. 웹훅 (Task 1·2 + 2026-09-04 하드닝 핵심 검증)**
+- [ ] 결제하면 서버 로그에 `토스 웹훅 수신 — event=PAYMENT_STATUS_CHANGED ... remote_status=DONE` 뜨는지
+      (이미 confirm 으로 PAID 면 멱등 무시 — 로그는 뜨되 상태 변경 없음)
+- [ ] 개발자센터 → 해당 웹훅 상세 → **전송 기록이 "성공"(200)** 인지 (실패면 URL/nginx/방화벽 점검)
+- [ ] **⭐ confirm 유실 시나리오** — 결제창 인증까지 끝내고 successUrl 리다이렉트 직전에 **브라우저/탭 강제 종료**
+      (`/payments/confirm` 이 호출 안 되게). 몇 초~수십 초 후:
+      `payments` 행이 웹훅만으로 `PAID` + `orders` `PAID` 로 전환됐는지 + 카드메타 채워졌는지.
+      → **이게 웹훅의 존재 이유. 반드시 통과해야 함**
+- [ ] 위 시나리오 후 로그에 `웹훅 DONE 금액 불일치` 에러가 **없어야** 함 (있으면 `totalAmount` 파싱/금액 산정 버그)
 - [ ] **개발자센터에서 결제를 수동 취소** → `CANCELED` 웹훅 도착 → 우리 `payments` `CANCELLED` + `orders` `CANCELLED` + 재고 복구 자동으로 되는지 (조회 재확인 방식 동작 증거)
-- [ ] 개발자센터 웹훅 "재전송" → 멱등 (이중 재고 복구/상태 재전환 없음)
-- [ ] 백엔드를 잠깐 껐다 켠 상태에서 웹훅 도착 → 토스가 재시도해서 결국 처리되는지 (5xx→재시도)
+- [ ] 개발자센터 웹훅 "재전송" → 멱등 (이중 재고 복구/상태 재전환 없음, 로그만 다시 뜸)
+- [ ] 백엔드를 잠깐 껐다 켠 상태에서 웹훅 도착 → 토스가 재시도(최대 7회)해서 결국 처리되는지 (5xx→재시도)
+- [ ] 응답 시간 — 웹훅 처리가 10초 이내 200 인지 (초과 시 토스가 실패로 간주·재시도). `get_payment` 지연 시 위험
 
 **F. 결과 기록**
 - [ ] 통과/실패를 이 목록에 체크, 실패 케이스는 별도 이슈로
