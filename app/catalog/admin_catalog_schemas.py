@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.catalog.models import ConditionGrade, ProductStatus
 from app.core.pagination import PageMeta
@@ -131,15 +131,29 @@ class AdminCategoryCreate(BaseModel):
     id: str = Field(min_length=1, max_length=30, pattern=r"^[A-Z][A-Z0-9_]*$")
     title: str = Field(min_length=1, max_length=100)
     icon: str = Field(min_length=1, max_length=50)
+    image_url: str | None = Field(default=None, max_length=500)
     sort_order: int = Field(default=0, ge=0)
 
 
 class AdminCategoryUpdate(BaseModel):
-    """PATCH /admin/categories/{id} — 보내지 않은 필드는 유지."""
+    """PATCH /admin/categories/{id} — 보내지 않은 필드는 유지.
+
+    title/icon/sort_order 는 DB 상 NOT NULL 이라 명시적 null 전송을 거부한다
+    (필드를 생략하면 기존 값 유지 — None 기본값은 그 "미전송" 상태를 표현하기 위함).
+    image_url 만 nullable 이라 null 을 명시적으로 보내면 이미지를 제거한다.
+    """
 
     title: str | None = Field(default=None, min_length=1, max_length=100)
     icon: str | None = Field(default=None, min_length=1, max_length=50)
+    image_url: str | None = Field(default=None, max_length=500)
     sort_order: int | None = Field(default=None, ge=0)
+
+    @field_validator("title", "icon", "sort_order")
+    @classmethod
+    def _reject_explicit_null(cls, v: str | int | None) -> str | int:
+        if v is None:
+            raise ValueError("null 을 허용하지 않는 필드입니다. 생략하면 기존 값이 유지됩니다.")
+        return v
 
 
 class AdminCategoryResponse(BaseModel):
@@ -147,4 +161,5 @@ class AdminCategoryResponse(BaseModel):
     id: str
     title: str
     icon: str
+    image_url: str | None
     sort_order: int

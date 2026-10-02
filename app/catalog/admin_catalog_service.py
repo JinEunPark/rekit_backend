@@ -132,7 +132,11 @@ class AdminCatalogService:
         if existing is not None:
             raise CategoryAlreadyExistsError()
         cat = ProductCategoryMetaItem(
-            id=data.id, title=data.title, icon=data.icon, sort_order=data.sort_order
+            id=data.id,
+            title=data.title,
+            icon=data.icon,
+            image_url=data.image_url,
+            sort_order=data.sort_order,
         )
         await self._repo.save_category(cat)
         return AdminCategoryResponse.model_validate(cat)

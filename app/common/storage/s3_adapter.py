@@ -19,6 +19,7 @@ ALLOWED_IMAGE_TYPES: dict[str, str] = {
     "image/jpeg": "jpg",
     "image/png": "png",
     "image/webp": "webp",
+    "image/svg+xml": "svg",
 }
 
 
@@ -57,6 +58,11 @@ class S3StorageAdapter:
         ext = ALLOWED_IMAGE_TYPES[content_type]
         return f"products/{uuid4()}.{ext}"
 
+    @staticmethod
+    def generate_category_image_key(content_type: str) -> str:
+        ext = ALLOWED_IMAGE_TYPES[content_type]
+        return f"categories/{uuid4()}.{ext}"
+
     async def presigned_put_url(self, key: str, content_type: str) -> str:
         async with self._client() as s3:
             return await s3.generate_presigned_url(
@@ -84,6 +90,22 @@ class S3StorageAdapter:
                 size=int(response["ContentLength"]),
                 content_type=response.get("ContentType", "application/octet-stream"),
                 etag=response["ETag"].strip('"'),
+            )
+
+    async def get_object(self, key: str) -> bytes:
+        async with self._client() as s3:
+            response = await s3.get_object(Bucket=self.settings.s3_bucket, Key=key)
+            body: bytes = await response["Body"].read()
+            return body
+
+    async def put_object(self, key: str, body: bytes, content_type: str) -> None:
+        """서버가 본문을 직접 올리는 경로 — SVG 처럼 저장 전 검사가 필요한 경우만 사용."""
+        async with self._client() as s3:
+            await s3.put_object(
+                Bucket=self.settings.s3_bucket,
+                Key=key,
+                Body=body,
+                ContentType=content_type,
             )
 
     async def delete(self, key: str) -> None:

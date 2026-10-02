@@ -3,11 +3,20 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 ImageContentType = Literal["image/jpeg", "image/png", "image/webp"]
+UploadPurpose = Literal["product_image", "category_image"]
 
 
 class PresignRequest(BaseModel):
+    """presign 은 래스터 이미지 전용.
+
+    SVG 는 본문에 스크립트를 품을 수 있어 저장 전 검사가 필요한데, presign 방식은
+    클라이언트가 스토리지로 직접 PUT 하므로 서버가 본문을 가로챌 지점이 없다
+    (confirm 을 호출하지 않으면 검사가 아예 실행되지 않은 채 공개된다).
+    그래서 SVG 는 서버 경유 업로드인 POST /uploads/svg 로만 받는다.
+    """
+
     content_type: ImageContentType
-    purpose: Literal["product_image"] = "product_image"
+    purpose: UploadPurpose = "product_image"
 
 
 class PresignResponse(BaseModel):

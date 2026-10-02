@@ -95,4 +95,5 @@ class CategoryMetaItem(BaseModel):
     id: str
     label: str
     icon: str
+    image_url: str | None
     sort_order: int

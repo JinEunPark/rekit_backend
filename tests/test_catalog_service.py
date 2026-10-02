@@ -84,9 +84,12 @@ def make_category(
     category_id: str = "REFRIGERATOR",
     title: str = "냉장고",
     icon: str = "fridge",
+    image_url: str | None = None,
     sort_order: int = 1,
 ) -> ProductCategoryMetaItem:
-    c = ProductCategoryMetaItem(id=category_id, title=title, icon=icon, sort_order=sort_order)
+    c = ProductCategoryMetaItem(
+        id=category_id, title=title, icon=icon, image_url=image_url, sort_order=sort_order
+    )
     return c
 
 
@@ -442,6 +445,28 @@ async def test_get_categories_all_have_required_fields() -> None:
         assert cat.label
         assert cat.icon
         assert cat.sort_order > 0
+
+
+async def test_get_categories_includes_image_url_when_set() -> None:
+    """image_url 이 설정된 카테고리는 응답에도 그대로 노출된다."""
+    categories = [
+        make_category(category_id="TV", image_url="https://cdn.example.com/categories/tv.jpg"),
+    ]
+    service = _make_service([], categories=categories)
+
+    result = await service.get_categories()
+
+    assert result[0].image_url == "https://cdn.example.com/categories/tv.jpg"
+
+
+async def test_get_categories_image_url_defaults_to_none() -> None:
+    """image_url 미설정 카테고리는 None 으로 응답되어 프론트가 아이콘만 노출할 수 있다."""
+    categories = [make_category(category_id="TV")]
+    service = _make_service([], categories=categories)
+
+    result = await service.get_categories()
+
+    assert result[0].image_url is None
 
 
 # ── get_products_by_ids ───────────────────────────────────────

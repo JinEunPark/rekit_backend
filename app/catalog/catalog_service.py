@@ -51,7 +51,13 @@ class CatalogService:
     async def get_categories(self) -> list[CategoryMetaItem]:
         cats = await self.repo.get_categories()
         return [
-            CategoryMetaItem(id=c.id, label=c.title, icon=c.icon, sort_order=c.sort_order)
+            CategoryMetaItem(
+                id=c.id,
+                label=c.title,
+                icon=c.icon,
+                image_url=c.image_url,
+                sort_order=c.sort_order,
+            )
             for c in cats
         ]
 

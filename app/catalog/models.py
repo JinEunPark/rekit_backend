@@ -190,4 +190,9 @@ class ProductCategoryMetaItem(Base, TimestampMixin):
     )
     title: Mapped[str] = mapped_column(String(100), nullable=False)
     icon: Mapped[str] = mapped_column(String(50), nullable=False, default="menu")
+    image_url: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="카테고리 대표 이미지 S3 URL (uploads/confirm 통과). NULL 이면 아이콘만 노출",
+    )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

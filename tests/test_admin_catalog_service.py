@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 import pytest
 
 from app.catalog.admin_catalog_schemas import (
+    AdminCategoryCreate,
+    AdminCategoryUpdate,
     AdminImageItem,
     AdminProductCreate,
     AdminProductImagesReplace,
@@ -28,10 +30,16 @@ from app.catalog.admin_catalog_service import AdminCatalogService
 from app.catalog.models import (
     ConditionGrade,
     Product,
+    ProductCategoryMetaItem,
     ProductImage,
     ProductStatus,
 )
-from app.core.exceptions import ProductImageNotFoundError, ProductNotFoundError
+from app.core.exceptions import (
+    CategoryAlreadyExistsError,
+    CategoryNotFoundError,
+    ProductImageNotFoundError,
+    ProductNotFoundError,
+)
 
 # ── 팩토리 ──────────────────────────────────────────────────
 
@@ -150,6 +158,36 @@ class _FakeAdminCatalogRepo:
                     self._next_image_id += 1
             self._products.append(product)
         return product
+
+
+class _FakeCategoryRepo:
+    """카테고리 CRUD 전용 fake repo — Python 리스트 기반."""
+
+    def __init__(self, categories: list[ProductCategoryMetaItem] | None = None) -> None:
+        self._categories: list[ProductCategoryMetaItem] = list(categories or [])
+
+    async def get_categories(self) -> list[ProductCategoryMetaItem]:
+        return sorted(self._categories, key=lambda c: c.sort_order)
+
+    async def get_category_by_id(self, category_id: str) -> ProductCategoryMetaItem | None:
+        return next((c for c in self._categories if c.id == category_id), None)
+
+    async def save_category(
+        self, category: ProductCategoryMetaItem
+    ) -> ProductCategoryMetaItem:
+        self._categories.append(category)
+        return category
+
+    async def delete_category(self, category: ProductCategoryMetaItem) -> None:
+        self._categories.remove(category)
+
+
+def _make_category_service(
+    categories: list[ProductCategoryMetaItem] | None = None,
+) -> tuple[AdminCatalogService, _FakeCategoryRepo]:
+    repo = _FakeCategoryRepo(categories)
+    service = AdminCatalogService(repo)  # type: ignore[arg-type]
+    return service, repo
 
 
 def _make_service(
@@ -544,3 +582,91 @@ async def test_update_image_does_not_affect_other_images() -> None:
 
     assert result.images[0].url == "https://cdn.example.com/a.jpg"
     assert result.images[1].url == "https://cdn.example.com/b-new.jpg"
+
+
+# ── 카테고리 CRUD — 이미지/아이콘 ──────────────────────────────
+
+
+async def test_create_category_with_image_url() -> None:
+    """image_url 을 포함해 카테고리를 생성하면 응답에 그대로 반영된다."""
+    service, repo = _make_category_service()
+
+    result = await service.create_category(
+        AdminCategoryCreate(
+            id="REFRIGERATOR",
+            title="냉장고",
+            icon="❄️",
+            image_url="https://cdn.example.com/categories/fridge.jpg",
+        )
+    )
+
+    assert result.image_url == "https://cdn.example.com/categories/fridge.jpg"
+    assert (await repo.get_category_by_id("REFRIGERATOR")) is not None
+
+
+async def test_create_category_without_image_url_defaults_to_none() -> None:
+    """image_url 미전송 시 아이콘만 쓰는 카테고리로 생성된다 (NULL)."""
+    service, _ = _make_category_service()
+
+    result = await service.create_category(
+        AdminCategoryCreate(id="TV", title="TV", icon="📺")
+    )
+
+    assert result.image_url is None
+
+
+async def test_create_category_duplicate_id_raises() -> None:
+    """이미 존재하는 id 로 생성 시도 → CategoryAlreadyExistsError."""
+    existing = ProductCategoryMetaItem(id="TV", title="TV", icon="📺", sort_order=0)
+    service, _ = _make_category_service([existing])
+
+    with pytest.raises(CategoryAlreadyExistsError):
+        await service.create_category(AdminCategoryCreate(id="TV", title="TV", icon="📺"))
+
+
+async def test_update_category_sets_image_url() -> None:
+    """PATCH 로 image_url 만 보내면 icon/title 은 유지된 채 이미지만 설정된다."""
+    existing = ProductCategoryMetaItem(id="TV", title="TV", icon="📺", sort_order=0)
+    service, _ = _make_category_service([existing])
+
+    result = await service.update_category(
+        "TV", AdminCategoryUpdate(image_url="https://cdn.example.com/categories/tv.jpg")
+    )
+
+    assert result.image_url == "https://cdn.example.com/categories/tv.jpg"
+    assert result.icon == "📺"
+    assert result.title == "TV"
+
+
+async def test_update_category_clears_image_url_with_explicit_null() -> None:
+    """image_url 에 null 을 명시적으로 보내면 기존 이미지가 제거된다."""
+    existing = ProductCategoryMetaItem(
+        id="TV",
+        title="TV",
+        icon="📺",
+        image_url="https://cdn.example.com/categories/tv.jpg",
+        sort_order=0,
+    )
+    service, _ = _make_category_service([existing])
+
+    result = await service.update_category(
+        "TV", AdminCategoryUpdate.model_validate({"image_url": None})
+    )
+
+    assert result.image_url is None
+
+
+async def test_update_category_not_found_raises() -> None:
+    """존재하지 않는 category_id 수정 시도 → CategoryNotFoundError."""
+    service, _ = _make_category_service()
+
+    with pytest.raises(CategoryNotFoundError):
+        await service.update_category("UNKNOWN", AdminCategoryUpdate(icon="🧊"))
+
+
+async def test_delete_category_not_found_raises() -> None:
+    """존재하지 않는 category_id 삭제 시도 → CategoryNotFoundError."""
+    service, _ = _make_category_service()
+
+    with pytest.raises(CategoryNotFoundError):
+        await service.delete_category("UNKNOWN")
