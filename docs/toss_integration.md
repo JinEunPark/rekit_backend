@@ -20,7 +20,7 @@
 | B | ~~웹훅 검증이 존재하지 않는 스펙으로 구현돼 있음~~ → **재조회 방식으로 교체** (Task 1·2) | 코드 수정 | ✅ 2026-08-31 |
 | C | ~~주문 취소/환불 시 PG `cancel` 을 안 부름~~ → **`cancel()` 구현 + order/admin 연결** (Task 3·4) | 코드 신규 | ✅ 2026-09-04 |
 
-**남은 것**: Task 5(confirm 하드닝) · Task 6(dead code 정리 + api.md §10.1/§10.2) · 프론트 위젯 마무리 ·
+**남은 것**: Task 6(dead code 정리 + api.md §10.1/§10.2) · 프론트 위젯 마무리 ·
 웹훅 URL/도메인 등록. **가상계좌는 안 함**(2026-09-04). 부분취소 재고 정책 미정.
 
 나머지(모델, 스키마, 라우터, confirm 호출, 멱등성, 재고 복구)는 만들어져 있으니
@@ -219,14 +219,21 @@ tosspayments-integration-guide  (claude mcp list 로 확인)
 
 ---
 
-### Task 5 (남음) — confirm 응답 파싱 하드닝
+### ✅ Task 5 — confirm 응답 파싱 하드닝 (2026-10-02 완료)
 
-- `adapters/toss.py` `confirm`: status != 200 일 때 `_raise_toss_failure(resp, "Toss confirm 실패")`
-  로 교체 (이미 `cancel` 이 쓰는 헬퍼. `{code, message}` 를 담아 `PaymentFailedError`)
-- `payment_service.confirm_payment`: 이 에러를 잡아 `payment.fail_reason` 저장 + `status=FAILED`
-- `confirm` 에 `Idempotency-Key: confirm-{payment_key}` 헤더 (cancel 은 이미 있음)
-- `test_toss_adapter.py`: `test_confirm_4xx_includes_toss_error_code`,
-  `test_confirm_sends_idempotency_key_header`
+**한 일**:
+1. `adapters/toss.py` `confirm`: status != 200 일 때 `_raise_toss_failure(resp, "Toss confirm 실패")`
+   로 교체 (이미 `cancel` 이 쓰는 헬퍼. `{code, message}` 를 담아 `PaymentFailedError`)
+2. `confirm` 에 `Idempotency-Key: confirm-{payment_key}` 헤더 추가 (cancel 과 동일 패턴)
+3. `payment_service.confirm_payment`: `gateway.confirm()` 호출을 try/except 로 감싸
+   `PaymentFailedError` 만 잡아 READY 결제를 `FAILED` + `fail_reason` 저장 후 재전파.
+   `PaymentGatewayUnknownError`(네트워크 불명)는 그대로 전파 — 상태를 건드리지 않아야
+   웹훅이 나중에 실제 상태로 확정할 수 있음(기존 `test_confirm_payment_gateway_timeout_does_not_change_order_status` 로 보장됨)
+
+**검증**: `test_toss_adapter.py` `test_confirm_4xx_includes_toss_error_code`,
+`test_confirm_sends_idempotency_key_header`. `test_payment_service.py`
+`test_confirm_payment_gateway_fails_records_fail_reason_and_status`.
+524 passed / ruff 0 / mypy 0.
 
 ### Task 6 (남음) — 정리
 

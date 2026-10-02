@@ -513,6 +513,26 @@ async def test_confirm_payment_gateway_fails() -> None:
         )
 
 
+async def test_confirm_payment_gateway_fails_records_fail_reason_and_status() -> None:
+    """PG 가 confirm 을 거절하면 READY 결제가 FAILED + fail_reason 기록으로 고착되지 않는다."""
+    order = make_order()
+    payment = make_payment(order_id=1)
+    service = _make_service(
+        orders=[order], payments=[payment], gateway=_FakeGateway(should_fail=True)
+    )
+
+    with pytest.raises(PaymentFailedError):
+        await service.confirm_payment(
+            PaymentConfirmRequest(
+                payment_key="k", order_id="RK-2606200001", amount=300_000
+            ),
+            BackgroundTasks(),
+        )
+
+    assert payment.status == PaymentStatus.FAILED
+    assert payment.fail_reason == "PG 확인 실패"
+
+
 # ── handle_webhook ──────────────────────────────────────────────
 
 

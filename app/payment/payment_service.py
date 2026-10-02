@@ -146,11 +146,18 @@ class PaymentService:
                 f"결제 금액 불일치: 요청 {req.amount}원 ≠ 주문 {order.total_amount}원"
             )
 
-        result: TossConfirmResult = await self._gateway.confirm(
-            payment_key=req.payment_key,
-            order_id=req.order_id,
-            amount=order.total_amount,  # req.amount 는 검증에만 사용, 실제 전달은 서버 신뢰값
-        )
+        try:
+            result: TossConfirmResult = await self._gateway.confirm(
+                payment_key=req.payment_key,
+                order_id=req.order_id,
+                amount=order.total_amount,  # req.amount 는 검증에만 사용, 실제 전달은 서버 신뢰값
+            )
+        except PaymentFailedError as exc:
+            # PG 가 명시적으로 거절한 경우만 FAILED 로 고착 — 네트워크 불명(Unknown)은
+            # 성공 여부를 모르므로 상태를 건드리지 않고 그대로 전파해 재시도를 유도한다.
+            ready_payment.status = PaymentStatus.FAILED
+            ready_payment.fail_reason = str(exc)
+            raise
 
         await self._repo.update_status_paid(ready_payment, result)
         await self._repo.update_order_paid(order)

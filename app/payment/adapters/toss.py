@@ -74,7 +74,12 @@ class TossPaymentGateway:
         order_id: str,
         amount: int,
     ) -> TossConfirmResult:
-        headers = {**_auth_header(), "Content-Type": "application/json"}
+        headers = {
+            **_auth_header(),
+            "Content-Type": "application/json",
+            # 네트워크 재시도로 인한 이중 승인 방지.
+            "Idempotency-Key": f"confirm-{payment_key}",
+        }
         payload = {
             "paymentKey": payment_key,
             "orderId": order_id,
@@ -88,7 +93,7 @@ class TossPaymentGateway:
             raise PaymentGatewayUnknownError() from exc
 
         if resp.status_code != 200:
-            raise PaymentFailedError(f"Toss confirm 실패: {resp.status_code}")
+            _raise_toss_failure(resp, "Toss confirm 실패")
 
         data = resp.json()
         # 즉시 승인되는 수단만 취급한다 (카드/간편결제/실시간계좌이체 → DONE).

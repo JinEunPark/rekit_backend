@@ -146,6 +146,52 @@ async def test_confirm_4xx_response_raises_payment_failed_error() -> None:
             )
 
 
+async def test_confirm_4xx_includes_toss_error_code() -> None:
+    """승인 거절(4xx) 시 토스 {code, message} 를 담아 PaymentFailedError (cancel과 동일 패턴)."""
+    gateway = _make_gateway()
+    bad = MagicMock()
+    bad.status_code = 400
+    bad.json.return_value = {
+        "code": "REJECT_CARD_COMPANY",
+        "message": "카드사에서 승인을 거절했습니다.",
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=bad)
+
+    with (
+        patch("app.payment.adapters.toss.settings") as mock_settings,
+        patch("httpx.AsyncClient", return_value=mock_client),
+    ):
+        mock_settings.toss_secret_key = "test_secret"
+        with pytest.raises(PaymentFailedError, match="REJECT_CARD_COMPANY"):
+            await gateway.confirm(payment_key="k", order_id="RK-1", amount=100_000)
+
+
+async def test_confirm_sends_idempotency_key_header() -> None:
+    """재시도 시 이중 승인을 막는 Idempotency-Key 헤더를 보낸다 (cancel과 동일 패턴)."""
+    gateway = _make_gateway()
+    mock_resp = _mock_200_response()
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=mock_resp)
+
+    with (
+        patch("app.payment.adapters.toss.settings") as mock_settings,
+        patch("httpx.AsyncClient", return_value=mock_client),
+    ):
+        mock_settings.toss_secret_key = "test_secret"
+        await gateway.confirm(payment_key="toss_key_abc", order_id="RK-1", amount=100_000)
+
+    _, kwargs = mock_client.post.call_args
+    assert "Idempotency-Key" in kwargs["headers"]
+    assert "toss_key_abc" in kwargs["headers"]["Idempotency-Key"]
+
+
 async def test_confirm_5xx_response_raises_payment_failed_error() -> None:
     """5xx 응답 시 PaymentFailedError가 발생한다."""
     gateway = _make_gateway()
