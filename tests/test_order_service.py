@@ -224,6 +224,12 @@ class FakeOrderRepository:
         if product_id in self._products:
             self._products[product_id].stock += quantity
 
+    async def get_pending_orders_by_user(self, user_id: int) -> list[Order]:
+        return [
+            o for o in self._orders
+            if o.user_id == user_id and o.status == OrderStatus.PENDING
+        ]
+
 
 # ── 헬퍼 ────────────────────────────────────────────────────────────
 
@@ -234,6 +240,7 @@ class _SpyPaymentService:
     def __init__(self, *, raises: Exception | None = None) -> None:
         self.raises = raises
         self.calls: list[dict[str, object]] = []
+        self.released: list[int] = []
 
     async def cancel_payment(
         self, order_id: int, *, reason: str, cancel_amount: int | None = None
@@ -243,6 +250,10 @@ class _SpyPaymentService:
         )
         if self.raises is not None:
             raise self.raises
+
+    async def release_pending_order(self, order_id: int) -> bool:
+        self.released.append(order_id)
+        return True
 
 
 def _make_service(
@@ -1031,3 +1042,78 @@ class TestExpireAbandonedOrder:
 
         # Assert: 락 재조회 후 CANCELLED → increment_stock 호출 없음
         assert repo.increment_calls == []
+
+
+# ── 재주문 시 방치된 내 PENDING 주문 정리 ─────────────────────────────
+
+
+def _pending_order_holding(product_id: int, *, user_id: int, order_id: int) -> Order:
+    order = make_order(user_id=user_id, status=OrderStatus.PENDING, order_id=order_id)
+    order.order_number = f"RK-26101600{order_id:02d}"
+    order.items = [
+        OrderItem(
+            product_id=product_id,
+            product_title_snapshot="상품",
+            price_snapshot=300_000,
+            quantity=1,
+        )
+    ]
+    return order
+
+
+_RETRY_REQ = CreateOrderRequest(
+    items=[OrderItemRequest(product_id=1, quantity=1)],
+    address_id=1,
+    shipping_method=ShipmentMethod.PARCEL,
+)
+
+
+class TestReleaseAbandonedOnCreate:
+    async def test_create_order_does_not_release_other_users_pending_order(self) -> None:
+        """다른 사용자의 결제 대기 주문은 건드리지 않는다 — 재고 부족이 그대로 유지."""
+        others = _pending_order_holding(1, user_id=2, order_id=10)
+        service = _make_service(
+            products=[make_product(stock=0)], addresses=[make_address()], orders=[others]
+        )
+
+        with pytest.raises(OutOfStockError):
+            await service.create_order(user_id=1, req=_RETRY_REQ, identity_verified=True)
+        assert others.status == OrderStatus.PENDING
+
+    async def test_create_order_releases_own_pending_order_then_succeeds(self) -> None:
+        """결제창을 닫고 다시 결제 — 내 이전 PENDING 주문이 취소되고 재고가 풀려 통과."""
+        mine = _pending_order_holding(1, user_id=1, order_id=10)
+        repo = FakeOrderRepository(
+            products=[make_product(stock=0)], addresses=[make_address()], orders=[mine]
+        )
+        service = OrderService(repo)  # type: ignore[arg-type]
+
+        result = await service.create_order(user_id=1, req=_RETRY_REQ, identity_verified=True)
+
+        assert mine.status == OrderStatus.CANCELLED
+        assert result.status == OrderStatus.PENDING
+        assert repo._products[1].stock == 0
+
+    async def test_create_order_delegates_release_to_payment_service(self) -> None:
+        """PG 연동 시엔 토스 실상태 확인이 필요하므로 payment_service 에 정리를 위임한다."""
+        mine = _pending_order_holding(1, user_id=1, order_id=10)
+        spy = _SpyPaymentService()
+        service = _make_service(
+            products=[make_product(stock=5)], addresses=[make_address()],
+            orders=[mine], payment_service=spy,
+        )
+
+        await service.create_order(user_id=1, req=_RETRY_REQ, identity_verified=True)
+
+        assert spy.released == [10]
+
+    async def test_get_order_expire_delegates_to_payment_service(self) -> None:
+        """30분 만료도 같은 안전 정리 경로를 쓴다."""
+        order = _pending_order_holding(1, user_id=1, order_id=10)
+        order.created_at = datetime.now(UTC) - timedelta(minutes=31)
+        spy = _SpyPaymentService()
+        service = _make_service(orders=[order], payment_service=spy)
+
+        await service.get_order(user_id=1, order_number=order.order_number)
+
+        assert spy.released == [10]

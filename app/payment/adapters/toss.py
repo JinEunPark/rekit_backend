@@ -3,6 +3,7 @@
 `PaymentGateway` Protocol 구현체. 토스페이먼츠 코어 API(REST)를 직접 호출한다.
 - confirm: POST /v1/payments/confirm — 프론트 성공 콜백 후 서버 승인
 - get_payment: GET /v1/payments/{paymentKey} — 웹훅 수신 후 실제 상태 재확인
+- get_payment_by_order_id: GET /v1/payments/orders/{orderId} — 방치 주문 정리 전 실제 상태 확인
 
 인증은 시크릿 키 Basic 인증(`base64(secretKey + ":")`) — `settings.toss_secret_key`.
 """
@@ -11,7 +12,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import httpx
 
@@ -57,6 +58,23 @@ def _parse_toss_datetime(raw: str | None) -> datetime | None:
     if not raw:
         return None
     return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+
+
+def _parse_payment(data: dict[str, Any], *, fallback_payment_key: str) -> TossPaymentResult:
+    """토스 Payment 객체(결제 조회 응답)를 TossPaymentResult 로."""
+    card = data.get("card") or {}
+    return TossPaymentResult(
+        status=data.get("status", ""),
+        method=data.get("method", ""),
+        pg_tid=data.get("paymentKey") or fallback_payment_key,
+        total_amount=data.get("totalAmount", 0) or 0,
+        balance_amount=data.get("balanceAmount", 0) or 0,
+        approved_at=_parse_toss_datetime(data.get("approvedAt")),
+        card_company=card.get("issuerCode"),
+        card_last4=_card_last4(card),
+        installment_months=card.get("installmentPlanMonths", 0) or 0,
+        approval_number=card.get("approveNo"),
+    )
 
 
 def _card_last4(card: dict[str, object]) -> str | None:
@@ -118,32 +136,27 @@ class TossPaymentGateway:
         )
 
     async def get_payment(self, *, payment_key: str) -> TossPaymentResult:
-        try:
-            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-                resp = await client.get(
-                    f"{_TOSS_API_BASE}/{payment_key}", headers=_auth_header()
-                )
-        except httpx.TransportError as exc:
-            raise PaymentGatewayUnknownError() from exc
-
+        resp = await self._get(f"{_TOSS_API_BASE}/{payment_key}")
         if resp.status_code != 200:
             # 조회 실패 — 상태 불명. 웹훅을 재시도시켜야 하므로 Unknown 으로.
             raise PaymentGatewayUnknownError()
+        return _parse_payment(resp.json(), fallback_payment_key=payment_key)
 
-        data = resp.json()
-        card = data.get("card") or {}
-        return TossPaymentResult(
-            status=data.get("status", ""),
-            method=data.get("method", ""),
-            pg_tid=data.get("paymentKey") or payment_key,
-            total_amount=data.get("totalAmount", 0) or 0,
-            balance_amount=data.get("balanceAmount", 0) or 0,
-            approved_at=_parse_toss_datetime(data.get("approvedAt")),
-            card_company=card.get("issuerCode"),
-            card_last4=_card_last4(card),
-            installment_months=card.get("installmentPlanMonths", 0) or 0,
-            approval_number=card.get("approveNo"),
-        )
+    async def get_payment_by_order_id(self, *, order_id: str) -> TossPaymentResult | None:
+        resp = await self._get(f"{_TOSS_API_BASE}/orders/{order_id}")
+        if resp.status_code == 404:
+            # 결제창에서 인증 전에 이탈하면 토스에 결제 자체가 생성되지 않는다
+            return None
+        if resp.status_code != 200:
+            raise PaymentGatewayUnknownError()
+        return _parse_payment(resp.json(), fallback_payment_key="")
+
+    async def _get(self, url: str) -> httpx.Response:
+        try:
+            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+                return await client.get(url, headers=_auth_header())
+        except httpx.TransportError as exc:
+            raise PaymentGatewayUnknownError() from exc
 
     async def cancel(
         self,

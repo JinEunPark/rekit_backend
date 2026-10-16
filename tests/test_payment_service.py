@@ -102,7 +102,13 @@ class _FakeGateway:
         payment_total_amount: int = 300_000,
         get_payment_raises: bool = False,
         cancel_raises: Exception | None = None,
+        order_lookup_status: str | None = None,
+        order_lookup_raises: bool = False,
     ) -> None:
+        # get_payment_by_order_id 가 반환할 토스 상태 — None 이면 토스에 결제 없음(404)
+        self.order_lookup_status = order_lookup_status
+        self.order_lookup_raises = order_lookup_raises
+        self.order_lookup_calls: list[str] = []
         self.should_fail = should_fail
         self.should_timeout = should_timeout
         # get_payment(웹훅 재조회)이 반환할 토스 결제 상태
@@ -143,6 +149,25 @@ class _FakeGateway:
             pg_tid=payment_key,
             total_amount=self.payment_total_amount,
             balance_amount=0,
+            approved_at=datetime.now(UTC),
+            card_company="신한카드",
+            card_last4="1234",
+            installment_months=0,
+            approval_number="12345678",
+        )
+
+    async def get_payment_by_order_id(self, *, order_id: str) -> TossPaymentResult | None:
+        self.order_lookup_calls.append(order_id)
+        if self.order_lookup_raises:
+            raise PaymentGatewayUnknownError()
+        if self.order_lookup_status is None:
+            return None
+        return TossPaymentResult(
+            status=self.order_lookup_status,
+            method="카드",
+            pg_tid="toss_pk_lost_response",
+            total_amount=self.payment_total_amount,
+            balance_amount=self.payment_total_amount,
             approved_at=datetime.now(UTC),
             card_company="신한카드",
             card_last4="1234",
@@ -200,6 +225,9 @@ class _FakePaymentRepo:
     async def get_by_pg_tid(self, pg_tid: str) -> Payment | None:
         self.unlocked_pg_tid_calls += 1
         return next((p for p in self._payments if p.pg_tid == pg_tid), None)
+
+    async def get_order_id_by_pg_tid(self, pg_tid: str) -> int | None:
+        return next((p.order_id for p in self._payments if p.pg_tid == pg_tid), None)
 
     async def get_by_pg_tid_with_lock(self, pg_tid: str) -> Payment | None:
         self.locked_pg_tid_calls += 1
@@ -1260,3 +1288,157 @@ async def test_cancel_payment_propagates_gateway_rejection() -> None:
         await service.cancel_payment(1, reason="취소")
 
     assert paid.status == PaymentStatus.PAID  # 전환 안 됨
+
+
+# ── release_pending_order (방치된 PENDING 주문 안전 정리) ─────────────
+
+
+def _release_fixture(
+    *,
+    order_status: OrderStatus = OrderStatus.PENDING,
+    with_ready_payment: bool = True,
+    gateway: _FakeGateway | None = None,
+) -> tuple[PaymentService, _FakePaymentRepo, _FakeGateway, Order, list[Payment]]:
+    order = _order_with_item(status=order_status)
+    payments = [make_payment()] if with_ready_payment else []
+    repo = _FakePaymentRepo([order], payments)
+    gw = gateway or _FakeGateway()
+    service = PaymentService(repo, gw, _FakeEmailSender())  # type: ignore[arg-type]
+    return service, repo, gw, order, payments
+
+
+async def test_release_pending_order_not_pending_is_noop() -> None:
+    """이미 PAID 인 주문은 건드리지 않는다."""
+    service, repo, gw, order, _ = _release_fixture(order_status=OrderStatus.PAID)
+
+    released = await service.release_pending_order(order.id)
+
+    assert released is False
+    assert order.status == OrderStatus.PAID
+    assert repo.increment_calls == []
+    assert gw.order_lookup_calls == []
+
+
+async def test_release_pending_order_gateway_unknown_keeps_order() -> None:
+    """토스 조회가 실패하면 결제 여부를 모르므로 취소하지 않는다 (다음에 재시도)."""
+    service, repo, _, order, _ = _release_fixture(
+        gateway=_FakeGateway(order_lookup_raises=True)
+    )
+
+    released = await service.release_pending_order(order.id)
+
+    assert released is False
+    assert order.status == OrderStatus.PENDING
+    assert repo.increment_calls == []
+
+
+async def test_release_pending_order_toss_done_confirms_instead_of_cancel() -> None:
+    """승인은 됐는데 confirm 응답이 유실된 경우 — 취소하지 않고 결제 완료로 확정한다."""
+    service, repo, _, order, payments = _release_fixture(
+        gateway=_FakeGateway(order_lookup_status="DONE")
+    )
+
+    released = await service.release_pending_order(order.id)
+
+    assert released is False
+    assert order.status == OrderStatus.PAID
+    assert payments[0].status == PaymentStatus.PAID
+    assert payments[0].pg_tid == "toss_pk_lost_response"
+    assert repo.increment_calls == []
+
+
+async def test_release_pending_order_without_ready_payment_skips_toss_and_cancels() -> None:
+    """init 전(결제창 미오픈)이면 토스에 물을 필요 없이 바로 취소 + 재고 복구."""
+    service, repo, gw, order, _ = _release_fixture(with_ready_payment=False)
+
+    released = await service.release_pending_order(order.id)
+
+    assert released is True
+    assert order.status == OrderStatus.CANCELLED
+    assert order.cancelled_at is not None
+    assert repo.increment_calls == [(1, 2)]
+    assert gw.order_lookup_calls == []
+
+
+async def test_release_pending_order_toss_not_found_cancels() -> None:
+    """결제창만 열고 인증 전 이탈(토스 404) — 취소 + 재고 복구."""
+    service, repo, gw, order, _ = _release_fixture()
+
+    released = await service.release_pending_order(order.id)
+
+    assert released is True
+    assert order.status == OrderStatus.CANCELLED
+    assert repo.increment_calls == [(1, 2)]
+    assert gw.order_lookup_calls == [order.order_number]
+
+
+@pytest.mark.parametrize("toss_status", ["ABORTED", "EXPIRED", "READY", "IN_PROGRESS"])
+async def test_release_pending_order_unapproved_toss_status_cancels(toss_status: str) -> None:
+    """승인 전 상태면 취소해도 안전 — 이후 confirm 은 주문이 PENDING 이 아니라 거절된다."""
+    service, repo, _, order, _ = _release_fixture(
+        gateway=_FakeGateway(order_lookup_status=toss_status)
+    )
+
+    released = await service.release_pending_order(order.id)
+
+    assert released is True
+    assert order.status == OrderStatus.CANCELLED
+    assert repo.increment_calls == [(1, 2)]
+
+
+# ── webhook: 취소된 주문에 늦게 도착한 DONE → 자동 환불 ───────────────
+
+
+async def test_webhook_done_on_cancelled_order_refund_unknown_propagates() -> None:
+    """환불 요청 결과가 불명이면 예외를 전파해 토스가 웹훅을 재시도하게 한다."""
+    order = _order_with_item(status=OrderStatus.CANCELLED)
+    payment = make_payment(status=PaymentStatus.READY, pg_tid="pk_late")
+    repo = _FakePaymentRepo([order], [payment])
+    gw = _FakeGateway(cancel_raises=PaymentGatewayUnknownError())
+    service = PaymentService(repo, gw, _FakeEmailSender())  # type: ignore[arg-type]
+
+    with pytest.raises(PaymentGatewayUnknownError):
+        await service.handle_webhook(
+            TossWebhookPayload(eventType="PAYMENT_STATUS_CHANGED", data={"paymentKey": "pk_late"})
+        )
+
+
+async def test_webhook_done_on_cancelled_order_refunds_automatically() -> None:
+    """정리(취소)된 주문이 토스에선 승인됨 — 돈만 빠진 상태이므로 즉시 PG 전액 취소.
+
+    주문은 CANCELLED 그대로, 재고는 이미 복구돼 있으므로 다시 건드리지 않는다.
+    """
+    order = _order_with_item(status=OrderStatus.CANCELLED)
+    payment = make_payment(status=PaymentStatus.READY, pg_tid="pk_late")
+    repo = _FakePaymentRepo([order], [payment])
+    gw = _FakeGateway()
+    service = PaymentService(repo, gw, _FakeEmailSender())  # type: ignore[arg-type]
+
+    await service.handle_webhook(
+        TossWebhookPayload(eventType="PAYMENT_STATUS_CHANGED", data={"paymentKey": "pk_late"})
+    )
+
+    assert [c["payment_key"] for c in gw.cancel_calls] == ["pk_late"]
+    assert payment.status == PaymentStatus.CANCELLED
+    assert order.status == OrderStatus.CANCELLED
+    assert repo.increment_calls == []
+
+
+async def test_webhook_done_fallback_on_cancelled_order_refunds_with_remote_key() -> None:
+    """confirm 이 롤백돼 pg_tid 가 없는 경우 — orderId fallback 으로 찾아 토스 키로 환불."""
+    order = _order_with_item(status=OrderStatus.CANCELLED)
+    payment = make_payment(status=PaymentStatus.READY, pg_tid=None)
+    repo = _FakePaymentRepo([order], [payment])
+    gw = _FakeGateway()
+    service = PaymentService(repo, gw, _FakeEmailSender())  # type: ignore[arg-type]
+
+    await service.handle_webhook(
+        TossWebhookPayload(
+            eventType="PAYMENT_STATUS_CHANGED",
+            data={"paymentKey": "pk_remote", "orderId": order.order_number},
+        )
+    )
+
+    assert [c["payment_key"] for c in gw.cancel_calls] == ["pk_remote"]
+    assert payment.pg_tid == "pk_remote"
+    assert payment.status == PaymentStatus.CANCELLED

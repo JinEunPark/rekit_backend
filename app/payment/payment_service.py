@@ -8,7 +8,11 @@ from datetime import UTC, datetime
 from fastapi import BackgroundTasks
 
 from app.common.email import EmailSender
-from app.core.exceptions import OrderNotFoundError, PaymentFailedError
+from app.core.exceptions import (
+    OrderNotFoundError,
+    PaymentFailedError,
+    PaymentGatewayUnknownError,
+)
 from app.order.models import OrderStatus
 from app.payment.adapters.ports import (
     PaymentGateway,
@@ -35,6 +39,9 @@ _TOSS_ABORTED = "ABORTED"
 _TOSS_EXPIRED = "EXPIRED"
 # 승인 전 과도기 상태 — 웹훅으로 도착해도 확정 전이므로 무시하고 다음 웹훅을 기다린다.
 _TOSS_PENDING_STATUSES = frozenset({"READY", "IN_PROGRESS", "WAITING_FOR_DEPOSIT"})
+# 방치 주문 정리 시 "승인되지 않았음" 이 확실한 토스 상태. READY/IN_PROGRESS 는 승인 전이고,
+# 승인은 우리 confirm 호출로만 일어나는데 confirm 은 PENDING 아닌 주문을 거절하므로 안전하다.
+_TOSS_SAFE_TO_RELEASE = frozenset({"READY", "IN_PROGRESS", "ABORTED", "EXPIRED", "CANCELED"})
 
 
 class PaymentService:
@@ -112,7 +119,9 @@ class PaymentService:
         5. payment PAID 전환 + order PAID 전환
         6. 결제 완료 이메일 발송 (BackgroundTasks)
         """
-        order = await self._repo.get_order_by_number(req.order_id)
+        # 주문 FOR UPDATE — PG 승인 대기 중에 취소/만료가 끼어들어 재고를 복구한 뒤
+        # 이 트랜잭션이 PAID 로 덮어쓰는 이중 판매를 막는다. 락 순서는 항상 주문 → 결제.
+        order = await self._repo.get_order_by_number_with_lock(req.order_id)
         if order is None:
             raise OrderNotFoundError()
 
@@ -211,18 +220,23 @@ class PaymentService:
             remote.status,
         )
 
-        # FOR UPDATE 락 — 웹훅 재전송으로 동일 이벤트가 동시에 도착할 때 이중 처리 방지
-        payment = await self._repo.get_by_pg_tid_with_lock(payment_key)
-        if payment is None:
+        # FOR UPDATE 락 — 웹훅 재전송으로 동일 이벤트가 동시에 도착할 때 이중 처리 방지.
+        # confirm/취소와 데드락이 나지 않도록 락 순서는 항상 주문 → 결제.
+        order_id = await self._repo.get_order_id_by_pg_tid(payment_key)
+        if order_id is not None:
+            await self._repo.get_order_by_id_with_lock(order_id)
+            payment = await self._repo.get_by_pg_tid_with_lock(payment_key)
+        else:
             # confirm이 아직 실행 안 된 경우 pg_tid가 DB에 없을 수 있음 — orderId로 fallback
             order_number: str | None = data.get("orderId")
             if not order_number:
                 return
+            await self._repo.get_order_by_number_with_lock(order_number)
             payment = await self._repo.get_ready_payment_by_order_number_with_lock(
                 order_number
             )
-            if payment is None:
-                return
+        if payment is None:
+            return
 
         await self._apply_remote_payment_status(payment, remote)
 
@@ -258,8 +272,12 @@ class PaymentService:
                     payment.amount,
                 )
                 return
-            payment.status = PaymentStatus.PAID
             payment.pg_tid = payment.pg_tid or remote.pg_tid  # fallback 경로일 때만 채움
+            order = await self._repo.get_order_by_id(payment.order_id)
+            if order is not None and order.status == OrderStatus.CANCELLED:
+                await self._refund_late_approval(payment, order.order_number)
+                return
+            payment.status = PaymentStatus.PAID
             # 웹훅이 confirm 보다 먼저 도착한 경우 영수증 메타데이터도 여기서 채운다.
             if payment.paid_at is None:
                 payment.paid_at = remote.approved_at
@@ -267,7 +285,6 @@ class PaymentService:
                 payment.card_last4 = remote.card_last4
                 payment.installment_months = remote.installment_months
                 payment.approval_number = remote.approval_number
-            order = await self._repo.get_order_by_id(payment.order_id)
             if order is not None and order.status == OrderStatus.PENDING:
                 await self._repo.update_order_paid(order)
         elif status == _TOSS_CANCELED:
@@ -315,6 +332,60 @@ class PaymentService:
             cancel_amount=cancel_amount,
         )
         await self._repo.update_status_cancelled(paid, result)
+
+    async def _refund_late_approval(self, payment: Payment, order_number: str) -> None:
+        """이미 취소(정리)된 주문인데 토스에선 승인된 결제 — 돈만 빠진 상태라 즉시 전액 취소.
+
+        재고는 주문 취소 때 이미 복구됐으므로 건드리지 않는다. 환불 결과가 불명이면
+        예외가 전파돼 웹훅이 5xx 로 끝나고 토스가 재시도한다.
+        """
+        logger.error(
+            "취소된 주문의 결제 승인 감지 — 자동 환불: order=%s payment_key=%s",
+            order_number,
+            payment.pg_tid,
+        )
+        if not payment.pg_tid:
+            raise PaymentFailedError("결제 거래 ID(pg_tid)가 없어 자동 환불할 수 없습니다.")
+        payment.status = PaymentStatus.PAID
+        result = await self._gateway.cancel(
+            payment_key=payment.pg_tid, reason="취소된 주문의 결제 승인 — 자동 환불"
+        )
+        await self._repo.update_status_cancelled(payment, result)
+
+    async def release_pending_order(self, order_id: int) -> bool:
+        """결제가 끝나지 않은 PENDING 주문을 취소하고 재고를 복구한다. 취소했으면 True.
+
+        원칙: 결제 여부가 불확실하면 취소하지 않는다.
+        - 결제창을 연 적이 있으면(READY 결제 존재) 토스에 orderId 로 실제 상태를 조회한다
+        - 토스가 DONE 이면 confirm 응답이 유실된 것 — 취소 대신 결제 완료로 확정
+        - 조회 실패/알 수 없는 상태면 그대로 두고 다음 기회(스케줄러)에 다시 시도
+        """
+        order = await self._repo.get_order_by_id_with_lock(order_id)
+        if order is None or order.status != OrderStatus.PENDING:
+            return False
+
+        payments = await self._repo.get_by_order_id_with_lock(order.id)
+        ready = next((p for p in payments if p.status == PaymentStatus.READY), None)
+        if ready is not None:
+            try:
+                remote = await self._gateway.get_payment_by_order_id(
+                    order_id=order.order_number
+                )
+            except PaymentGatewayUnknownError:
+                logger.warning("방치 주문 정리 보류 — 토스 조회 실패: %s", order.order_number)
+                return False
+            if remote is not None and remote.status == _TOSS_DONE:
+                logger.warning("방치 주문이 토스에선 승인 완료 — 결제 확정: %s", order.order_number)
+                await self._apply_remote_payment_status(ready, remote)
+                return False
+            if remote is not None and remote.status not in _TOSS_SAFE_TO_RELEASE:
+                logger.warning(
+                    "방치 주문 정리 보류 — 토스 상태 %s: %s", remote.status, order.order_number
+                )
+                return False
+
+        await self._restore_order_stock_and_cancel(order.id)
+        return True
 
     async def _restore_order_stock_and_cancel(self, order_id: int) -> None:
         """결제 실패/취소 웹훅 시 주문을 취소하고 재고를 복구한다.

@@ -235,14 +235,18 @@ async def get_favorites_service(
     return FavoritesService(FavoritesRepository(session))
 
 
+def build_payment_gateway() -> PaymentGateway:
+    """PG 어댑터 와이어링 지점 — 요청 경로와 백그라운드 스위퍼가 같이 쓴다."""
+    from app.payment.adapters.toss import TossPaymentGateway
+
+    return TossPaymentGateway()
+
+
 async def get_payment_service(
     session: AsyncSession = Depends(db_session),
     email_sender: EmailSender = Depends(get_email_sender),
 ) -> PaymentService:
-    from app.payment.adapters.toss import TossPaymentGateway
-
-    gateway: PaymentGateway = TossPaymentGateway()
-    return PaymentService(PaymentRepository(session), gateway, email_sender)
+    return PaymentService(PaymentRepository(session), build_payment_gateway(), email_sender)
 
 
 async def get_order_service(

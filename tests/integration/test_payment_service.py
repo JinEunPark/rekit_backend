@@ -10,14 +10,17 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi import BackgroundTasks
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog.models import ConditionGrade, Product, ProductStatus
 from app.core.database import async_session_factory
 from app.order.models import Order, OrderItem, OrderStatus
+from app.order.order_repository import OrderRepository
+from app.order.order_service import OrderService
 from app.order.shipment import ShipmentMethod
-from app.payment.adapters.ports import TossConfirmResult, TossPaymentResult
+from app.payment.adapters.ports import TossCancelResult, TossConfirmResult, TossPaymentResult
 from app.payment.models import Payment, PaymentMethod, PaymentStatus, PgProvider
 from app.payment.payment_repository import PaymentRepository
 from app.payment.payment_schemas import PaymentConfirmRequest, TossWebhookPayload
@@ -524,7 +527,10 @@ async def test_webhook_fallback_and_confirm_race_does_not_double_process(
                 await service.handle_webhook(webhook_payload)
                 await session.commit()
 
-        await asyncio.gather(_confirm(), _webhook(), return_exceptions=True)
+        results = await asyncio.gather(_confirm(), _webhook(), return_exceptions=True)
+
+        # 락 순서(주문 → 결제)가 어긋나면 Postgres 가 데드락으로 한쪽을 중단시킨다
+        assert not any(isinstance(r, DBAPIError) for r in results), results
 
         # 최종 결제 상태 확인
         async with async_session_factory() as verify_session:
@@ -550,4 +556,124 @@ async def test_webhook_fallback_and_confirm_race_does_not_double_process(
             await cleanup.execute(delete(Payment).where(Payment.order_id == order_id))
             await cleanup.execute(delete(OrderItem).where(OrderItem.order_id == order_id))
             await cleanup.execute(delete(Order).where(Order.order_number == order_number))
+            await cleanup.commit()
+
+
+class _GatedConfirmGateway:
+    """confirm 도중 멈춰서, 그 사이 다른 트랜잭션(취소)이 끼어들 틈을 만드는 스텁."""
+
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.cancel_calls: int = 0
+
+    async def confirm(self, *, payment_key: str, order_id: str, amount: int) -> TossConfirmResult:
+        del order_id, amount
+        self.entered.set()
+        await self.release.wait()
+        return TossConfirmResult(
+            method="카드",
+            pg_tid=payment_key,
+            paid_at=datetime.now(UTC),
+            card_company="신한카드",
+            card_last4="1234",
+            installment_months=0,
+            approval_number="00000000",
+        )
+
+    async def get_payment(self, *, payment_key: str) -> TossPaymentResult:
+        return _toss_payment_result(payment_key, "DONE")
+
+    async def cancel(
+        self, *, payment_key: str, reason: str, cancel_amount: int | None = None
+    ) -> TossCancelResult:
+        del payment_key, reason, cancel_amount
+        self.cancel_calls += 1
+        return TossCancelResult(
+            status="CANCELED", cancelled_amount=10_000, balance_amount=0, transaction_key="t"
+        )
+
+
+@pytest.mark.asyncio
+async def test_confirm_and_cancel_race_never_leaves_paid_order_with_restored_stock(
+    db_session: AsyncSession,
+) -> None:
+    """confirm 이 PG 승인 대기 중일 때 구매자 취소가 들어와도 이중 판매가 생기지 않는다.
+
+    버그: confirm 이 주문을 락 없이 읽으면 취소가 먼저 커밋돼 재고가 복구되고, 이어서
+    confirm 이 주문을 PAID 로 덮어써 "돈은 빠졌고 재고는 복구된" 상태가 된다.
+
+    Given: PENDING 주문 + READY 결제, 재고 0 (주문이 1개를 잡고 있음)
+    When:  confirm 이 gateway.confirm 안에서 대기하는 동안 cancel_order 실행
+    Then:  취소는 confirm 이 끝날 때까지 대기 → PAID 주문을 취소하며 PG 환불 1회 + 재고 1회 복구
+    """
+    # Arrange
+    user = await _get_user(db_session)
+    product = await _make_product(db_session, stock=0)
+    order, _ = await _make_pending_order_with_payment(
+        db_session,
+        order_number="RK-CFMCANCEL0001",
+        user_id=user.id,
+        product_id=product.id,
+        quantity=1,
+        pg_tid="",
+    )
+    order_id, order_number, product_id, user_id = order.id, order.order_number, product.id, user.id
+    await db_session.execute(
+        update(Payment).where(Payment.order_id == order_id).values(pg_tid=None)
+    )
+    await db_session.commit()
+
+    gateway = _GatedConfirmGateway()
+    confirm_req = PaymentConfirmRequest(
+        payment_key="toss_pk_cfm_cancel", order_id=order_number, amount=10_000
+    )
+
+    def _payment_service(session: AsyncSession) -> PaymentService:
+        return PaymentService(
+            PaymentRepository(session),
+            gateway,  # type: ignore[arg-type]
+            _NoopEmailSender(),  # type: ignore[arg-type]
+        )
+
+    try:
+
+        async def _confirm() -> None:
+            async with async_session_factory() as session:
+                await _payment_service(session).confirm_payment(confirm_req, BackgroundTasks())
+                await session.commit()
+
+        async def _cancel() -> None:
+            async with async_session_factory() as session:
+                service = OrderService(OrderRepository(session), _payment_service(session))
+                await service.cancel_order(user_id, order_number)
+                await session.commit()
+
+        # Act
+        confirm_task = asyncio.create_task(_confirm())
+        await asyncio.wait_for(gateway.entered.wait(), timeout=5)
+        cancel_task = asyncio.create_task(_cancel())
+        await asyncio.sleep(0.3)  # 버그가 있으면 이 사이에 취소가 커밋된다
+        gateway.release.set()
+        results = await asyncio.gather(confirm_task, cancel_task, return_exceptions=True)
+
+        # Assert
+        assert all(r is None for r in results), results
+        async with async_session_factory() as verify:
+            refreshed_order = (
+                await verify.execute(select(Order).where(Order.id == order_id))
+            ).scalar_one()
+            refreshed_product = (
+                await verify.execute(select(Product).where(Product.id == product_id))
+            ).scalar_one()
+        assert refreshed_order.status == OrderStatus.CANCELLED
+        assert refreshed_product.stock == 1
+        assert gateway.cancel_calls == 1, "PAID 로 확정된 뒤 취소됐으니 PG 환불이 1회 호출돼야 함"
+
+    finally:
+        async with async_session_factory() as cleanup:
+            await cleanup.execute(delete(Payment).where(Payment.order_id == order_id))
+            await cleanup.execute(delete(OrderItem).where(OrderItem.order_id == order_id))
+            await cleanup.execute(delete(Order).where(Order.id == order_id))
+            await cleanup.execute(delete(Product).where(Product.id == product_id))
             await cleanup.commit()

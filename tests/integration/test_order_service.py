@@ -13,13 +13,19 @@ import pytest
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.address.models import Address
 from app.catalog.models import ConditionGrade, Product, ProductStatus
 from app.core.database import async_session_factory
 from app.core.exceptions import OrderCancelForbiddenError
 from app.order.models import Order, OrderItem, OrderStatus
 from app.order.order_repository import OrderRepository
+from app.order.order_schemas import CreateOrderRequest, OrderItemRequest
 from app.order.order_service import OrderService
 from app.order.shipment import ShipmentMethod
+from app.payment.models import Payment, PaymentMethod
+from app.payment.payment_repository import PaymentRepository
+from app.payment.payment_schemas import PaymentInitRequest
+from app.payment.payment_service import PaymentService
 from app.user.models import User
 
 # ── 픽스처 헬퍼 ─────────────────────────────────────────────────────────
@@ -218,4 +224,104 @@ async def test_get_order_concurrent_abandonment_expires_stock_once(
                 delete(Order).where(Order.order_number == order_number)
             )
             await cleanup.execute(delete(Product).where(Product.id == product_id))
+            await cleanup.commit()
+
+
+class _TossNotFoundGateway:
+    """토스에 결제가 없음(결제창 인증 전 이탈)을 돌려주는 스텁."""
+
+    async def get_payment_by_order_id(self, *, order_id: str) -> None:
+        del order_id
+
+
+class _NoopEmailSender:
+    async def send(self, *, to: str, subject: str, body: str, **_: object) -> None:
+        del to, subject, body
+
+
+@pytest.mark.asyncio
+async def test_create_order_retry_releases_own_abandoned_pending_order(
+    db_session: AsyncSession,
+) -> None:
+    """결제창을 닫고 다시 결제: 이전 PENDING 주문이 정리돼 재주문이 바로 통과한다.
+
+    Given: 재고 1 상품으로 만든 PENDING 주문 A + READY 결제 (상품은 SOLD_OUT)
+    When:  같은 사용자가 같은 상품으로 다시 create_order
+    Then:  새 주문 B 생성 성공, A 는 CANCELLED, 재고는 B 가 잡아 0
+    """
+    # Arrange — 실 데이터 보호를 위해 전용 사용자 생성
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    user = User(
+        login_id=f"retry{suffix}",
+        email=f"retry{suffix}@example.com",
+        password_hash="x",
+        username="재시도테스트",
+        agreed_terms_at=datetime.now(UTC),
+        agreed_privacy_at=datetime.now(UTC),
+    )
+    db_session.add(user)
+    await db_session.flush()
+    address = Address(
+        user_id=user.id, recipient="재시도", phone="01000000000",
+        zipcode="12345", address1="테스트 주소",
+    )
+    db_session.add(address)
+    product = await _make_product(db_session, stock=1)
+    await db_session.flush()
+    user_id, address_id, product_id = user.id, address.id, product.id
+    await db_session.commit()
+
+    req = CreateOrderRequest(
+        items=[OrderItemRequest(product_id=product_id, quantity=1)],
+        address_id=address_id,
+        shipping_method=ShipmentMethod.PARCEL,
+    )
+
+    def _service(session: AsyncSession) -> OrderService:
+        payment_service = PaymentService(
+            PaymentRepository(session),
+            _TossNotFoundGateway(),  # type: ignore[arg-type]
+            _NoopEmailSender(),  # type: ignore[arg-type]
+        )
+        return OrderService(OrderRepository(session), payment_service)
+
+    try:
+        async with async_session_factory() as session:
+            first = await _service(session).create_order(user_id, req, identity_verified=True)
+            await session.commit()
+        async with async_session_factory() as session:
+            await PaymentService(
+                PaymentRepository(session),
+                _TossNotFoundGateway(),  # type: ignore[arg-type]
+                _NoopEmailSender(),  # type: ignore[arg-type]
+            ).init_payment(
+                user_id,
+                PaymentInitRequest(order_number=first.order_number, method=PaymentMethod.CARD),
+            )
+            await session.commit()
+
+        # Act
+        async with async_session_factory() as session:
+            second = await _service(session).create_order(user_id, req, identity_verified=True)
+            await session.commit()
+
+        # Assert
+        async with async_session_factory() as verify:
+            stmt = select(Order.order_number, Order.status).where(Order.user_id == user_id)
+            statuses = {number: status for number, status in (await verify.execute(stmt)).all()}
+            refreshed = (
+                await verify.execute(select(Product).where(Product.id == product_id))
+            ).scalar_one()
+        assert statuses[first.order_number] == OrderStatus.CANCELLED
+        assert statuses[second.order_number] == OrderStatus.PENDING
+        assert refreshed.stock == 0
+
+    finally:
+        async with async_session_factory() as cleanup:
+            order_ids = select(Order.id).where(Order.user_id == user_id)
+            await cleanup.execute(delete(Payment).where(Payment.order_id.in_(order_ids)))
+            await cleanup.execute(delete(Order).where(Order.user_id == user_id))
+            await cleanup.execute(delete(Address).where(Address.id == address_id))
+            await cleanup.execute(delete(Product).where(Product.id == product_id))
+            await cleanup.execute(delete(User).where(User.id == user_id))
             await cleanup.commit()

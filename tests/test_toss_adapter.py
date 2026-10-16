@@ -453,3 +453,58 @@ async def test_cancel_network_error_raises_gateway_unknown_error() -> None:
         mock_settings.toss_secret_key = "test_secret"
         with pytest.raises(PaymentGatewayUnknownError):
             await gateway.cancel(payment_key="toss_key_abc", reason="취소")
+
+
+# ── get_payment_by_order_id (방치 주문 정리 전 실상태 확인) ─────────────
+
+
+async def test_get_payment_by_order_id_404_returns_none() -> None:
+    """토스에 결제 자체가 없으면(결제창만 열고 인증 전 이탈) None — 취소해도 안전."""
+    gateway = _make_gateway()
+    not_found = MagicMock()
+    not_found.status_code = 404
+    mock_client = _client_with_get(not_found)
+
+    with (
+        patch("app.payment.adapters.toss.settings") as mock_settings,
+        patch("httpx.AsyncClient", return_value=mock_client),
+    ):
+        mock_settings.toss_secret_key = "test_secret"
+        result = await gateway.get_payment_by_order_id(order_id="RK-2610160001")
+
+    assert result is None
+
+
+async def test_get_payment_by_order_id_5xx_raises_gateway_unknown_error() -> None:
+    """404 외 실패는 상태 불명 — 정리하지 말고 다음에 다시 시도해야 한다."""
+    gateway = _make_gateway()
+    bad = MagicMock()
+    bad.status_code = 500
+    mock_client = _client_with_get(bad)
+
+    with (
+        patch("app.payment.adapters.toss.settings") as mock_settings,
+        patch("httpx.AsyncClient", return_value=mock_client),
+        pytest.raises(PaymentGatewayUnknownError),
+    ):
+        mock_settings.toss_secret_key = "test_secret"
+        await gateway.get_payment_by_order_id(order_id="RK-2610160001")
+
+
+async def test_get_payment_by_order_id_calls_orders_endpoint_and_parses() -> None:
+    """GET /v1/payments/orders/{orderId} 를 호출하고 결과를 TossPaymentResult 로 파싱한다."""
+    gateway = _make_gateway()
+    mock_client = _client_with_get(_mock_get_payment_response("DONE"))
+
+    with (
+        patch("app.payment.adapters.toss.settings") as mock_settings,
+        patch("httpx.AsyncClient", return_value=mock_client),
+    ):
+        mock_settings.toss_secret_key = "test_secret"
+        result = await gateway.get_payment_by_order_id(order_id="RK-2610160001")
+
+    assert result is not None
+    assert result.status == "DONE"
+    assert result.pg_tid == "toss_key_abc"
+    called_url = mock_client.get.call_args.args[0]
+    assert called_url.endswith("/v1/payments/orders/RK-2610160001")

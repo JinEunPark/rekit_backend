@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -14,7 +16,11 @@ from sqlalchemy.orm import selectinload
 from app.address.models import Address
 from app.catalog.catalog_utils import stock_decrement_status_case, stock_increment_status_case
 from app.catalog.models import Product
-from app.order.models import Order, OrderItem  # noqa: F401 — OrderItem used by relationship
+from app.order.models import (  # noqa: F401 — OrderItem used by relationship
+    Order,
+    OrderItem,
+    OrderStatus,
+)
 
 
 class OrderRepository:
@@ -66,6 +72,31 @@ class OrderRepository:
         result = await self._session.execute(
             stmt, execution_options={"populate_existing": True}
         )
+        return result.scalar_one_or_none()
+
+    async def get_pending_orders_by_user(self, user_id: int) -> list[Order]:
+        """사용자의 결제 대기(PENDING) 주문 목록. 락 없음 — 정리 시 개별로 락을 잡는다."""
+        result = await self._session.execute(
+            select(Order).where(
+                Order.user_id == user_id, Order.status == OrderStatus.PENDING
+            )
+        )
+        return list(result.scalars())
+
+    async def claim_stale_pending_order_id(
+        self, cutoff: datetime, *, exclude: list[int]
+    ) -> int | None:
+        """cutoff 이전에 만든 PENDING 주문 1건을 잠그고 ID 를 반환 (스위퍼용).
+
+        SKIP LOCKED — 다른 워커가 처리 중인 주문은 기다리지 않고 건너뛴다.
+        """
+        stmt = select(Order.id).where(
+            Order.status == OrderStatus.PENDING, Order.created_at < cutoff
+        )
+        if exclude:
+            stmt = stmt.where(Order.id.not_in(exclude))
+        stmt = stmt.order_by(Order.created_at).limit(1).with_for_update(skip_locked=True)
+        result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
     async def get_by_order_number_with_shipment(self, order_number: str) -> Order | None:

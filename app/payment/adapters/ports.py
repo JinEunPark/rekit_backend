@@ -80,6 +80,14 @@ class PaymentGateway(Protocol):
         """
         ...
 
+    async def get_payment_by_order_id(self, *, order_id: str) -> TossPaymentResult | None:
+        """orderId(order_number) 로 결제 조회. 방치된 PENDING 주문을 정리하기 전에 사용.
+
+        - 토스에 결제가 없으면(인증 전 이탈) None
+        - 그 외 조회 실패는 PaymentGatewayUnknownError — 상태 불명이므로 정리하면 안 된다
+        """
+        ...
+
     async def cancel(
         self,
         *,

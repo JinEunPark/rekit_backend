@@ -15,6 +15,10 @@ from app.payment.adapters.ports import TossCancelResult, TossConfirmResult
 from app.payment.models import Payment, PaymentStatus
 from app.user.models import User
 
+# 락 재조회는 identity map 에 이미 로드된 객체도 DB 최신값으로 덮어써야 한다 (JPA refresh 와 같음).
+# 없으면 같은 세션에서 먼저 읽은 주문의 낡은 status 로 더블체크해 버린다.
+_REFRESH = {"populate_existing": True}
+
 
 class PaymentRepository:
     """결제 DB 접근 객체. 모든 쿼리는 여기 모은다."""
@@ -37,13 +41,21 @@ class PaymentRepository:
     async def get_by_order_id_with_lock(self, order_id: int) -> list[Payment]:
         """FOR UPDATE 락으로 결제 목록 조회 — 동시 confirm 이중 호출 방지."""
         result = await self._session.execute(
-            select(Payment).where(Payment.order_id == order_id).with_for_update()
+            select(Payment).where(Payment.order_id == order_id).with_for_update(),
+            execution_options=_REFRESH,
         )
         return list(result.scalars().all())
 
     async def get_by_pg_tid(self, pg_tid: str) -> Payment | None:
         result = await self._session.execute(
             select(Payment).where(Payment.pg_tid == pg_tid)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_order_id_by_pg_tid(self, pg_tid: str) -> int | None:
+        """pg_tid 의 주문 ID 만 락 없이 조회 — 웹훅이 결제보다 주문을 먼저 잠그기 위해."""
+        result = await self._session.execute(
+            select(Payment.order_id).where(Payment.pg_tid == pg_tid)
         )
         return result.scalar_one_or_none()
 
@@ -99,7 +111,8 @@ class PaymentRepository:
     async def get_order_by_number_with_lock(self, order_number: str) -> Order | None:
         """FOR UPDATE 락으로 주문 조회 — init_payment에서 READY 확인+생성을 원자적으로 처리."""
         result = await self._session.execute(
-            select(Order).where(Order.order_number == order_number).with_for_update()
+            select(Order).where(Order.order_number == order_number).with_for_update(),
+            execution_options=_REFRESH,
         )
         return result.scalar_one_or_none()
 
@@ -115,7 +128,8 @@ class PaymentRepository:
             select(Order)
             .where(Order.id == order_id)
             .with_for_update()
-            .options(selectinload(Order.items))
+            .options(selectinload(Order.items)),
+            execution_options=_REFRESH,
         )
         return result.scalar_one_or_none()
 

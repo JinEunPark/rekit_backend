@@ -42,17 +42,32 @@
         (입금 전 주문 확정 방지). 실시간 계좌이체(BANK, 즉시 DONE)는 그대로 사용 가능
       - [ ] **부분취소 재고 정책** — `cancel_amount` 경로는 어댑터·서비스에 있으나 order/admin 은 전액만 호출.
         부분취소 시 라인별 재고 복구 정책 미정
-      - [ ] **방치된 PENDING 주문이 영원히 남는다 (프론트 항목과 짝 — `rekle/todo.md` 참고)**
-        - 현상: 주문 생성 시 재고를 먼저 깎는다. 결제창에서 이탈하면 주문은 `PENDING` 으로 남고 재고도 깎인 채다.
-        - 만료 로직은 있다 — `order_service.py:267 _expire_if_abandoned()` (30분 경과 시 CANCELLED + 재고 복구,
-          락 잡고 더블체크하므로 동시성은 안전).
-        - **문제는 호출 지점이 `get_order()` 단 한 곳(`order_service.py:193`)** 이라는 것. 즉 **그 주문의 상세를
-          누군가 다시 열어야만** 만료된다. 목록 조회(`get_order_list`)에선 안 돌고, 스케줄러도 없다.
-          구매자가 결제창 닫고 안 돌아오면 그 재고는 영구히 묶인다.
-        - 선택지: (a) 주문 목록 조회에서도 호출, (b) 상품 재고를 읽는 지점에서 만료 스윕,
-          (c) 주기 작업(APScheduler/cron)으로 일괄 만료. (c) 가 정석이나 스케줄러 인프라가 아직 없다.
-        - 검증: PENDING 주문을 만들고 `created_at` 을 31분 전으로 돌린 뒤, **상세를 열지 않은 상태에서**
-          재고가 복구되는지 확인
+      - [x] **방치된 PENDING 주문 정리 — 결제창 이탈/재시도 전 경우 대응 (2026-10-16 완료, 운영 수동 검증 남음)**
+        - 현상: 주문 생성 시 재고를 먼저 깎는다. 결제창을 닫거나 탭을 닫으면 주문은 `PENDING` + 재고 차감 상태로
+          남고, 다시 결제하면 상품이 `SOLD_OUT` 이라 `ProductUnavailableError`("현재 주문할 수 없는 상품").
+          기존 만료(`_expire_if_abandoned`)는 `get_order()` 에서만 돌아 사실상 정리되지 않았다.
+        - **원칙: 결제 여부가 불확실하면 취소하지 않는다** — READY 결제가 있으면 토스에 orderId 로 실상태를 조회한 뒤
+          정리. 최악이어도 "재고가 잠시 묶임" 이지 "돈 빠졌는데 주문 취소" 는 만들지 않는다.
+        - [x] **1. confirm 동시성 버그** — `confirm_payment` 가 주문을 락 없이 읽어서, 취소/만료와 동시에 돌면
+              토스 승인 성공 + 재고 복구 + `PAID` 덮어쓰기(이중 판매) 가능. 주문 `FOR UPDATE` 로 조회
+        - [x] **2. 안전 정리 함수** — 토스 어댑터 `get_payment_by_order_id` (`GET /v1/payments/orders/{orderId}`) +
+              `PaymentService.release_pending_order()`: READY 없음 → 취소 / 토스 404·ABORTED·EXPIRED·READY·IN_PROGRESS →
+              취소 / DONE → 결제 완료 처리 / 조회 실패 → skip
+        - [x] **3. 호출 지점 연결** — `create_order` 시작 시 같은 사용자의 PENDING 주문 정리(재시도 즉시 통과),
+              `_expire_if_abandoned` 도 공통 함수 사용
+        - [x] **4. 취소된 주문에 웹훅 DONE** — 자동 PG 취소(환불) + error 로그
+        - [x] **5. 스케줄러** — lifespan asyncio 태스크, 주기적으로 30분 지난 PENDING 을 `FOR UPDATE SKIP LOCKED`
+              로 가져와 정리 (gunicorn 멀티 워커 중복 실행 안전)
+        - [x] **6. 프론트** — `PaymentFailView`·`pay()` catch 에서 `orders.cancel` 조용히 호출(즉시 재고 반납),
+              `PaymentReturnView` confirm 네트워크 오류/502 시 confirm 재시도(멱등) → 그래도 불명이면 주문 상태로 판단
+        - 구현 위치: `payment_service.release_pending_order` / `_refund_late_approval`,
+          `order_service.create_order`·`_release_pending`, `order/abandoned_order_sweeper.py`(lifespan 에서 시작),
+          `adapters/toss.get_payment_by_order_id`, 설정 `PENDING_ORDER_SWEEP_INTERVAL_SECONDS`(기본 120, 0=끔)
+        - 덤으로 고친 것: `PaymentRepository` 락 조회에 `populate_existing` 누락(같은 세션에서 먼저 읽은 주문의
+          낡은 status 로 더블체크하던 문제), 웹훅 락 순서를 주문 → 결제로 통일(confirm 과 데드락 방지)
+        - [ ] **수동 검증 (스테이징)**: ① 결제창 닫기 → 즉시 다른 결제수단으로 재결제 성공
+              ② 결제창 닫고 탭 종료 → 30분+2분 뒤 상품 재고 복구 확인(상세 안 열고)
+              ③ 운영 로그에 "취소된 주문의 결제 승인 감지" error 가 뜨면 토스 개발자센터에서 환불 확인
       - [ ] **운영 — 실키 전환 (오픈 직전, 전자결제 심사 완료 후)** : `TOSS_SECRET_KEY` 를 `test_gsk_*` →
         `live_gsk_*` 로 교체(운영 시크릿 `~/rekit/secrets/rekit_backend.env`), 프론트 `VITE_TOSS_CLIENT_KEY` 도
         같은 상점의 `live_gck_*` 로 **동시에** 교체해야 한다(한쪽만 바꾸면 `INVALID_API_KEY`).

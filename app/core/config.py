@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     # 시크릿 키(주문서형·결제창형 연동 = gsk). 서버↔토스 Basic 인증.
     # Fake 게이트웨이 제거로 결제·웹훅이 항상 실 토스를 호출 → 필수값(누락 시 부팅 실패).
     toss_secret_key: str
+    # 방치된 PENDING 주문(결제창 이탈) 정리 주기(초). 0 이면 스위퍼 끔.
+    pending_order_sweep_interval_seconds: int = 120
 
     # ── 전화번호 인증 (Octomo) ─────────────────────────────
     octomo_api_key: str | None = None

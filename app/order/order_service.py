@@ -49,7 +49,7 @@ _CANCELLABLE_STATUSES = {OrderStatus.PENDING, OrderStatus.PAID, OrderStatus.PREP
 _PAID_STATUSES = {OrderStatus.PAID, OrderStatus.PREPARING}
 
 # 결제 미완료 PENDING 주문 유효 시간 (지연 평가 방식)
-_PAYMENT_TIMEOUT = timedelta(minutes=30)
+PAYMENT_TIMEOUT = timedelta(minutes=30)
 
 
 class OrderService:
@@ -117,6 +117,11 @@ class OrderService:
             address.zipcode
         ):
             raise OrderCancelForbiddenError("직배송 불가 지역입니다.")
+
+        # 결제창을 닫고 다시 결제하면 이전 PENDING 주문이 재고를 잡고 있어 거절된다.
+        # 장바구니 단위 결제라 결제 대기 주문은 사용자당 하나면 충분 — 먼저 정리한다.
+        for stale in await self._repo.get_pending_orders_by_user(user_id):
+            await self._release_pending(stale)
 
         product_ids = [i.product_id for i in req.items]
         product_map = await self._repo.get_products_with_lock(product_ids)
@@ -265,17 +270,23 @@ class OrderService:
         return address
 
     async def _expire_if_abandoned(self, order: Order) -> None:
-        """결제 기한(30분)이 지난 PENDING 주문을 즉시 취소하고 재고를 복구한다.
-
-        지연 평가 방식 — 조회 시점에 만료 여부를 확인한다.
-        2단계 확인: 1차 락 없이 후보 판단, 후보이면 FOR UPDATE 재조회 후 더블체크
-        (동시 폴링으로 인한 재고 이중 복구 방지).
-        """
+        """결제 기한(30분)이 지난 PENDING 주문을 조회 시점에 정리한다 (지연 평가)."""
         if order.status != OrderStatus.PENDING:
             return
-        if datetime.now(UTC) - order.created_at < _PAYMENT_TIMEOUT:
+        if datetime.now(UTC) - order.created_at < PAYMENT_TIMEOUT:
             return
-        # 2단계: 락을 잡고 상태 재확인 (다른 트랜잭션이 이미 처리했을 수 있음)
+        await self._release_pending(order)
+
+    async def _release_pending(self, order: Order) -> None:
+        """결제 미완료 PENDING 주문을 취소하고 재고를 복구한다.
+
+        PG 연동 시엔 PaymentService 에 위임 — 결제창을 연 주문은 토스 실상태를 확인한 뒤에만
+        취소한다(승인됐는데 응답만 유실된 주문을 취소하면 돈만 빠진다).
+        """
+        if self._payment_service is not None:
+            await self._payment_service.release_pending_order(order.id)
+            return
+        # PG 없는 단위 테스트 경로 — 락 재조회 후 더블체크 (동시 정리로 인한 재고 이중 복구 방지)
         locked_order = await self._repo.get_by_order_number_with_lock(order.order_number)
         if locked_order is None or locked_order.status != OrderStatus.PENDING:
             return
