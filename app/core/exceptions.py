@@ -8,13 +8,14 @@ api.md §1.3 / §1.5 의 응답 포맷:
 
 from __future__ import annotations
 
-import logging
-
+import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-_log = logging.getLogger(__name__)
+_log = structlog.stdlib.get_logger(__name__)
+
+_REQUEST_ID_HEADER = "X-Request-ID"  # app.core.middleware 와 같은 값 — 순환 import 회피용 중복
 
 
 class BusinessError(Exception):
@@ -308,6 +309,9 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(BusinessError)
     async def _business(_: Request, exc: BusinessError) -> JSONResponse:
+        # 정상적인 거절(재고 부족·권한 없음 등)이라 INFO.
+        # 액세스 로그엔 status 만 남으니 사유 코드를 기록.
+        _log.info("비즈니스 예외", code=exc.code, status=exc.http_status)
         body: dict[str, object] = {"code": exc.code, "message": exc.message}
         if exc.fields:
             body["fields"] = exc.fields
@@ -315,12 +319,14 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
-        # 미처리 예외 — 표준 500 응답으로 변환. 핵심 이유 두 가지:
-        # 1) Starlette 의 ServerErrorMiddleware 가 잡으면 응답이 CORS middleware
-        #    바깥에서 만들어져 Access-Control-Allow-Origin 헤더가 누락 → 브라우저
-        #    가 CORS 에러로 잘못 보고. 우리 핸들러가 잡으면 미들웨어 통과 정상.
-        # 2) traceback 노출 차단 (debug=True 환경에서 raw 응답되는 거 방지).
-        _log.exception("Unhandled exception", exc_info=exc)
+        # 미처리 예외 — 표준 500 포맷으로 변환 + traceback 노출 차단
+        # (debug=True 에서 raw 응답 방지).
+        # 주의: Exception 핸들러는 Starlette 가 ServerErrorMiddleware(모든 사용자 미들웨어 바깥)에
+        # 붙인다. 그래서 이 응답은 CORS·RequestContextMiddleware 를 거치지 않는다 —
+        # Access-Control-Allow-Origin 이 빠져 브라우저엔 CORS 에러로 보인다 (todo.md O1 남은 한계).
+        # request_id 헤더는 여기서 직접 붙인다.
+        _log.error("미처리 예외", exc_info=exc)
+        request_id = structlog.contextvars.get_contextvars().get("request_id")
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
@@ -329,6 +335,7 @@ def register_exception_handlers(app: FastAPI) -> None:
                     "message": "서버 오류가 발생했습니다.",
                 }
             },
+            headers={_REQUEST_ID_HEADER: request_id} if request_id else None,
         )
 
     @app.exception_handler(RequestValidationError)

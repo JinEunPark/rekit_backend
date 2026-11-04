@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any, NoReturn
 
 import httpx
+import structlog
 
 from app.core.config import settings
 from app.core.exceptions import PaymentFailedError, PaymentGatewayUnknownError
@@ -28,8 +29,24 @@ _TOSS_API_BASE = "https://api.tosspayments.com/v1/payments"
 _TOSS_CONFIRM_URL = f"{_TOSS_API_BASE}/confirm"
 _HTTP_TIMEOUT = 10.0
 
+_log = structlog.stdlib.get_logger(__name__)
 
-def _raise_toss_failure(resp: httpx.Response, prefix: str) -> NoReturn:
+
+def _log_error_response(resp: httpx.Response, operation: str, error_code: str = "") -> None:
+    _log.error(
+        "토스 API 오류 응답",
+        operation=operation,
+        status_code=resp.status_code,
+        error_code=error_code or None,
+    )
+
+
+def _log_transport_error(exc: httpx.TransportError, operation: str) -> None:
+    # 결과 불명(타임아웃 등) — 웹훅·재조회가 진실을 알려줄 때까지 주문이 PENDING 에 머문다
+    _log.error("토스 API 통신 실패", operation=operation, error=type(exc).__name__)
+
+
+def _raise_toss_failure(resp: httpx.Response, prefix: str, operation: str) -> NoReturn:
     """토스 에러 응답 body 의 {code, message} 를 PaymentFailedError 로 변환."""
     code = ""
     message = ""
@@ -40,6 +57,7 @@ def _raise_toss_failure(resp: httpx.Response, prefix: str) -> NoReturn:
             message = str(body.get("message") or "")
     except ValueError:
         pass
+    _log_error_response(resp, operation, code)
     detail = f"{code}: {message}" if code else f"HTTP {resp.status_code}"
     raise PaymentFailedError(f"{prefix} — {detail}")
 
@@ -108,10 +126,11 @@ class TossPaymentGateway:
                 resp = await client.post(_TOSS_CONFIRM_URL, json=payload, headers=headers)
         except httpx.TransportError as exc:
             # 타임아웃/커넥션 에러 — 결제 성공 여부 불명. PaymentFailedError와 구분.
+            _log_transport_error(exc, "confirm")
             raise PaymentGatewayUnknownError() from exc
 
         if resp.status_code != 200:
-            _raise_toss_failure(resp, "Toss confirm 실패")
+            _raise_toss_failure(resp, "Toss confirm 실패", "confirm")
 
         data = resp.json()
         # 즉시 승인되는 수단만 취급한다 (카드/간편결제/실시간계좌이체 → DONE).
@@ -136,26 +155,29 @@ class TossPaymentGateway:
         )
 
     async def get_payment(self, *, payment_key: str) -> TossPaymentResult:
-        resp = await self._get(f"{_TOSS_API_BASE}/{payment_key}")
+        resp = await self._get(f"{_TOSS_API_BASE}/{payment_key}", "get_payment")
         if resp.status_code != 200:
             # 조회 실패 — 상태 불명. 웹훅을 재시도시켜야 하므로 Unknown 으로.
+            _log_error_response(resp, "get_payment")
             raise PaymentGatewayUnknownError()
         return _parse_payment(resp.json(), fallback_payment_key=payment_key)
 
     async def get_payment_by_order_id(self, *, order_id: str) -> TossPaymentResult | None:
-        resp = await self._get(f"{_TOSS_API_BASE}/orders/{order_id}")
+        resp = await self._get(f"{_TOSS_API_BASE}/orders/{order_id}", "get_payment_by_order_id")
         if resp.status_code == 404:
             # 결제창에서 인증 전에 이탈하면 토스에 결제 자체가 생성되지 않는다
             return None
         if resp.status_code != 200:
+            _log_error_response(resp, "get_payment_by_order_id")
             raise PaymentGatewayUnknownError()
         return _parse_payment(resp.json(), fallback_payment_key="")
 
-    async def _get(self, url: str) -> httpx.Response:
+    async def _get(self, url: str, operation: str) -> httpx.Response:
         try:
             async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
                 return await client.get(url, headers=_auth_header())
         except httpx.TransportError as exc:
+            _log_transport_error(exc, operation)
             raise PaymentGatewayUnknownError() from exc
 
     async def cancel(
@@ -183,10 +205,11 @@ class TossPaymentGateway:
                 )
         except httpx.TransportError as exc:
             # 취소 성공 여부 불명 — 재조회로 확인해야 함. PaymentFailedError 와 구분.
+            _log_transport_error(exc, "cancel")
             raise PaymentGatewayUnknownError() from exc
 
         if resp.status_code != 200:
-            _raise_toss_failure(resp, "Toss 결제 취소 실패")
+            _raise_toss_failure(resp, "Toss 결제 취소 실패", "cancel")
 
         data = resp.json()
         cancels = data.get("cancels") or []

@@ -15,12 +15,12 @@ JPA 비유: @Service. 라우터(@RestController) 와 리포지토리(@Repository
 다른 도메인 service 도 이 패턴: Repository 주입 + 도메인 로직만.
 """
 
-import logging
 import secrets
 import string
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+import structlog
 from fastapi import BackgroundTasks
 from redis.asyncio import Redis
 
@@ -54,7 +54,7 @@ from app.core.security import (
 )
 from app.user.models import User, UserRole
 
-_log = logging.getLogger(__name__)
+_log = structlog.stdlib.get_logger(__name__)
 
 _VERIFY_CODE_KEY = "email:verify:{}"
 _VERIFY_RATE_KEY = "email:verify:rate:{}"
@@ -106,13 +106,21 @@ class AuthService:
             이유: enumeration attack 방어 — "이 아이디 존재" 추론 차단.
         """
         user = await self.repo.get_by_login_id(login_id)
-        if user is None or not user.is_active:
+        # 응답은 세 경우 모두 같게 두고 사유는 로그로만 구분한다. 없는 아이디는 입력 원문을
+        # 남기지 않는다 — 아이디 칸에 비밀번호를 잘못 입력한 경우가 흔하다.
+        if user is None:
+            _log.warning("로그인 실패", reason="unknown_login_id")
+            raise InvalidCredentialsError()
+        if not user.is_active:
+            _log.warning("로그인 실패", reason="inactive", user_id=user.id)
             raise InvalidCredentialsError()
 
         if not verify_password(password, user.password_hash):
+            _log.warning("로그인 실패", reason="wrong_password", user_id=user.id)
             raise InvalidCredentialsError()
 
         access, refresh = self._issue_tokens(user, remember=remember)
+        _log.info("로그인 성공", user_id=user.id, method="password")
         return access, refresh, user.must_change_password
 
     # ── 이메일 인증 ─────────────────────────────────────
@@ -311,13 +319,21 @@ class AuthService:
         if existing is not None:
             user = await self.repo.get_by_id(existing.user_id)
             if user is None or not user.is_active:
+                _log.warning("로그인 실패", reason="inactive", method=provider.value)
                 raise InvalidCredentialsError()
+            _log.info("로그인 성공", user_id=user.id, method=provider.value)
             return self._login_existing(user)
 
         normalized_email = profile.email.lower()
         user_by_email = await self.repo.get_by_email(normalized_email)
         if user_by_email is not None:
             if not user_by_email.is_active:
+                _log.warning(
+                    "로그인 실패",
+                    reason="inactive",
+                    user_id=user_by_email.id,
+                    method=provider.value,
+                )
                 raise InvalidCredentialsError()
             await self.repo.add_social_account(
                 SocialAccount(
@@ -326,6 +342,9 @@ class AuthService:
                     social_id=profile.social_id,
                     email_at_link=normalized_email,
                 )
+            )
+            _log.info(
+                "로그인 성공", user_id=user_by_email.id, method=provider.value, linked_by_email=True
             )
             return self._login_existing(user_by_email)
 
@@ -554,7 +573,7 @@ async def _bg_send_login_id_email(
             ),
         )
     except Exception:
-        _log.exception("find-id email failed (to=%s)", to)
+        _log.exception("아이디 찾기 메일 발송 실패", email=to)
 
 
 async def _bg_apply_temp_password(
@@ -583,14 +602,14 @@ async def _bg_apply_temp_password(
             ),
         )
     except Exception:
-        _log.exception("temp password email failed (user_id=%s) — DB 미변경", user_id)
+        _log.exception("임시 비밀번호 메일 발송 실패 — DB 미변경", user_id=user_id)
         return
 
     async with async_session_factory() as session:
         try:
             user = await session.get(User, user_id)
             if user is None:
-                _log.warning("temp password BG: user_id=%s 가 사라짐 (탈퇴?). 무시.", user_id)
+                _log.warning("임시 비밀번호 대상 사용자 없음 (탈퇴?) — 무시", user_id=user_id)
                 return
             user.password_hash = hash_password(temp_password)
             user.must_change_password = True
@@ -600,7 +619,4 @@ async def _bg_apply_temp_password(
             await session.commit()
         except Exception:
             await session.rollback()
-            _log.exception(
-                "temp password DB update failed (user_id=%s) — 이메일은 발송됨",
-                user_id,
-            )
+            _log.exception("임시 비밀번호 DB 반영 실패 — 메일은 발송됨", user_id=user_id)

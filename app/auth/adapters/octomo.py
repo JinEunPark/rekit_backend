@@ -5,6 +5,7 @@ from __future__ import annotations
 import secrets
 
 import httpx
+import structlog
 from redis.asyncio import Redis
 
 from app.auth.adapters.ports import PhoneVerificationChallenge
@@ -17,6 +18,8 @@ _WITHIN_MINUTES = 5  # Octomo 에 "최근 N분 내 수신" 을 묻는 창
 # 시간 유효성 판정의 권한은 Octomo(withinMinutes)에 있고, 로컬은 재사용 방지용 저장일 뿐.
 _CODE_TTL_SECONDS = 600
 _CODE_KEY = "octomo:phone-code:{}"
+
+_log = structlog.stdlib.get_logger(__name__)
 
 
 class OctomoPhoneVerifier:
@@ -45,6 +48,12 @@ class OctomoPhoneVerifier:
             )
         # Octomo QR 생성 API 는 성공 시 200 이 아닌 201(Created) 을 반환한다.
         if resp.status_code not in (200, 201):
+            _log.error(
+                "Octomo API 오류 응답",
+                operation="issue_challenge",
+                status_code=resp.status_code,
+                response_body=resp.text[:500],
+            )
             raise RuntimeError(f"Octomo QR API 오류: {resp.status_code} {resp.text}")
 
         qr_code = resp.json()["qrCode"]
@@ -64,6 +73,12 @@ class OctomoPhoneVerifier:
             )
         # Octomo exists API 도 성공 시 200 이 아닌 201(Created) 을 반환한다.
         if resp.status_code not in (200, 201):
+            _log.error(
+                "Octomo API 오류 응답",
+                operation="verify",
+                status_code=resp.status_code,
+                response_body=resp.text[:500],
+            )
             raise RuntimeError(f"Octomo API 오류: {resp.status_code} {resp.text}")
 
         exists = bool(resp.json().get("exists"))

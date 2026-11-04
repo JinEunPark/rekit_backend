@@ -12,10 +12,10 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.common.email import EmailSender
@@ -25,7 +25,7 @@ from app.payment.adapters.ports import PaymentGateway
 from app.payment.payment_repository import PaymentRepository
 from app.payment.payment_service import PaymentService
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 async def sweep_abandoned_orders(
@@ -71,4 +71,4 @@ async def run_periodically(
             logger.exception("방치 주문 스윕 실패 — 다음 주기에 재시도")
             continue
         if released:
-            logger.info("방치 주문 %d건 정리 (재고 복구)", released)
+            logger.info("방치 주문 정리", released=released)

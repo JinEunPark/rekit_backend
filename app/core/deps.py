@@ -15,6 +15,7 @@ JPA 비유: Spring 의 @Autowired 가 채워주던 EntityManager / 서비스 빈
 from collections.abc import AsyncGenerator
 from functools import lru_cache
 
+import structlog
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -193,6 +194,8 @@ async def get_current_user(
         raise TokenExpiredError(message="존재하지 않는 사용자")
     if not user.is_active:
         raise AccountInactiveError()
+    # 이후 이 요청의 모든 로그(액세스 로그 포함)에 자동 포함 — RequestContextMiddleware 참고
+    structlog.contextvars.bind_contextvars(user_id=user.id)
     return user
 
 

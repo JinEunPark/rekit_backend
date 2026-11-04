@@ -15,6 +15,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+import structlog
+
 from app.core.exceptions import InvalidCredentialsError, OtpInvalidError, OtpRateLimitedError
 from app.core.security import decode_withdrawal_token, hash_password, verify_password
 from app.user.models import User, UserStatus
@@ -25,6 +27,8 @@ if TYPE_CHECKING:
     from redis.asyncio import Redis
 
     from app.auth.adapters.ports import PhoneVerificationChallenge, PhoneVerifier
+
+_log = structlog.stdlib.get_logger(__name__)
 
 _PHONE_OTP_RATE_KEY = "sms:verify:rate:{}"
 _PHONE_OTP_RATE_TTL = 60  # 1분 (재발급 제한)
@@ -93,6 +97,8 @@ class UserService:
         user.status = UserStatus.WITHDRAWN
         user.withdrawn_at = datetime.now(UTC)
         await self.repo.delete_social_accounts(user.id)
+        method = "password" if user.has_password else "social"
+        _log.info("회원 탈퇴", user_id=user.id, method=method)
 
     async def send_phone_verification(self, *, phone: str) -> PhoneVerificationChallenge:
         """Octomo 인증 QR 을 발급한다. rate-limit: 60초.
@@ -155,8 +161,10 @@ class UserService:
         """
         self._assert_password(current_password, user.password_hash)
 
+        was_temp_password = user.must_change_password
         user.password_hash = hash_password(new_password)
         # SQLAlchemy 가 dirty 추적을 attribute touch 기준으로 하므로 — 이미 False 면
         # 굳이 다시 쓰지 않아 일반 비번 변경 케이스에 불필요한 UPDATE column 을 만들지 않음.
         if user.must_change_password:
             user.must_change_password = False
+        _log.info("비밀번호 변경", user_id=user.id, was_temp_password=was_temp_password)

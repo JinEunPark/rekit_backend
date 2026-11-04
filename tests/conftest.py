@@ -9,7 +9,12 @@
 모든 테스트가 영향을 받는다 — 한 도메인만 테스트해도 전체 모델이 로드된다.
 """
 
+import logging
+from collections.abc import Iterator
 from datetime import UTC, datetime
+
+import pytest
+import structlog
 
 from app.core.security import hash_password
 from app.db import registry  # noqa: F401
@@ -81,3 +86,30 @@ def make_user(
     )
     user.id = user_id
     return user
+
+
+_THIRD_PARTY_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
+
+@pytest.fixture
+def restore_logging() -> Iterator[None]:
+    """configure_logging 은 전역(root 로거·structlog·contextvars) 상태를 바꾸므로 테스트 후 원복."""
+    root = logging.getLogger()
+    saved_root = (root.handlers[:], root.level)
+    saved_third_party = {
+        name: (
+            logging.getLogger(name).handlers[:],
+            logging.getLogger(name).propagate,
+            logging.getLogger(name).level,
+        )
+        for name in _THIRD_PARTY_LOGGERS
+    }
+    saved_structlog = structlog.get_config()
+    yield
+    root.handlers, root.level = saved_root[0], saved_root[1]
+    for name, (handlers, propagate, level) in saved_third_party.items():
+        third_party = logging.getLogger(name)
+        third_party.handlers, third_party.propagate = handlers, propagate
+        third_party.setLevel(level)
+    structlog.configure(**saved_structlog)
+    structlog.contextvars.clear_contextvars()

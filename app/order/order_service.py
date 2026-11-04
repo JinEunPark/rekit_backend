@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import structlog
+
 from app.address.models import Address
 from app.catalog.models import ProductStatus
 from app.core.exceptions import (
@@ -41,6 +43,8 @@ from app.order.order_schemas import (
 )
 from app.order.shipment import ShipmentMethod
 from app.payment.payment_service import PaymentService
+
+_log = structlog.stdlib.get_logger(__name__)
 
 # PENDING / PAID / PREPARING 상태만 취소 허용
 _CANCELLABLE_STATUSES = {OrderStatus.PENDING, OrderStatus.PAID, OrderStatus.PREPARING}
@@ -176,6 +180,13 @@ class OrderService:
         for item_req in req.items:
             await self._repo.decrement_stock(item_req.product_id, item_req.quantity)
 
+        _log.info(
+            "주문 생성",
+            user_id=user_id,
+            order_number=order.order_number,
+            total_amount=order.total_amount,
+            item_count=len(req.items),
+        )
         return _to_order_response(order)
 
     # ── 목록 ────────────────────────────────────────────────────────
@@ -228,6 +239,7 @@ class OrderService:
         order.status = OrderStatus.REFUNDED
         order.cancelled_at = datetime.now(UTC)
 
+        _log.info("환불 요청", user_id=user_id, order_number=order.order_number)
         return _to_order_response(order)
 
     # ── 취소 ────────────────────────────────────────────────────────
@@ -250,12 +262,19 @@ class OrderService:
         if order.status in _PAID_STATUSES and self._payment_service is not None:
             await self._payment_service.cancel_payment(order.id, reason="구매자 주문 취소")
 
+        previous_status = order.status
         for item in order.items:
             await self._repo.increment_stock(item.product_id, item.quantity)
 
         order.status = OrderStatus.CANCELLED
         order.cancelled_at = datetime.now(UTC)
 
+        _log.info(
+            "주문 취소",
+            user_id=user_id,
+            order_number=order.order_number,
+            previous_status=previous_status.value,
+        )
         return _to_order_response(order)
 
     # ── 내부 헬퍼 ────────────────────────────────────────────────────

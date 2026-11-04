@@ -79,7 +79,7 @@ services:
       - rekit_edge
     command: >
       sh -c "alembic upgrade head &&
-             gunicorn app.main:app -k uvicorn_worker.UvicornWorker -w 4 -b 0.0.0.0:8000 --access-logfile - --error-logfile -"
+             gunicorn app.main:app -k uvicorn_worker.UvicornWorker -w 4 -b 0.0.0.0:8000 --error-logfile -"
 
 networks:
   seaweedfs_default:

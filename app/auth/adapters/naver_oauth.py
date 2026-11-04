@@ -10,14 +10,13 @@
 
 from __future__ import annotations
 
-import logging
-
 import httpx
+import structlog
 
 from app.auth.adapters._oauth_helpers import translate_oauth_error
 from app.auth.adapters.ports import SocialProfile
 
-_log = logging.getLogger(__name__)
+_log = structlog.stdlib.get_logger(__name__)
 
 _TOKEN_URL = "https://nid.naver.com/oauth2.0/token"
 _USER_INFO_URL = "https://openapi.naver.com/v1/nid/me"
@@ -59,10 +58,11 @@ class NaverOAuthAdapter:
         res = await client.get(_TOKEN_URL, params=params)
         if res.is_error:
             _log.error(
-                "Naver token exchange failed: %d — %s (redirect_uri=%s)",
-                res.status_code,
-                res.text,
-                self.redirect_uri,
+                "소셜 토큰 교환 실패",
+                provider="naver",
+                status_code=res.status_code,
+                response_body=res.text[:500],
+                redirect_uri=self.redirect_uri,
             )
             res.raise_for_status()
         return str(res.json()["access_token"])

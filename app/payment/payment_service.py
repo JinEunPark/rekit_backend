@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime
 
+import structlog
 from fastapi import BackgroundTasks
 
 from app.common.email import EmailSender
@@ -29,7 +29,7 @@ from app.payment.payment_schemas import (
     TossWebhookPayload,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 _EVENT_PAYMENT_STATUS_CHANGED = "PAYMENT_STATUS_CHANGED"
 _TOSS_DONE = "DONE"
@@ -214,10 +214,10 @@ class PaymentService:
         # 웹훅 body 대신 조회 API 로 실제 상태를 가져온다.
         remote = await self._gateway.get_payment(payment_key=payment_key)
         logger.info(
-            "토스 웹훅 수신 — event=%s payment_key=%s remote_status=%s",
-            payload.event_type,
-            payment_key,
-            remote.status,
+            "토스 웹훅 수신",
+            event_type=payload.event_type,
+            payment_key=payment_key,
+            remote_status=remote.status,
         )
 
         # FOR UPDATE 락 — 웹훅 재전송으로 동일 이벤트가 동시에 도착할 때 이중 처리 방지.
@@ -254,9 +254,9 @@ class PaymentService:
         ):
             if status != _TOSS_DONE:
                 logger.warning(
-                    "PAID 결제에 예상 밖 상태 %s — 무시: pg_tid=%s",
-                    status,
-                    payment.pg_tid,
+                    "PAID 결제에 예상 밖 상태 — 무시",
+                    remote_status=status,
+                    payment_key=payment.pg_tid,
                 )
             return
 
@@ -266,10 +266,10 @@ class PaymentService:
             # 않는다 (재시도해도 결과가 같으니 라우터는 200 으로 소진).
             if remote.total_amount != payment.amount:
                 logger.error(
-                    "웹훅 DONE 금액 불일치 — 전이 거부: payment_key=%s 토스=%s 로컬=%s",
-                    payment.pg_tid or remote.pg_tid,
-                    remote.total_amount,
-                    payment.amount,
+                    "웹훅 DONE 금액 불일치 — 전이 거부",
+                    payment_key=payment.pg_tid or remote.pg_tid,
+                    remote_amount=remote.total_amount,
+                    local_amount=payment.amount,
                 )
                 return
             payment.pg_tid = payment.pg_tid or remote.pg_tid  # fallback 경로일 때만 채움
@@ -301,7 +301,7 @@ class PaymentService:
         elif status in _TOSS_PENDING_STATUSES:
             # 아직 승인 전 — 확정 웹훅을 기다린다.
             logger.info(
-                "웹훅 수신 — 확정 전 상태 %s, 대기: pg_tid=%s", status, payment.pg_tid
+                "웹훅 수신 — 확정 전 상태, 대기", remote_status=status, payment_key=payment.pg_tid
             )
 
     async def cancel_payment(
@@ -340,9 +340,9 @@ class PaymentService:
         예외가 전파돼 웹훅이 5xx 로 끝나고 토스가 재시도한다.
         """
         logger.error(
-            "취소된 주문의 결제 승인 감지 — 자동 환불: order=%s payment_key=%s",
-            order_number,
-            payment.pg_tid,
+            "취소된 주문의 결제 승인 감지 — 자동 환불",
+            order_number=order_number,
+            payment_key=payment.pg_tid,
         )
         if not payment.pg_tid:
             raise PaymentFailedError("결제 거래 ID(pg_tid)가 없어 자동 환불할 수 없습니다.")
@@ -372,15 +372,21 @@ class PaymentService:
                     order_id=order.order_number
                 )
             except PaymentGatewayUnknownError:
-                logger.warning("방치 주문 정리 보류 — 토스 조회 실패: %s", order.order_number)
+                logger.warning(
+                    "방치 주문 정리 보류 — 토스 조회 실패", order_number=order.order_number
+                )
                 return False
             if remote is not None and remote.status == _TOSS_DONE:
-                logger.warning("방치 주문이 토스에선 승인 완료 — 결제 확정: %s", order.order_number)
+                logger.warning(
+                    "방치 주문이 토스에선 승인 완료 — 결제 확정", order_number=order.order_number
+                )
                 await self._apply_remote_payment_status(ready, remote)
                 return False
             if remote is not None and remote.status not in _TOSS_SAFE_TO_RELEASE:
                 logger.warning(
-                    "방치 주문 정리 보류 — 토스 상태 %s: %s", remote.status, order.order_number
+                    "방치 주문 정리 보류 — 확정 전 토스 상태",
+                    remote_status=remote.status,
+                    order_number=order.order_number,
                 )
                 return False
 

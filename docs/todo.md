@@ -123,7 +123,8 @@
 - [ ] (선택) 토스가 취소 거절하는 상황 재현(예: 이미 콘솔에서 수동취소한 결제를 우리가 cancel) → 422, **주문 상태가 롤백되어 그대로인지** (전환 안 됨 확인)
 
 **E. 웹훅 (Task 1·2 + 2026-09-04 하드닝 핵심 검증)**
-- [ ] 결제하면 서버 로그에 `토스 웹훅 수신 — event=PAYMENT_STATUS_CHANGED ... remote_status=DONE` 뜨는지
+- [ ] 결제하면 서버 로그에 `"event": "토스 웹훅 수신"` + `"event_type": "PAYMENT_STATUS_CHANGED"`, `"remote_status": "DONE"` 뜨는지
+      (2026-11-05 구조화 로그로 형식 변경 — `docker logs rekle-app | grep "토스 웹훅 수신"`)
       (이미 confirm 으로 PAID 면 멱등 무시 — 로그는 뜨되 상태 변경 없음)
 - [ ] 개발자센터 → 해당 웹훅 상세 → **전송 기록이 "성공"(200)** 인지 (실패면 URL/nginx/방화벽 점검)
 - [ ] **⭐ confirm 유실 시나리오** — 결제창 인증까지 끝내고 successUrl 리다이렉트 직전에 **브라우저/탭 강제 종료**
@@ -199,30 +200,67 @@
   - uvicorn/gunicorn 로거도 같은 포맷으로 (중복 출력 방지: `propagate` 정리)
   - `create_app()` 초입에서 호출
   - 테스트: 설정 후 INFO 로그가 출력되는지 / JSON 파싱 가능한지 / 레벨 env 반영되는지
-- [ ] **O1-2 Request ID (상관 ID)** — `app/core/middleware.py` (보안 헤더 미들웨어와 같은 파일)
-  - 요청 헤더 `X-Request-ID` 있으면 사용(길이·문자 검증), 없으면 UUID4 생성
-  - `structlog.contextvars.bind_contextvars(request_id=...)` → 그 요청의 모든 로그에 자동 포함 (Spring MDC 대응)
-  - 응답 헤더에 `X-Request-ID` 반환 (고객 문의 시 추적용) — CORS `expose_headers` 에도 추가
-  - 요청 종료 시 `clear_contextvars()` (다음 요청에 누수 방지)
-  - 엣지 nginx 에서 `proxy_set_header X-Request-ID $request_id;` 로 nginx 로그와도 연결 (레포 밖: `~/rekit/nginx`)
-- [ ] **O1-3 인증 사용자 컨텍스트** — `get_current_user` 에서 `bind_contextvars(user_id=...)` → 로그에 user_id 자동 포함
-- [ ] **O1-4 구조화 액세스 로그** — 미들웨어에서 1요청 1줄: `method, path(템플릿), status, duration_ms, request_id, user_id, client_ip`
-  - gunicorn `--access-logfile -` 제거 (이중 기록 방지)
-  - `/health`, `/metrics` 는 액세스 로그 제외 (노이즈)
-  - client_ip 는 `X-Forwarded-For` 기준 (FORWARDED_ALLOW_IPS 설정과 일관)
-- [ ] **O1-5 민감정보 마스킹 processor** — 키 이름 기준 마스킹: `password`, `token`, `access_token`, `refresh_token`,
-      `authorization`, `secret`, `payment_key`(앞 6자만), `phone`(가운데 마스킹), `email`(로컬파트 일부), `ci`, `di`
-  - 테스트: 각 키가 마스킹되는지 / 중첩 dict 도 처리되는지
-- [ ] **O1-6 기존 로그 호출부 정비** — `%s` 포맷 문자열 → 구조화 키로 전환 (검색 가능하게)
-  - 대상: `payment_service.py`, `abandoned_order_sweeper.py`, `auth_service.py`, `adapters/*_oauth.py`, `core/exceptions.py`
-  - 예: `logger.info("토스 웹훅 수신", event=..., order_number=..., remote_status=...)`
-  - 이벤트명 일관화 규칙을 이 섹션 하단 또는 CLAUDE.md 에 기록
-- [ ] **O1-7 로그 추가가 필요한 지점 보강** — 현재 로그 0건인 중요 흐름
-  - 로그인 성공/실패 (실패는 username 마스킹, 브루트포스 탐지용), 회원 탈퇴, 비밀번호 변경
-  - 주문 생성/취소/환불요청, 관리자 상태변경·취소 (누가 무엇을 — 감사 로그 전 단계)
-  - 외부 API 실패 (토스/Octomo/SMTP/S3) — 응답 코드·소요시간 포함
-  - `BusinessError` 는 WARNING 아님 INFO (정상 거절) — 4xx 를 에러로 세지 않기
-- [ ] **O1-8 로컬 확인** — `uvicorn` 실행 → API 호출 → JSON 로그에 request_id/user_id/duration_ms 확인
+- [x] **O1-2 Request ID (상관 ID) (2026-11-05 완료)** — `app/core/middleware.py` `RequestContextMiddleware` (순수 ASGI)
+  - 요청 헤더 `X-Request-ID` 가 `^[A-Za-z0-9._-]{1,128}$` 면 이어받고, 아니면(공백·개행·초과길이·빈값) UUID4 생성
+  - `bind_contextvars(request_id=...)` → 그 요청의 모든 로그(SQL 로그 포함)에 자동 포함 (Spring MDC 대응)
+  - 응답 헤더 `X-Request-ID` 반환 + CORS `expose_headers` 추가 (`main.py`, CORS 보다 바깥에 등록 → preflight 에도 부여)
+  - **설계 변경**: contextvars 는 요청 *시작* 시 clear (종료 시 X). 종료 시 비우면 바깥 `ServerErrorMiddleware` 의
+    500 핸들러가 request_id 를 잃는다. 요청마다 task(컨텍스트)가 분리돼 누수 없음 — 테스트로 확인
+  - 500 응답은 미들웨어 바깥에서 만들어져 `core/exceptions.py` `_unhandled` 가 contextvars 에서 읽어 헤더를 직접 붙임
+  - BaseHTTPMiddleware 미사용 — 하위 앱을 별도 task 로 돌려 dependency 가 바인딩한 user_id 가 미들웨어로 안 돌아옴
+  - [ ] **(직접)** 엣지 nginx `proxy_set_header X-Request-ID $request_id;` → nginx 로그와 연결 (레포 밖: `~/rekit/nginx`).
+        nginx `$request_id` (hex 32자) 는 위 검증을 통과하므로 그대로 이어받는다
+- [x] **O1-3 인증 사용자 컨텍스트 (2026-11-05 완료)** — `get_current_user` 가 인증 성공 시에만 `bind_contextvars(user_id=...)`
+  (비활성/위조 토큰으로 거절된 요청엔 안 붙음). 관리자 작업 로그의 "누가" 도 이 값
+- [x] **O1-4 구조화 액세스 로그 (2026-11-05 완료)** — 이벤트 `http_request`, logger `app.access`:
+      `method, path(라우트 템플릿), status, duration_ms, client_ip` + 컨텍스트 `request_id, user_id`
+  - path 는 FastAPI 가 남기는 `scope["route"].path` (예 `/api/v1/orders/{order_number}`). 매칭 실패는 `<unmatched>`
+    (스캐너 무작위 경로로 값 종류 폭발 방지. CORS preflight 도 라우팅 전 응답이라 `<unmatched>`)
+  - 미처리 예외로 응답 시작 전에 빠져나가면 status 500 으로 기록
+  - gunicorn `--access-logfile -` 제거 (`Dockerfile` CMD, `docker-compose.prod.yml` command) +
+    `configure_logging` 이 `uvicorn.access` 를 WARNING 으로 → 로컬 `uvicorn --reload` 포함 이중 기록 없음
+  - `/health`, `/health/ready`, `/metrics` 제외 (request_id 헤더는 부여)
+  - client_ip 는 `scope["client"]` — uvicorn proxy headers(FORWARDED_ALLOW_IPS="*") 가 X-Forwarded-For 로 치환한 값
+- [x] **O1-5 민감정보 마스킹 processor (2026-11-05 완료)** — `app/core/logging.py` `mask_sensitive_fields`,
+      ProcessorFormatter 체인(렌더 직전)에 연결 → stdlib·structlog 로그 모두 적용
+  - 키 이름(소문자) 기준. `password`/`token`/`secret`/`authorization` **부분 일치**(new_password·client_secret·id_token 포함)
+    + `ci`/`di` 정확 일치 → `***`. `payment_key` 앞 6자, `*phone*` 앞3·뒤4(구분자 유지), `*email*` 로컬파트 앞 2자. 중첩 dict/list 재귀
+  - **한계**: `event` 문구·SQL 로그 본문 안에 섞인 값은 못 가림 → 민감값은 반드시 키워드 인자로.
+    DEBUG=true 의 SQL 로그는 바인딩 파라미터(로그인 아이디 등)를 그대로 출력 — 운영 DEBUG 금지
+    (추가 하드닝 후보: 운영 engine `hide_parameters=True` — DB 예외 메시지 속 파라미터도 숨김)
+- [x] **O1-6 기존 로그 호출부 정비 (2026-11-05 완료)** — 18곳 전부 `structlog.stdlib.get_logger(__name__)` + 키워드 인자로 전환
+  - 대상: `payment_service.py`(8), `abandoned_order_sweeper.py`(2), `auth_service.py`(4), `adapters/{kakao,naver,google}_oauth.py`,
+    `core/exceptions.py`. `pg_tid` 는 마스킹 대상이 되도록 키 이름 `payment_key` 로 통일
+  - 주의: `logger.info("...", event=...)` 처럼 `event` 를 키로 쓰면 structlog 예약어와 충돌 → `event_type`
+  - `cache_logger_on_first_use=False` 로 변경 — 캐시하면 첫 사용 시점 설정에 고정돼 `structlog.testing.capture_logs` 와
+    configure 재호출이 반영 안 됨
+  - JSON `ensure_ascii=False` — 한국어 이벤트명이 `\uXXXX` 로 깨지지 않아 `docker logs | grep "토스 웹훅 수신"` 가능
+  - **이벤트명 규칙**:
+    1. `event` 는 **값이 섞이지 않은 고정 한국어 문구** (예 `"주문 생성"`, `"토스 웹훅 수신"`). 값은 전부 snake_case 키워드 인자
+    2. 같은 사건은 같은 문구 하나 — 사유 구분은 `reason`, 경로 구분은 `method`/`operation` 키로 (예 `"로그인 실패", reason=...`)
+    3. 민감값은 마스킹 규칙의 키 이름으로 넘긴다 (`email=`, `phone=`, `payment_key=`) — 다른 이름이면 안 가려짐
+    4. 상태값은 Enum `.value` 문자열, 금액은 정수(원), 시간은 로그 timestamp 사용 (별도 키 X)
+    5. 레벨: 정상 흐름·정상 거절 INFO / 사람이 볼 필요 있는 이상 징후 WARNING / 데이터·돈 정합성 위험·외부 장애 ERROR
+- [x] **O1-7 로그 보강 (2026-11-05 완료)** — 테스트 `tests/test_service_logs.py` (19건, `capture_logs`)
+  - 로그인: `"로그인 성공"`(user_id, method=password|kakao|naver|google) / `"로그인 실패"`(reason=unknown_login_id|inactive|wrong_password, WARNING).
+    없는 아이디는 **입력 원문을 남기지 않음**(아이디 칸에 비번 입력 사례) — 존재 계정만 user_id 로
+  - 회원: `"회원 탈퇴"`(user_id, method), `"비밀번호 변경"`(user_id, was_temp_password)
+  - 주문: `"주문 생성"`(order_number, total_amount, item_count), `"주문 취소"`(previous_status), `"환불 요청"`
+  - 관리자: `"관리자 주문 상태 변경"`(from_status, to_status), `"관리자 주문 취소"`(previous_status, reason), `"관리자 송장 입력"`
+  - 외부 API: `"토스 API 오류 응답"`(operation, status_code, error_code) / `"토스 API 통신 실패"`(operation, error) /
+    `"Octomo API 오류 응답"` / `"메일 발송 실패"`(to_email 마스킹, error) — 모두 ERROR
+  - `BusinessError` → `"비즈니스 예외"`(code, status) INFO (`core/exceptions.py`)
+  - **미적용**: S3 (presign 은 로컬 서명이라 실패 지점 적음, `ensure_bucket` 실패는 기동 실패로 드러남) /
+    외부 API **소요시간** — O2 메트릭 `rekle_pg_request_duration_seconds` 등으로 처리 예정
+- [x] **O1-8 로컬 확인 (2026-11-05 완료)** — `APP_ENV=production gunicorn -w 1` (127.0.0.1:8011) 실측:
+  - 들어온 `X-Request-ID` 이어받음 / 없으면 UUID 생성해 응답 헤더 반환 / 인증 요청 액세스 로그에 `user_id`
+  - path 템플릿·`<unmatched>`·`비즈니스 예외 code=ORDER_NOT_FOUND`·`로그인 실패 reason=unknown_login_id` 확인, uvicorn.access 0줄
+- **O1 남은 한계 / 발견 사항**
+  - [ ] **500 응답에 CORS 헤더 없음 (기존 버그, 이번 변경 전부터)** — Starlette 1.0 은 `Exception` 핸들러를
+        `ServerErrorMiddleware`(모든 사용자 미들웨어 바깥)에 붙인다 → `Access-Control-Allow-Origin` 누락 → 브라우저는
+        500 을 CORS 에러로 표시. 아래 §2 "500도 CORS 헤더 부착" 기록은 사실과 다름(27ddb68 에서 재현 확인).
+        해결안: 미처리 예외를 CORS 안쪽에서 500 응답으로 바꾸는 순수 ASGI 미들웨어 추가 (별도 작업)
+  - gunicorn master 로그 포맷(O1-1 남은 것)은 그대로
 
 ### O2. 애플리케이션 메트릭 (Prometheus)
 
@@ -539,7 +577,7 @@
 ## 2. 인프라 / 공통 작업
 
 - [x] **JWT 인증 의존성** (`Depends(get_current_user)`, `Depends(get_current_active_user)`) — `app/core/security.py` + `app/core/deps.py` 완료
-- [x] **에러 응답 표준화** — `{code, message}` 포맷 + 글로벌 Exception 핸들러 (500도 CORS 헤더 부착)
+- [x] **에러 응답 표준화** — `{code, message}` 포맷 + 글로벌 Exception 핸들러 (⚠️ 500 CORS 헤더는 실제로 안 붙음 — 관측성 O1 "남은 한계" 참고)
 - [x] **CORS** — `settings.cors_origins` 설정 완료, 글로벌 에러도 CORS 헤더 부착
 - [x] **Pydantic 스키마** — auth/user 도메인 완료 (`app/auth/auth_schemas.py`, `app/user/user_schemas.py`)
 - [x] **BackgroundTasks** — 이메일 발송 분리 (SMTP 지연이 요청 트랜잭션 묶지 않음)

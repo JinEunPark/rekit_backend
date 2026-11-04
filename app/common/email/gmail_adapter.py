@@ -15,6 +15,10 @@ from __future__ import annotations
 
 from email.message import EmailMessage
 
+import structlog
+
+_log = structlog.stdlib.get_logger(__name__)
+
 
 class GmailSmtpEmailSender:
     """EmailSender Protocol 구현. STARTTLS 587 포트로 Gmail SMTP 발송.
@@ -46,11 +50,15 @@ class GmailSmtpEmailSender:
         if html_body:
             msg.add_alternative(html_body, subtype="html")
 
-        await aiosmtplib.send(
-            msg,
-            hostname="smtp.gmail.com",
-            port=587,
-            start_tls=True,
-            username=self.user,
-            password=self.password,
-        )
+        try:
+            await aiosmtplib.send(
+                msg,
+                hostname="smtp.gmail.com",
+                port=587,
+                start_tls=True,
+                username=self.user,
+                password=self.password,
+            )
+        except Exception as exc:
+            _log.error("메일 발송 실패", to_email=to, subject=subject, error=type(exc).__name__)
+            raise

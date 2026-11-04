@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+import structlog
 from fastapi.security import HTTPAuthorizationCredentials
 
 from app.core.deps import get_current_user
@@ -109,3 +110,38 @@ def test_account_inactive_is_403_with_proper_code() -> None:
     assert exc.code == "ACCOUNT_INACTIVE"
     assert exc.http_status == status.HTTP_403_FORBIDDEN
     assert isinstance(exc.message, str) and exc.message
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_binds_user_id_to_log_context() -> None:
+    """인증 성공 시 user_id 를 로그 컨텍스트에 바인딩 — 이후 그 요청의 모든 로그에 자동 포함."""
+    # Arrange
+    structlog.contextvars.clear_contextvars()
+    user = _make_user(user_id=42)
+    token = create_access_token(sub="42", claims={"role": "USER"})
+
+    # Act
+    await get_current_user(credentials=_bearer(token), repo=_FakeRepo({42: user}))  # type: ignore[arg-type]
+
+    # Assert
+    assert structlog.contextvars.get_contextvars()["user_id"] == 42
+    structlog.contextvars.clear_contextvars()
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_does_not_bind_user_id_when_inactive() -> None:
+    """인증 실패(비활성 계정)면 user_id 를 바인딩하지 않는다.
+
+    거절된 요청을 그 사용자의 요청으로 오인하지 않도록.
+    """
+    # Arrange
+    structlog.contextvars.clear_contextvars()
+    user = _make_user(user_id=42, is_active=False)
+    token = create_access_token(sub="42", claims={"role": "USER"})
+
+    # Act
+    with pytest.raises(AccountInactiveError):
+        await get_current_user(credentials=_bearer(token), repo=_FakeRepo({42: user}))  # type: ignore[arg-type]
+
+    # Assert
+    assert "user_id" not in structlog.contextvars.get_contextvars()

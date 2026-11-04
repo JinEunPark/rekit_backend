@@ -6,6 +6,8 @@ import csv
 import io
 from datetime import UTC, datetime
 
+import structlog
+
 from app.core.exceptions import (
     InvalidOrderStatusError,
     OrderCancelForbiddenError,
@@ -28,6 +30,8 @@ from app.order.admin_order_schemas import (
 from app.order.models import Order, OrderStatus
 from app.payment.models import PaymentStatus
 from app.payment.payment_service import PaymentService
+
+_log = structlog.stdlib.get_logger(__name__)
 
 _CANCELLABLE = {OrderStatus.PENDING, OrderStatus.PAID, OrderStatus.PREPARING}
 _PAID_STATUSES = {OrderStatus.PAID, OrderStatus.PREPARING}
@@ -74,6 +78,13 @@ class AdminOrderService:
         if order.status not in {OrderStatus.PAID, OrderStatus.PREPARING}:
             raise InvalidOrderStatusError("송장은 결제완료/준비중 상태에서만 입력 가능합니다.")
         await self._repo.create_or_update_shipment(order, body.carrier, body.tracking_number)
+        # 관리자 식별은 요청 컨텍스트의 user_id(get_current_user 바인딩)로 자동 포함
+        _log.info(
+            "관리자 송장 입력",
+            order_number=order_number,
+            from_status=order.status.value,
+            carrier=body.carrier,
+        )
         order.status = OrderStatus.SHIPPING
         return await self.get_order(order_number)
 
@@ -87,6 +98,12 @@ class AdminOrderService:
             raise InvalidOrderStatusError(
                 f"수동 변경 가능 상태: {[s.value for s in _MANUAL_SETTABLE]}"
             )
+        _log.info(
+            "관리자 주문 상태 변경",
+            order_number=order_number,
+            from_status=order.status.value,
+            to_status=body.status.value,
+        )
         order.status = body.status
         return await self.get_order(order_number)
 
@@ -104,11 +121,18 @@ class AdminOrderService:
                 order.id, reason=body.reason or "관리자 주문 취소"
             )
 
+        previous_status = order.status
         for item in order.items:
             await self._repo.increment_stock(item.product_id, item.quantity)
 
         order.status = OrderStatus.CANCELLED
         order.cancelled_at = datetime.now(UTC)
+        _log.info(
+            "관리자 주문 취소",
+            order_number=order_number,
+            previous_status=previous_status.value,
+            reason=body.reason,
+        )
         return await self.get_order(order_number)
 
     async def export_csv(self) -> str:

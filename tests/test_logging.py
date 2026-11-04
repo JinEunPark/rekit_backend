@@ -6,33 +6,13 @@
 
 import json
 import logging
-from collections.abc import Iterator
 
 import pytest
 import structlog
 
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, mask_sensitive_fields
 
-_THIRD_PARTY_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
-
-
-@pytest.fixture(autouse=True)
-def _restore_logging() -> Iterator[None]:
-    """configure_logging 은 전역(root 로거·structlog) 상태를 바꾸므로 테스트마다 원복."""
-    root = logging.getLogger()
-    saved_root = (root.handlers[:], root.level)
-    saved_third_party = {
-        name: (logging.getLogger(name).handlers[:], logging.getLogger(name).propagate)
-        for name in _THIRD_PARTY_LOGGERS
-    }
-    saved_structlog = structlog.get_config()
-    yield
-    root.handlers, root.level = saved_root[0], saved_root[1]
-    for name, (handlers, propagate) in saved_third_party.items():
-        logging.getLogger(name).handlers = handlers
-        logging.getLogger(name).propagate = propagate
-    structlog.configure(**saved_structlog)
-    structlog.contextvars.clear_contextvars()
+pytestmark = pytest.mark.usefixtures("restore_logging")
 
 
 def _json_lines(out: str) -> list[dict[str, object]]:
@@ -115,16 +95,25 @@ def test_json_log_includes_bound_context_vars(capsys: pytest.CaptureFixture[str]
 
 def test_uvicorn_logger_is_routed_through_root_once(capsys: pytest.CaptureFixture[str]) -> None:
     """uvicorn 이 자체 핸들러를 달아둔 상태여도 같은 JSON 포맷으로 한 번만 출력된다."""
-    uvicorn_access = logging.getLogger("uvicorn.access")
-    uvicorn_access.handlers = [logging.StreamHandler()]
-    uvicorn_access.propagate = False
+    uvicorn_error = logging.getLogger("uvicorn.error")
+    uvicorn_error.handlers = [logging.StreamHandler()]
+    uvicorn_error.propagate = False
     configure_logging(level="INFO", json_logs=True)
 
-    uvicorn_access.info('%s - "%s %s"', "127.0.0.1", "GET", "/api/v1/products")
+    uvicorn_error.info("Started server process [%d]", 123)
 
     [line] = _json_lines(capsys.readouterr().out)
-    assert line["logger"] == "uvicorn.access"
-    assert line["event"] == '127.0.0.1 - "GET /api/v1/products"'
+    assert line["logger"] == "uvicorn.error"
+    assert line["event"] == "Started server process [123]"
+
+
+def test_uvicorn_access_log_is_suppressed(capsys: pytest.CaptureFixture[str]) -> None:
+    """uvicorn 기본 액세스 로그는 끈다 — 미들웨어의 구조화 액세스 로그와 이중 기록 방지."""
+    configure_logging(level="INFO", json_logs=True)
+
+    logging.getLogger("uvicorn.access").info('%s - "%s %s"', "127.0.0.1", "GET", "/")
+
+    assert capsys.readouterr().out == ""
 
 
 def test_console_mode_renders_human_readable_text(capsys: pytest.CaptureFixture[str]) -> None:
@@ -169,3 +158,103 @@ def test_sql_logs_enabled_only_in_debug() -> None:
     sql_logger = logging.getLogger("sqlalchemy.engine")
 
     assert sql_logger.isEnabledFor(logging.INFO) is settings.debug
+
+
+# ── 민감정보 마스킹 (O1-5) ──────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["password", "new_password", "PASSWORD", "access_token", "refresh_token", "id_token",
+     "Authorization", "client_secret", "ci", "di"],
+)
+def test_mask_sensitive_fields_fully_masks_secret_keys(key: str) -> None:
+    """비밀번호·토큰·시크릿·CI/DI 는 키 대소문자와 무관하게 값 전체를 가린다."""
+    result = mask_sensitive_fields(None, "info", {"event": "e", key: "s3cr3t-value"})
+
+    assert result[key] == "***"
+
+
+def test_mask_sensitive_fields_masks_non_string_secret() -> None:
+    """문자열이 아닌 값(숫자 등)이어도 비밀 키면 가린다."""
+    result = mask_sensitive_fields(None, "info", {"event": "e", "token": 123456})
+
+    assert result["token"] == "***"
+
+
+def test_mask_sensitive_fields_keeps_payment_key_prefix() -> None:
+    """payment_key 는 추적용으로 앞 6자만 남긴다."""
+    event = {"event": "e", "payment_key": "tgen_20261105abcdef"}
+
+    result = mask_sensitive_fields(None, "info", event)
+
+    assert result["payment_key"] == "tgen_2***"
+
+
+def test_mask_sensitive_fields_masks_phone_middle_digits() -> None:
+    """휴대폰 번호는 앞 3자리·뒤 4자리만 남기고 구분자(-)는 유지."""
+    result = mask_sensitive_fields(None, "info", {"event": "e", "phone": "010-1234-5678"})
+
+    assert result["phone"] == "010-****-5678"
+
+
+def test_mask_sensitive_fields_masks_short_phone_entirely() -> None:
+    """앞·뒤를 남기면 원문이 다 보이는 짧은 값은 전체를 가린다."""
+    result = mask_sensitive_fields(None, "info", {"event": "e", "phone": "12345"})
+
+    assert result["phone"] == "***"
+
+
+def test_mask_sensitive_fields_masks_email_local_part() -> None:
+    """이메일은 로컬파트 앞 2자 + 도메인만 남긴다."""
+    result = mask_sensitive_fields(None, "info", {"event": "e", "email": "honggildong@example.com"})
+
+    assert result["email"] == "ho***@example.com"
+
+
+def test_mask_sensitive_fields_masks_malformed_email_entirely() -> None:
+    """@ 가 없는 값은 형식을 알 수 없으니 전체를 가린다."""
+    result = mask_sensitive_fields(None, "info", {"event": "e", "email": "not-an-email"})
+
+    assert result["email"] == "***"
+
+
+def test_mask_sensitive_fields_recurses_into_nested_dicts_and_lists() -> None:
+    """중첩 dict / list 안의 민감 키도 가린다."""
+    event = {"event": "e", "body": {"user": {"password": "p"}, "items": [{"token": "t"}]}}
+
+    result = mask_sensitive_fields(None, "info", event)
+
+    assert result["body"] == {"user": {"password": "***"}, "items": [{"token": "***"}]}
+
+
+def test_mask_sensitive_fields_leaves_other_fields_untouched() -> None:
+    """민감하지 않은 키(order_number, user_id 등)는 그대로 둔다."""
+    event = {"event": "주문 생성", "order_number": "RK-2611050001", "user_id": 42}
+
+    result = mask_sensitive_fields(None, "info", dict(event))
+
+    assert result == event
+
+
+def test_json_log_output_masks_sensitive_fields(capsys: pytest.CaptureFixture[str]) -> None:
+    """configure_logging 체인에 마스킹이 연결돼 실제 출력에서 가려진다."""
+    configure_logging(level="INFO", json_logs=True)
+
+    structlog.stdlib.get_logger("app.test").info("로그인 실패", login_id="hong", password="pw1234")
+
+    [line] = _json_lines(capsys.readouterr().out)
+    assert line["password"] == "***"
+    assert line["login_id"] == "hong"
+
+
+def test_json_log_keeps_korean_event_readable(capsys: pytest.CaptureFixture[str]) -> None:
+    """한국어 이벤트명이 \\uXXXX 로 이스케이프되지 않는다.
+
+    그래야 docker logs | grep "토스 웹훅 수신" 으로 찾을 수 있다.
+    """
+    configure_logging(level="INFO", json_logs=True)
+
+    structlog.stdlib.get_logger("app.test").info("토스 웹훅 수신")
+
+    assert '"event": "토스 웹훅 수신"' in capsys.readouterr().out

@@ -12,14 +12,13 @@ scope 는 `openid email profile` 권장 (프론트가 요청 시 지정).
 
 from __future__ import annotations
 
-import logging
-
 import httpx
+import structlog
 
 from app.auth.adapters._oauth_helpers import translate_oauth_error
 from app.auth.adapters.ports import SocialProfile
 
-_log = logging.getLogger(__name__)
+_log = structlog.stdlib.get_logger(__name__)
 
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _USER_INFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
@@ -56,10 +55,11 @@ class GoogleOAuthAdapter:
         res = await client.post(_TOKEN_URL, data=data)
         if res.is_error:
             _log.error(
-                "Google token exchange failed: %d — %s (redirect_uri=%s)",
-                res.status_code,
-                res.text,
-                self.redirect_uri,
+                "소셜 토큰 교환 실패",
+                provider="google",
+                status_code=res.status_code,
+                response_body=res.text[:500],
+                redirect_uri=self.redirect_uri,
             )
             res.raise_for_status()
         return str(res.json()["access_token"])

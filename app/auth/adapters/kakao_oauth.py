@@ -9,14 +9,13 @@
 
 from __future__ import annotations
 
-import logging
-
 import httpx
+import structlog
 
 from app.auth.adapters._oauth_helpers import translate_oauth_error
 from app.auth.adapters.ports import SocialProfile
 
-_log = logging.getLogger(__name__)
+_log = structlog.stdlib.get_logger(__name__)
 
 _TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 _USER_INFO_URL = "https://kapi.kakao.com/v2/user/me"
@@ -58,10 +57,11 @@ class KakaoOAuthAdapter:
             # 카카오는 4xx 시 {error, error_description, error_code} 를 본문으로 보냄.
             # 사용자에게 노출은 위험하니 로그로만 — 디버깅 결정타가 됨.
             _log.error(
-                "Kakao token exchange failed: %d — %s (redirect_uri=%s)",
-                res.status_code,
-                res.text,
-                self.redirect_uri,
+                "소셜 토큰 교환 실패",
+                provider="kakao",
+                status_code=res.status_code,
+                response_body=res.text[:500],
+                redirect_uri=self.redirect_uri,
             )
             res.raise_for_status()
         return str(res.json()["access_token"])

@@ -12,6 +12,7 @@ from app.core.database import async_session_factory, engine
 from app.core.deps import build_payment_gateway, get_email_sender
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
+from app.core.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
 from app.db import registry  # noqa: F401  # 모든 SQLAlchemy 모델 로드 — string ref resolve 용
 from app.order.abandoned_order_sweeper import run_periodically, sweep_abandoned_orders
 
@@ -62,7 +63,11 @@ def create_app() -> FastAPI:
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
+            # 브라우저 JS 가 응답의 request_id 를 읽어 오류 화면·문의에 표시할 수 있게
+            expose_headers=[REQUEST_ID_HEADER],
         )
+    # CORS 보다 나중에 추가 = 더 바깥 — CORS 가 직접 응답하는 preflight 에도 request_id·액세스 로그
+    app.add_middleware(RequestContextMiddleware)
 
     register_exception_handlers(app)
 
