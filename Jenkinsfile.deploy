@@ -17,21 +17,29 @@ pipeline {
         COMPOSE_PROJECT = 'rekit-backend'
         // 저장소에는 커밋하지 않는 운영용 .env — 호스트의 고정 경로에서 배포 시점에 복사해온다
         PROD_ENV_FILE   = '/home/wlsdms/rekit/secrets/rekit_backend.env'
+        // 배포 태그 시점의 compose 를 꺼내 둘 파일. 워크스페이스는 master 라서 그 compose 를 그대로 쓰면
+        // 이미지(태그)와 실행 명령(master)이 어긋나, 실행 명령이 바뀐 뒤 이전 태그로 롤백하면 기동 실패한다
+        // (예: master 는 gunicorn.conf.py 를 요구하는데 0.0.4 이미지엔 그 파일이 없음).
+        DEPLOY_COMPOSE  = '.deploy-compose.yml'
     }
 
     stages {
         stage('Deploy') {
             steps {
                 script {
-                    if (!params.VERSION?.trim()) {
-                        error 'VERSION 이 비었습니다. 먼저 build-was 잡으로 해당 태그 이미지를 빌드했는지 확인하세요.'
+                    if (!params.VERSION?.trim()?.matches(/^\d+\.\d+\.\d+$/)) {
+                        error "VERSION 형식 오류: '${params.VERSION}' (X.Y.Z 여야 함). 먼저 build-was 잡으로 해당 태그 이미지를 빌드했는지 확인하세요."
                     }
+                    env.DEPLOY_TAG = params.VERSION.trim()
                 }
-                echo "Deploying 127.0.0.1:5000/rekit-backend:${params.VERSION}"
+                echo "Deploying 127.0.0.1:5000/rekit-backend:${env.DEPLOY_TAG} (compose 도 태그 ${env.DEPLOY_TAG} 기준)"
+                sh 'git fetch --tags --force --prune'
+                // git show 로 별도 파일에 꺼낸다 — checkout 으로 워크스페이스의 추적 파일을 바꾸지 않기 위해
+                sh "git show tags/${env.DEPLOY_TAG}:docker-compose.prod.yml > ${DEPLOY_COMPOSE}"
                 sh """
                     cp ${PROD_ENV_FILE} .env
-                    IMAGE_TAG=${params.VERSION} docker compose -p ${COMPOSE_PROJECT} -f docker-compose.prod.yml pull app
-                    IMAGE_TAG=${params.VERSION} docker compose -p ${COMPOSE_PROJECT} -f docker-compose.prod.yml up -d postgres redis app
+                    IMAGE_TAG=${env.DEPLOY_TAG} docker compose -p ${COMPOSE_PROJECT} -f ${DEPLOY_COMPOSE} pull app
+                    IMAGE_TAG=${env.DEPLOY_TAG} docker compose -p ${COMPOSE_PROJECT} -f ${DEPLOY_COMPOSE} up -d postgres redis app
                     docker image prune -f
                 """
             }
@@ -58,7 +66,7 @@ pipeline {
 
     post {
         always {
-            sh 'rm -f .env'
+            sh "rm -f .env ${DEPLOY_COMPOSE}"
         }
     }
 }
