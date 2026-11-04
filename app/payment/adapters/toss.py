@@ -19,6 +19,7 @@ import structlog
 
 from app.core.config import settings
 from app.core.exceptions import PaymentFailedError, PaymentGatewayUnknownError
+from app.core.metrics import PG_REQUEST_DURATION_SECONDS
 from app.payment.adapters.ports import (
     TossCancelResult,
     TossConfirmResult,
@@ -122,8 +123,9 @@ class TossPaymentGateway:
             "amount": amount,
         }
         try:
-            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-                resp = await client.post(_TOSS_CONFIRM_URL, json=payload, headers=headers)
+            with PG_REQUEST_DURATION_SECONDS.labels(operation="confirm").time():
+                async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+                    resp = await client.post(_TOSS_CONFIRM_URL, json=payload, headers=headers)
         except httpx.TransportError as exc:
             # 타임아웃/커넥션 에러 — 결제 성공 여부 불명. PaymentFailedError와 구분.
             _log_transport_error(exc, "confirm")
@@ -174,8 +176,9 @@ class TossPaymentGateway:
 
     async def _get(self, url: str, operation: str) -> httpx.Response:
         try:
-            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-                return await client.get(url, headers=_auth_header())
+            with PG_REQUEST_DURATION_SECONDS.labels(operation=operation).time():
+                async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+                    return await client.get(url, headers=_auth_header())
         except httpx.TransportError as exc:
             _log_transport_error(exc, operation)
             raise PaymentGatewayUnknownError() from exc
@@ -197,12 +200,13 @@ class TossPaymentGateway:
         if cancel_amount is not None:
             payload["cancelAmount"] = cancel_amount
         try:
-            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-                resp = await client.post(
-                    f"{_TOSS_API_BASE}/{payment_key}/cancel",
-                    json=payload,
-                    headers=headers,
-                )
+            with PG_REQUEST_DURATION_SECONDS.labels(operation="cancel").time():
+                async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+                    resp = await client.post(
+                        f"{_TOSS_API_BASE}/{payment_key}/cancel",
+                        json=payload,
+                        headers=headers,
+                    )
         except httpx.TransportError as exc:
             # 취소 성공 여부 불명 — 재조회로 확인해야 함. PaymentFailedError 와 구분.
             _log_transport_error(exc, "cancel")

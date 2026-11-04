@@ -40,6 +40,7 @@ from app.core.exceptions import (
     UsernameTakenError,
     VerificationRateLimitedError,
 )
+from app.core.metrics import SIGNUPS_TOTAL
 from app.core.security import (
     create_access_token,
     create_email_verified_token,
@@ -197,6 +198,7 @@ class AuthService:
             agreed_marketing_at=now if req.agreed_marketing else None,
         )
         user = await self.repo.add(user)
+        SIGNUPS_TOTAL.labels(provider="email").inc()
 
         access, refresh = self._issue_tokens(user, remember=False)
         return user, access, refresh
@@ -470,6 +472,7 @@ class AuthService:
             email_at_link=email,
         )
         await self.repo.add_social_account(social_account)
+        SIGNUPS_TOTAL.labels(provider=provider_value).inc()
 
         access, refresh = self._issue_tokens(user, remember=False)
         return user, access, refresh

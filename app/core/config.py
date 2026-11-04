@@ -17,6 +17,15 @@ class Settings(BaseSettings):
     app_env: Literal["development", "staging", "production"] = "development"
     debug: bool = False
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # 배포 이미지 태그 — compose 가 IMAGE_TAG 로 주입.
+    # Sentry release 로 쓰여 어느 배포부터 에러가 났는지 추적한다
+    app_version: str = "dev"
+
+    # ── 에러 추적 (Sentry) ─────────────────────────────────
+    # 비어 있으면 비활성 (로컬·테스트 기본). 운영 시크릿에 DSN 을 넣으면 켜진다
+    sentry_dsn: str | None = None
+    # 성능 트레이스 샘플 비율. 0 = 에러만 — 무료 플랜 트랜잭션 한도·오버헤드 때문에 기본은 끔
+    sentry_traces_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
 
     api_v1_prefix: str = "/api/v1"
 

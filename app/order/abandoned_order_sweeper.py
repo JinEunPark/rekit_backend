@@ -19,6 +19,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.common.email import EmailSender
+from app.core.metrics import ABANDONED_ORDERS_RELEASED_TOTAL
 from app.order.order_repository import OrderRepository
 from app.order.order_service import PAYMENT_TIMEOUT
 from app.payment.adapters.ports import PaymentGateway
@@ -71,4 +72,5 @@ async def run_periodically(
             logger.exception("방치 주문 스윕 실패 — 다음 주기에 재시도")
             continue
         if released:
+            ABANDONED_ORDERS_RELEASED_TOTAL.inc(released)
             logger.info("방치 주문 정리", released=released)

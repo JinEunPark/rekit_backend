@@ -27,6 +27,7 @@ from app.core.exceptions import (
     RefundForbiddenError,
     ShipmentNotFoundError,
 )
+from app.core.metrics import ORDERS_CREATED_TOTAL
 from app.core.pagination import build_page_meta
 from app.core.shipping import calc_shipping, is_direct_delivery_available
 from app.order.models import Order, OrderItem, OrderStatus
@@ -187,6 +188,7 @@ class OrderService:
             total_amount=order.total_amount,
             item_count=len(req.items),
         )
+        ORDERS_CREATED_TOTAL.inc()
         return _to_order_response(order)
 
     # ── 목록 ────────────────────────────────────────────────────────

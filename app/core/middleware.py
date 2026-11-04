@@ -18,6 +18,11 @@ from starlette.routing import replace_params
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.exceptions import internal_error_response
+from app.core.metrics import (
+    HTTP_REQUEST_DURATION_SECONDS,
+    HTTP_REQUESTS_IN_PROGRESS,
+    HTTP_REQUESTS_TOTAL,
+)
 
 REQUEST_ID_HEADER = "X-Request-ID"
 
@@ -25,7 +30,7 @@ REQUEST_ID_HEADER = "X-Request-ID"
 # nginx $request_id(hex 32자)와 UUID 를 모두 수용.
 _VALID_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
-# 1분 주기 헬스체크·Prometheus 수집이 액세스 로그를 덮지 않게 제외
+# 1분 주기 헬스체크·Prometheus 수집이 액세스 로그·HTTP 메트릭(RPS)을 덮지 않게 제외
 _ACCESS_LOG_EXCLUDED_PATHS = frozenset({"/health", "/health/ready", "/metrics"})
 
 # 라우트 매칭 실패 시 원문 경로 대신 기록 — 스캐너의 무작위 경로로 값 종류가 폭발하지 않게
@@ -75,6 +80,9 @@ class RequestContextMiddleware:
         structlog.contextvars.bind_contextvars(request_id=request_id)
 
         status_code = 500  # 응답 시작 전에 예외로 빠져나가면 ServerErrorMiddleware 가 500 응답
+        observed = scope["path"] not in _ACCESS_LOG_EXCLUDED_PATHS
+        if observed:
+            HTTP_REQUESTS_IN_PROGRESS.inc()
         started = time.perf_counter()
 
         async def send_with_request_id(message: Message) -> None:
@@ -87,14 +95,19 @@ class RequestContextMiddleware:
         try:
             await self.app(scope, receive, send_with_request_id)
         finally:
-            if scope["path"] not in _ACCESS_LOG_EXCLUDED_PATHS:
+            if observed:
+                elapsed = time.perf_counter() - started
+                method, path = scope["method"], _route_template(scope)
+                HTTP_REQUESTS_IN_PROGRESS.dec()
+                HTTP_REQUESTS_TOTAL.labels(method=method, path=path, status=str(status_code)).inc()
+                HTTP_REQUEST_DURATION_SECONDS.labels(method=method, path=path).observe(elapsed)
                 client = scope.get("client")
                 _access_log.info(
                     "http_request",
-                    method=scope["method"],
-                    path=_route_template(scope),
+                    method=method,
+                    path=path,
                     status=status_code,
-                    duration_ms=round((time.perf_counter() - started) * 1000, 2),
+                    duration_ms=round(elapsed * 1000, 2),
                     client_ip=client[0] if client else None,
                 )
 

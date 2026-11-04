@@ -276,76 +276,77 @@
   - Python warnings(`StarletteDeprecationWarning` 등)는 `warnings` 모듈이 stderr 로 직접 써서 JSON 이 아님 — 기동 시 몇 줄
   - 로컬 venv(Python 3.13, FastAPI 0.136) ≠ 운영 이미지(Python 3.11, FastAPI 0.162) — 버전 의존 동작은 이미지에서도 검증 필요
 
-### O2. 애플리케이션 메트릭 (Prometheus)
+### O2. 애플리케이션 메트릭 (Prometheus) — ✅ 2026-11-05 완료 (O2-6 nginx 확인만 남음)
 
-- [ ] **O2-1 의존성** — `prometheus-client`, `prometheus-fastapi-instrumentator` (`pyproject.toml`)
-- [ ] **O2-2 HTTP 자동 계측** — `app/core/metrics.py` `setup_metrics(app)`
-  - `metrics.requests()` + `metrics.latency(buckets=(0.025,0.05,0.1,0.2,0.3,0.5,0.75,1,2,5))` (기본 3구간은 p95 부정확)
-  - `should_instrument_requests_inprogress=True` (동시 처리 중 요청 수 — 부하테스트 핵심 지표)
-  - `excluded_handlers=["/metrics", "/health", "/health/ready"]`
-  - handler 라벨은 경로 템플릿(`/products/{product_id}`) 인지 테스트로 고정 (카디널리티 방지)
-- [ ] **O2-3 비즈니스 메트릭** (정의는 `app/core/metrics.py` 한 곳, 서비스/어댑터는 import 만)
-  - `rekle_payment_confirm_total{result=success|failed|unknown}` — `payment_service.py`
-  - `rekle_pg_request_duration_seconds{operation=confirm|get_payment|cancel}` — 토스 어댑터 (우리 로직 vs 토스 지연 분리)
-  - `rekle_webhook_received_total{status}` — 웹훅 수신
-  - `rekle_abandoned_orders_released_total` — 스위퍼
-  - `rekle_orders_created_total`, `rekle_signups_total{provider=email|kakao|naver|google}`
-  - `rekle_external_request_duration_seconds{service=octomo|smtp|s3}`
-  - 테스트: `REGISTRY.get_sample_value()` 로 **전후 차이** 검증 (전역 상태라 절대값 금지)
-- [ ] **O2-4 DB 커넥션 풀 메트릭** — SQLAlchemy pool `checkedout`/`overflow` 를 Gauge(`multiprocess_mode="livesum"`) 로 노출
-      (부하 시 "pool 대기" 병목 식별용)
-- [ ] **O2-5 gunicorn 멀티프로세스 대응** (⚠️ 안 하면 워커 4개 값이 번갈아 나와 그래프 톱니)
-  - 컨테이너 env `PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc` (Settings 아님 — 라이브러리가 직접 읽음)
-  - compose `command` 에 기동 전 `rm -rf` + `mkdir -p` (이전 실행 잔여 파일 합산 방지)
-  - `gunicorn.conf.py` 신규 — `child_exit` hook 에서 `multiprocess.mark_process_dead(worker.pid)`
-  - 로컬/테스트는 env 미설정 → 단일 프로세스 모드
-- [ ] **O2-6 `/metrics` 비공개** — 엣지 nginx `location = /metrics { return 404; }` (레포 밖: `~/rekit/nginx`).
-      Prometheus 는 docker 내부망 `rekle-app:8000/metrics` 로 직접 수집. 배포 후 외부 `curl https://rekit.co.kr/metrics` → 404 확인
-- [ ] **O2-7 테스트** — `/metrics` 200 + `http_requests_total` 포함 / `/health` 제외 확인.
-      주의: `create_app()` 재호출 시 `Duplicated timeseries` — 테스트는 `app.main.app` 단일 인스턴스 공유 유지
+- [x] **O2-1 의존성** — `prometheus-client` 만 추가. **계획 변경**: `prometheus-fastapi-instrumentator` 는 안 씀 —
+      자체 라우트 이름 해석이 FastAPI 0.162 중첩 라우터에서 `/api/v1` 을 잃을 위험(O1 에서 실제로 겪은 문제).
+      HTTP 메트릭은 `RequestContextMiddleware` 가 액세스 로그와 **같은 path 템플릿·status** 로 기록
+- [x] **O2-2 HTTP 계측** — `app/core/metrics.py` + 미들웨어
+  - `rekle_http_requests_total{method,path,status}` · `rekle_http_request_duration_seconds{method,path}`
+    (구간 0.025~5s, SLO 근처 촘촘) · `rekle_http_requests_in_progress` (livesum)
+  - `/health`·`/health/ready`·`/metrics` 제외, 미매칭 경로는 `<unmatched>` (카디널리티 방지) — 테스트로 고정
+- [x] **O2-3 비즈니스 메트릭** — 정의는 `app/core/metrics.py` 한 곳
+  - `rekle_payment_confirm_total{result=success|failed|unknown}` — **PG 호출 결과만** 셈 (금액 불일치 등 사전 거절 제외)
+  - `rekle_pg_request_duration_seconds{operation=confirm|get_payment|get_payment_by_order_id|cancel}` — 토스 어댑터
+  - `rekle_payment_webhook_received_total{remote_status}` — 조회 API 로 재확인한 실제 상태별
+  - `rekle_orders_created_total`, `rekle_signups_total{provider=email|kakao|naver|google}`, `rekle_abandoned_orders_released_total`
+  - 테스트 `tests/test_business_metrics.py` (전후 차이로 검증)
+  - [ ] (미착수) `rekle_external_request_duration_seconds{service=octomo|smtp|s3}`
+- [x] **O2-4 DB 커넥션 풀** — `rekle_db_pool_connections_in_use` (livesum), pool `checkout`/`checkin` 이벤트로 갱신.
+      scrape 시점에 pool 을 읽으면 그 워커 하나 값만 보여 멀티 워커에서 틀림. `engine.dispose()` 후에도 유지 확인
+- [x] **O2-5 gunicorn 멀티프로세스** — **계획 변경**: compose `rm -rf` 대신 `gunicorn.conf.py` hook 으로 자체 완결
+  - `on_starting`: `PROMETHEUS_MULTIPROC_DIR`(기본 `/tmp/prometheus_multiproc`) 설정 + 이전 파일 삭제.
+    파일 최상단이 아닌 hook 에서 하는 이유 — conf 를 읽기만 하는 테스트까지 멀티프로세스 모드로 안 바뀌게
+  - `child_exit`: `mark_process_dead(pid)`. 로컬 uvicorn 은 env 없음 → 단일 프로세스
+  - **실측**: `gunicorn -c gunicorn.conf.py` 워커 4개, 요청 20건 → `/metrics` 6회 수집 모두 정확히 20
+- [ ] **O2-6 `/metrics` 비공개 확인 (직접)** — 메모리상 엣지 nginx 는 `/api/`·`/health` 만 앱으로 넘겨서 외부 미노출 예상.
+      배포 후 `curl https://rekit.co.kr/metrics` 가 앱 응답(`rekle_` 텍스트)이 아닌지 확인. nginx 라우팅을 넓히면
+      `location = /metrics { return 404; }` 필수. Prometheus 는 내부망 `rekle-app:8000/metrics` 로 수집
+- [x] **O2-7 테스트** — `tests/test_metrics.py`(12)·`test_business_metrics.py`(10)·`test_gunicorn_conf.py`(3)
 
-### O3. 에러 추적 (Sentry)
+### O3. 에러 추적 (Sentry) — 코드 ✅ 2026-11-05 완료, DSN 발급·검증은 직접
 
-- [ ] **O3-1 Sentry 프로젝트 생성** (무료 플랜) → DSN 발급
-- [ ] **O3-2 SDK 연동** — `sentry-sdk[fastapi]`, `SENTRY_DSN`(default 없음 — 비어있으면 비활성) ·
-      `SENTRY_ENVIRONMENT` · `SENTRY_TRACES_SAMPLE_RATE`(default 0.1) 3곳 동시 수정
-  - `release` = 배포 이미지 태그(`IMAGE_TAG`) → 어느 배포에서 에러가 시작됐는지 추적
-  - `send_default_pii=False` + `before_send` 에서 O1-5 와 같은 마스킹
-  - `BusinessError` 는 Sentry 전송 제외 (정상 4xx 거절이 이슈로 쌓이지 않게)
-- [ ] **O3-3 이벤트에 request_id·user_id 태그** — 로그 ↔ Sentry 이슈 상호 검색
-- [ ] **O3-4 "사람이 즉시 봐야 하는" 이벤트 명시 전송** — `capture_message(level="error")`
-  - 취소된 주문의 결제 승인 감지(자동환불), 웹훅 금액 불일치, PG 취소 실패, `PaymentGatewayUnknownError`
-  - 스위퍼 반복 실패 (`run_periodically` except 블록)
-- [ ] **O3-5 검증** — 스테이징에서 의도적 예외 1회 → Sentry 이슈·스택트레이스·request_id 확인 후 제거
+- [ ] **O3-1 Sentry 프로젝트 생성 (직접)** (무료 플랜) → DSN 을 운영 시크릿 `~/rekit/secrets/rekit_backend.env` 의 `SENTRY_DSN` 에
+- [x] **O3-2 SDK 연동** — `app/core/sentry.py` `init_sentry()`, `create_app()` 에서 호출. `SENTRY_DSN`(비면 비활성) ·
+      `SENTRY_TRACES_SAMPLE_RATE` · `APP_VERSION` 3곳 반영
+  - **계획 변경**: traces 기본 **0.0**(에러만) — 무료 플랜 트랜잭션 한도·오버헤드. 필요 시 env 로 올림
+  - **계획 변경**: `SENTRY_ENVIRONMENT` 별도 변수 없이 `APP_ENV` 사용
+  - `release` = `APP_VERSION` — compose 가 `${IMAGE_TAG}` 로 주입 (IMAGE_TAG 는 원래 이미지 선택에만 쓰여 컨테이너엔 없었음)
+  - `send_default_pii=False` + `EventScrubber`(Sentry 기본 목록 + `payment_key`·`phone`·`email`·`ci`·`di`, 재귀)
+  - `BusinessError` 는 `before_send` 에서 제외
+- [x] **O3-3 request_id·user_id 태그** — `before_send` 가 structlog contextvars 에서 읽어 `tags.request_id`·`user.id`
+- [x] **O3-4 "사람이 즉시 봐야 하는" 이벤트** — **계획 변경**: `capture_message` 를 곳곳에 넣지 않음.
+      Sentry LoggingIntegration 기본값이 ERROR 로그를 이벤트로 보내므로, 이미 ERROR 로 남기는 결제 이상
+      (취소된 주문의 승인 감지·웹훅 금액 불일치 등)·스위퍼 실패(`logger.exception`)·미처리 예외가 자동으로 잡힌다
+- [ ] **O3-5 검증 (직접)** — DSN 넣고 스테이징/운영에서 의도적 예외 1회 → 이슈·스택트레이스·request_id 태그 확인
 
-### O4. 헬스체크
+### O4. 헬스체크 — ✅ 2026-11-05 완료 (O4-3·O4-4 남음)
 
-- [ ] **O4-1 liveness / readiness 분리**
-  - `/health` — 프로세스 생존만 (현행 유지, 의존성 체크 X — DB 장애 때 재시작 폭주 방지)
-  - `/health/ready` — DB `SELECT 1` + Redis `PING` (각 타임아웃 1~2초), 실패 시 503 + 어느 의존성인지 응답
-  - 테스트: 정상 200 / DB 실패 fake → 503 / Redis 실패 fake → 503
-- [ ] **O4-2 compose `healthcheck`** — app 서비스에 `curl -f localhost:8000/health` (Dockerfile 에 curl 이미 설치됨)
-- [ ] **O4-3 외부 업타임 모니터** — UptimeRobot 또는 Uptime Kuma → `https://rekit.co.kr/health/ready` 1분 주기,
-      실패 시 이메일/카카오톡/슬랙 알림 (외부에서 봐야 서버 자체 다운도 감지)
+- [x] **O4-1 liveness / readiness 분리** — `app/core/health.py`
+  - `/health` — 프로세스 생존만 (의존성 안 봄 — DB 장애 때 재시작 반복 방지)
+  - `/health/ready` — DB `SELECT 1` + Redis `PING` 동시 실행, 각 2초 타임아웃, 결과 `ok|fail|timeout` + 실패 시 503.
+    `get_readiness_checks` Depends 로 테스트에서 장애 주입. OpenAPI 비노출. 실측 200 확인
+- [x] **O4-2 compose `healthcheck`** — app 서비스 `curl -fsS http://127.0.0.1:8000/health` (30s/5s/3회, start_period 40s)
+- [ ] **O4-3 외부 업타임 모니터 (직접)** — UptimeRobot 또는 Uptime Kuma → `https://rekit.co.kr/health/ready` 1분 주기.
+      ⚠️ 엣지 nginx 가 `/health` 외에 `/health/ready` 도 앱으로 넘기는지 확인 필요 (prefix 매칭이면 자동)
 - [ ] **O4-4 방치 주문 스위퍼 단일 실행 검토** — 현재 `lifespan` 에서 gunicorn 워커 4개가 각자 스위퍼 기동.
       `SKIP LOCKED` 로 정합성은 안전하나 토스 조회·DB 쿼리 4배. Redis 락(leader 1개) 또는 별도 프로세스로 분리 검토
 
-### O5. 모니터링 스택 (Prometheus + Grafana + exporter)
+### O5. 모니터링 스택 (Prometheus + Grafana + exporter) — 로컬 ✅ 2026-11-05, 운영 구성 남음
 
-- [ ] **O5-1 구성 위치 결정** — 운영 서버에 같이 띄울지 / 별도 모니터링 서버 둘지 (운영 서버 리소스 여유 확인 후).
-      `infra/monitoring/docker-compose.yml` 로 레포에 버전 관리
-- [ ] **O5-2 Prometheus** — `prometheus.yml` scrape: `rekle-app:8000`, node_exporter, cAdvisor, postgres_exporter, redis_exporter.
-      보존기간 `--storage.tsdb.retention.time=30d`, 외부 포트 미노출(loopback/내부망)
-- [ ] **O5-3 exporter** — node_exporter(서버 CPU·메모리·디스크), cAdvisor(컨테이너별),
-      postgres_exporter, redis_exporter
+- [x] **O5-0 로컬 스택** — `infra/monitoring/docker-compose.yml` (prom/prometheus v3.5.0 · grafana 12.1.0, loopback 만)
+  - Prometheus → `host.docker.internal:8000` (Mac 의 uvicorn) 15초 수집, 보존 7일. **nginx 불필요**
+  - Grafana provisioning — 데이터소스 + "Rekle 서비스" 대시보드(`grafana/dashboards/rekle-service.json`, 10패널:
+    RPS·p95·5xx·in-progress·DB pool·결제 결과·토스 p95·주문/가입·웹훅·방치 주문). 로컬 전용 익명 로그인
+  - 실측: target up, 요청 60건이 경로·status 별 집계, Grafana→Prometheus 쿼리 60
+- [ ] **O5-1 운영 구성 위치 결정** — 운영 서버에 같이 띄울지 / 별도 모니터링 서버 둘지 (운영 서버 리소스 여유 확인 후)
+- [ ] **O5-2 운영 Prometheus** — scrape: `rekle-app:8000`(rekit_edge 또는 공용 네트워크), node_exporter, cAdvisor,
+      postgres_exporter, redis_exporter. 보존 30d, 외부 포트 미노출
+- [ ] **O5-3 exporter** — node_exporter(서버 CPU·메모리·디스크), cAdvisor(컨테이너별), postgres_exporter, redis_exporter
 - [ ] **O5-4 Postgres `pg_stat_statements` 활성화** — `shared_preload_libraries` 설정 + `CREATE EXTENSION`
       (쿼리별 호출 수·평균 시간 → N+1·느린 쿼리 식별). 운영 적용 시 Postgres 재시작 필요 — 점검 시간에
-- [ ] **O5-5 Grafana** — Prometheus 데이터소스 + 대시보드
-  - 커뮤니티 대시보드 import: Node Exporter Full, cAdvisor, PostgreSQL, Redis
-  - 직접 작성 "Rekle 서비스" 대시보드: API별 RPS / p95·p99 / 5xx 비율 / in-progress / DB pool /
-    결제 성공률 / 토스 API p95 / 주문·가입 수
-  - 대시보드 JSON 을 `infra/monitoring/grafana/` 에 커밋 (provisioning)
-  - Grafana 접근: 외부 공개 시 nginx + 강한 비밀번호 / 가능하면 SSH 터널만
+- [ ] **O5-5 운영 Grafana** — 로컬 대시보드 JSON 재사용 + 커뮤니티 대시보드(Node Exporter Full, cAdvisor, PostgreSQL, Redis).
+      접근은 SSH 터널 또는 nginx + 강한 비밀번호 (로컬의 익명 로그인 설정 금지)
 - [ ] **O5-6 (선택) 로그 수집** — Loki + Promtail(또는 Alloy) 로 컨테이너 JSON 로그 수집 → Grafana 에서
       request_id 로 검색. `docker logs` + `grep` 한계 느껴질 때 도입
 
@@ -903,7 +904,7 @@ class Promotion(Base, TimestampMixin):
 
 - [ ] `GET /products` 정렬 옵션에 **`discount_desc`** 추가 — 기존 latest/price_asc/price_desc에 한 항목 늘림 (§6.1)
 - [ ] `GET /products/featured` — 응답에 `tag` 노출 + `featured_until` 필터 적용
-- [x] `POST /orders/quote` — `shipping_method` 인자에 따라 `shipping_fee`/`discount_amount` 계산 — FREIGHT/DIRECT 완료 (일반택배 PARCEL 은 미구현)
+- [x] `POST /orders/quote` — `shipping_method` 인자에 따라 `shipping_fee`/`discount_amount` 계산 — PARCEL(일반택배 5,000원)/FREIGHT/DIRECT 모두 완료 (2026-11-05 정정 — 앞선 정리에서 PARCEL 미구현으로 잘못 기록)
   - 화물택배: 60,000원
   - 직접배송: 40,000원, 직배송 가능 지역(서울/경기) 외엔 선택 불가
   - 일반택배: 무게/사이즈 기반 (작은 가전 한정)

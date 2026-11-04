@@ -1,0 +1,44 @@
+# 로컬 모니터링 스택 — Prometheus(수집·저장) + Grafana(대시보드). 운영 구성은 todo O5 에서 별도로.
+#
+#   docker compose -f infra/monitoring/docker-compose.yml up -d
+#   앱: .venv/bin/uvicorn app.main:app --reload          (8000)
+#   Prometheus: http://localhost:9090  → Status > Targets 에서 rekle-backend-local UP 확인
+#   Grafana:    http://localhost:3000  → 로그인 없이 "Rekle 서비스" 대시보드
+#
+# nginx 는 필요 없다 — Prometheus 가 Mac 에서 도는 앱에 host.docker.internal 로 직접 붙는다.
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: rekle-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    extra_hosts:
+      # Linux docker 엔진은 host.docker.internal 을 자동으로 안 만든다 (Docker Desktop 은 자동)
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    container_name: rekle-grafana
+    environment:
+      # 로컬 전용 — 로그인 없이 바로 대시보드. 운영에선 절대 이렇게 열지 말 것
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus_data:
+  grafana_data:

@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # 로컬 uvicorn(--reload) — 단일 프로세스라 PROMETHEUS_MULTIPROC_DIR 불필요.
+  # gunicorn -c gunicorn.conf.py 로 띄워도 같은 주소면 워커 합산값이 그대로 수집된다.
+  - job_name: rekle-backend-local
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:8000"]

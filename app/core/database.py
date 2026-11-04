@@ -3,6 +3,7 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
+from app.core.metrics import instrument_pool
 
 engine = create_async_engine(
     settings.database_url,
@@ -10,6 +11,8 @@ engine = create_async_engine(
     max_overflow=settings.database_max_overflow,
     pool_pre_ping=True,
 )
+
+instrument_pool(engine.sync_engine.pool)
 
 # echo=True 대신 레벨만 올린다 — echo 는 SQLAlchemy 가 자체 핸들러를 달아서 root 핸들러
 # (app.core.logging) 와 SQL 이 이중 출력된다. 레벨만 올리면 root 포맷으로 한 번 출력.

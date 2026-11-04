@@ -13,6 +13,7 @@ from app.core.exceptions import (
     PaymentFailedError,
     PaymentGatewayUnknownError,
 )
+from app.core.metrics import PAYMENT_CONFIRM_TOTAL, PAYMENT_WEBHOOK_RECEIVED_TOTAL
 from app.order.models import OrderStatus
 from app.payment.adapters.ports import (
     PaymentGateway,
@@ -164,9 +165,14 @@ class PaymentService:
         except PaymentFailedError as exc:
             # PG 가 명시적으로 거절한 경우만 FAILED 로 고착 — 네트워크 불명(Unknown)은
             # 성공 여부를 모르므로 상태를 건드리지 않고 그대로 전파해 재시도를 유도한다.
+            PAYMENT_CONFIRM_TOTAL.labels(result="failed").inc()
             ready_payment.status = PaymentStatus.FAILED
             ready_payment.fail_reason = str(exc)
             raise
+        except PaymentGatewayUnknownError:
+            PAYMENT_CONFIRM_TOTAL.labels(result="unknown").inc()
+            raise
+        PAYMENT_CONFIRM_TOTAL.labels(result="success").inc()
 
         await self._repo.update_status_paid(ready_payment, result)
         await self._repo.update_order_paid(order)
@@ -213,6 +219,7 @@ class PaymentService:
 
         # 웹훅 body 대신 조회 API 로 실제 상태를 가져온다.
         remote = await self._gateway.get_payment(payment_key=payment_key)
+        PAYMENT_WEBHOOK_RECEIVED_TOTAL.labels(remote_status=remote.status).inc()
         logger.info(
             "토스 웹훅 수신",
             event_type=payload.event_type,

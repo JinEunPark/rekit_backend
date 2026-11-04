@@ -59,6 +59,8 @@ services:
       # 을 만들어 스킴 다운그레이드 발생. app 8000 은 loopback 바인딩(외부 미노출)이고 nginx
       # 만 접근하므로 "*" 로 열어도 안전. (gunicorn 이 이 env 를 --forwarded-allow-ips 로 읽음)
       FORWARDED_ALLOW_IPS: "*"
+      # Sentry release — 어느 배포 태그부터 에러가 시작됐는지 추적
+      APP_VERSION: ${IMAGE_TAG:-unknown}
       # S3_ENDPOINT_URL은 여기서 고정하지 않고 .env(secrets/rekit_backend.env)를 그대로 씀.
       # presigned URL 서명에 host가 포함되므로 브라우저가 실제로 접근하는 공개 주소
       # (nginx가 /s3/ 로 프록시하는 rekit.co.kr)여야 함 — seaweedfs:8333은 도커 내부에서만
@@ -73,6 +75,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # liveness 만 본다 — DB 장애 때 앱까지 unhealthy 로 재시작 반복하지 않게 (readiness 는 /health/ready)
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     networks:
       - default
       - seaweedfs_default

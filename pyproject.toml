@@ -9,6 +9,8 @@ dependencies = [
     "gunicorn>=23.0.0",
     # gunicorn 용 uvicorn 워커 — uvicorn 본체의 uvicorn.workers 는 deprecated
     "uvicorn-worker>=0.4.0",
+    "prometheus-client>=0.21.0",
+    "sentry-sdk[fastapi]>=2.0.0",
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
     "email-validator>=2.2.0",
