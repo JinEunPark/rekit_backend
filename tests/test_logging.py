@@ -258,3 +258,54 @@ def test_json_log_keeps_korean_event_readable(capsys: pytest.CaptureFixture[str]
     structlog.stdlib.get_logger("app.test").info("토스 웹훅 수신")
 
     assert '"event": "토스 웹훅 수신"' in capsys.readouterr().out
+
+
+# ── gunicorn master 로그 (앱 import 전 단계라 configure_logging 영향 밖) ──
+
+
+def test_gunicorn_logconfig_drops_records_below_level(capsys: pytest.CaptureFixture[str]) -> None:
+    """level=WARNING 이면 master 의 INFO(Booting worker 등)는 출력되지 않는다."""
+    from logging.config import dictConfig
+
+    from app.core.logging import gunicorn_logconfig_dict
+
+    dictConfig(gunicorn_logconfig_dict(level="WARNING", json_logs=True))
+
+    logging.getLogger("gunicorn.error").info("Booting worker with pid: %s", 123)
+
+    assert capsys.readouterr().out == ""
+
+
+def test_gunicorn_master_log_is_rendered_once_as_utc_json(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """gunicorn master 로그도 앱과 같은 JSON·UTC 포맷으로 한 번만 (gunicorn 기본 핸들러 대체)."""
+    from logging.config import dictConfig
+
+    from app.core.logging import gunicorn_logconfig_dict
+
+    dictConfig(gunicorn_logconfig_dict(level="INFO", json_logs=True))
+
+    logging.getLogger("gunicorn.error").info("Booting worker with pid: %s", 123)
+
+    out = capsys.readouterr()
+    [line] = [json.loads(ln) for ln in out.out.strip().splitlines()]
+    assert line["event"] == "Booting worker with pid: 123"
+    assert line["logger"] == "gunicorn.error"
+    assert str(line["timestamp"]).endswith("Z")
+    assert out.err == ""  # gunicorn 기본 error_console(stderr) 핸들러가 남아 이중 출력되지 않음
+
+
+def test_gunicorn_conf_keeps_runtime_options_and_uses_logconfig() -> None:
+    """gunicorn.conf.py — 기존 CLI 옵션(워커 클래스·수·바인드) 유지 + master 로그 설정 적용."""
+    import runpy
+    from pathlib import Path
+
+    conf = runpy.run_path(str(Path(__file__).resolve().parents[1] / "gunicorn.conf.py"))
+
+    assert conf["worker_class"] == "uvicorn_worker.UvicornWorker"
+    assert conf["workers"] == 4
+    assert conf["bind"] == "0.0.0.0:8000"
+    assert conf["errorlog"] == "-"
+    assert "accesslog" not in conf  # 액세스 로그는 RequestContextMiddleware 가 남긴다
+    assert conf["logconfig_dict"]["root"]["handlers"]

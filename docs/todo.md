@@ -5,7 +5,7 @@
 > Octomo 휴대폰 인증 마이그레이션 + 전화번호 010-0000-0000 정규화 + 재고 SOLD_OUT
 > 자동전환 작업 완료 후 사용자가 직접 처리해야 할 항목. 완료하면 체크.
 
-- [ ] **[보안/긴급] Octomo API 키 재발급** — 작업 중 로컬 `.claude/settings.json`에
+- [x] **[보안/긴급] Octomo API 키 재발급** (2026-11-05 사용자 확인 완료) — 작업 중 로컬 `.claude/settings.json`에
       평문으로 남아있던 게 발견됨(`89068e69...`). git 히스토리엔 안 올라갔지만
       `.env`에 저장된 현재 활성 키와 동일한 값이라, Octomo 콘솔
       (https://octomo.octoverse.kr) 에서 재발급 후 `.env` 교체 권장.
@@ -65,7 +65,7 @@
           `adapters/toss.get_payment_by_order_id`, 설정 `PENDING_ORDER_SWEEP_INTERVAL_SECONDS`(기본 120, 0=끔)
         - 덤으로 고친 것: `PaymentRepository` 락 조회에 `populate_existing` 누락(같은 세션에서 먼저 읽은 주문의
           낡은 status 로 더블체크하던 문제), 웹훅 락 순서를 주문 → 결제로 통일(confirm 과 데드락 방지)
-        - [ ] **수동 검증 (스테이징)**: ① 결제창 닫기 → 즉시 다른 결제수단으로 재결제 성공
+        - [x] **수동 검증 (스테이징)** (2026-11-05 사용자 확인 완료): ① 결제창 닫기 → 즉시 다른 결제수단으로 재결제 성공
               ② 결제창 닫고 탭 종료 → 30분+2분 뒤 상품 재고 복구 확인(상세 안 열고)
               ③ 운영 로그에 "취소된 주문의 결제 승인 감지" error 가 뜨면 토스 개발자센터에서 환불 확인
       - [ ] **운영 — 실키 전환 (오픈 직전, 전자결제 심사 완료 후)** : `TOSS_SECRET_KEY` 를 `test_gsk_*` →
@@ -76,11 +76,11 @@
         `src/composables/usePaymentHandoff.ts`, `src/views/checkout/PaymentReturnView.vue`·`PaymentFailView.vue` 구현됨.
         남은 프론트 잔여 항목은 `rekle/todo.md` 의 "P1 — 결제" 참고
 
-### [결제] 내가 직접 해봐야 할 수동 테스트 (2026-09-05, 운영/스테이징 배포 후)
+### [결제] 내가 직접 해봐야 할 수동 테스트 (2026-09-05, 운영/스테이징 배포 후) — ✅ 2026-11-05 A~F 전부 완료 (사용자 확인)
 
 > 자동 테스트로 못 잡는 것 = 실제 토스 API 호출·웹훅·프론트 위젯 결합. 개발자센터 결제내역이 최종 증거.
 >
-> **⚠️ 선행 조건 (2026-10-02 기준) — 아직 배포가 안 끝났다.**
+> **(2026-10-02 당시 기록 — 이후 배포·수동 테스트 완료. 아래는 이력으로 보존)**
 > 결제 하드닝 커밋들(`4d23e7c` 웹훅 금액검증·`636f00f` 취소/환불·`8d5fbd4` confirm 하드닝)은 master 에
 > 올라가 있지만 **운영에 배포된 적이 없다**. 운영은 태그 `0.0.2`(= "롤백 테스트용 빈 릴리스" 커밋) 기준 이미지로
 > 떠 있었다. 2026-10-02 에 태그 `0.0.3` 을 푸시했고, 이 태그를 Jenkins `build-was` → `deploy-was` 로 올리면
@@ -94,52 +94,52 @@
 >   - ✅ 엣지 nginx 웹훅 경로 인증 없이 통과
 
 **A. 배포/설정 스모크 (가장 먼저)**
-- [ ] 배포 후 앱이 정상 부팅됐는지 — `TOSS_SECRET_KEY` 가 `config.py` 에서 **필수값**이 됐으므로,
+- [x] 배포 후 앱이 정상 부팅됐는지 — `TOSS_SECRET_KEY` 가 `config.py` 에서 **필수값**이 됐으므로,
       운영 시크릿(`~/rekit/secrets/rekit_backend.env`)에 없으면 부팅 자체가 실패한다. 헬스체크 200 확인
-- [ ] `GET /api/v1/...` 아무 인증 불필요 엔드포인트로 서버 살아있는지 + 로그에 설정 에러 없는지
-- [ ] (스테이징이면) 스테이징 개발자센터에도 웹훅 URL·허용 도메인 각각 등록됐는지 (MID 별로 따로)
+- [x] `GET /api/v1/...` 아무 인증 불필요 엔드포인트로 서버 살아있는지 + 로그에 설정 에러 없는지
+- [x] (스테이징이면) 스테이징 개발자센터에도 웹훅 URL·허용 도메인 각각 등록됐는지 (MID 별로 따로)
 
 **B. 결제 해피 패스 (카드)**
-- [ ] 주문서 → 결제 → `/payments/init` 201, 토스 위젯 뜸 (본인 `test_gck_*`)
-- [ ] 토스 테스트 카드로 승인 → successUrl 리다이렉트 (`?paymentKey&orderId&amount`)
-- [ ] `/payments/confirm` 200 → `payments` 행 `PAID` + 카드메타(`card_company`/`card_last4`) 채워짐, `orders` `PAID`
-- [ ] **개발자센터 결제내역에 "승인" 1건** (본인 상점 장부에 찍히는지 = 본인 키 정상 증거)
-- [ ] 결제완료 이메일 수신
-- [ ] 재고: 주문 시 차감 → 결제 성공 후 그대로 유지
+- [x] 주문서 → 결제 → `/payments/init` 201, 토스 위젯 뜸 (본인 `test_gck_*`)
+- [x] 토스 테스트 카드로 승인 → successUrl 리다이렉트 (`?paymentKey&orderId&amount`)
+- [x] `/payments/confirm` 200 → `payments` 행 `PAID` + 카드메타(`card_company`/`card_last4`) 채워짐, `orders` `PAID`
+- [x] **개발자센터 결제내역에 "승인" 1건** (본인 상점 장부에 찍히는지 = 본인 키 정상 증거)
+- [x] 결제완료 이메일 수신
+- [x] 재고: 주문 시 차감 → 결제 성공 후 그대로 유지
 
 **C. 결제 실패/멱등**
-- [ ] 위젯에서 취소(뒤로가기) → failUrl 페이지, 주문은 `PENDING` 유지 (30분 후 자동 만료 취소)
-- [ ] `confirm` 에 틀린 `amount` → `PAYMENT_FAILED`(422) "금액 불일치"
-- [ ] 같은 주문에 `confirm` 두 번 → 두 번째도 200(멱등), 토스 승인 1건만
-- [ ] 가상계좌를 (혹시 위젯에서 고를 수 있으면) 선택 → `confirm` 이 "DONE 이 아님"으로 422 거절
+- [x] 위젯에서 취소(뒤로가기) → failUrl 페이지, 주문은 `PENDING` 유지 (30분 후 자동 만료 취소)
+- [x] `confirm` 에 틀린 `amount` → `PAYMENT_FAILED`(422) "금액 불일치"
+- [x] 같은 주문에 `confirm` 두 번 → 두 번째도 200(멱등), 토스 승인 1건만
+- [x] 가상계좌를 (혹시 위젯에서 고를 수 있으면) 선택 → `confirm` 이 "DONE 이 아님"으로 422 거절
 
 **D. 주문 취소 → PG 환불 (Task 3·4 핵심 검증)**
-- [ ] `PAID` 주문 `POST /api/v1/orders/{order_number}/cancel` → 200, `payments` `CANCELLED`, `orders` `CANCELLED`, 재고 복구(+수량)
-- [ ] **개발자센터 결제내역에 "취소" 표시** + `cancels[]` 에 전액
-- [ ] 같은 주문 다시 `cancel` → `ORDER_CANCEL_FORBIDDEN` (이미 취소, 토스 재호출 없음)
-- [ ] `PENDING` 주문(결제 전) `cancel` → 200, 토스 호출 없이 `CANCELLED` (개발자센터에 아무것도 안 뜸)
-- [ ] 관리자 `POST /api/v1/admin/orders/{order_number}/cancel` (`{"reason":"..."}`) → 동일 + 토스 취소 사유에 reason 전달됐는지
-- [ ] `DELIVERED` 주문 `POST /api/v1/orders/{order_number}/refund/request` → `REFUNDED` + 토스 취소. 재고는 복구 안 됨(정상)
-- [ ] (선택) 토스가 취소 거절하는 상황 재현(예: 이미 콘솔에서 수동취소한 결제를 우리가 cancel) → 422, **주문 상태가 롤백되어 그대로인지** (전환 안 됨 확인)
+- [x] `PAID` 주문 `POST /api/v1/orders/{order_number}/cancel` → 200, `payments` `CANCELLED`, `orders` `CANCELLED`, 재고 복구(+수량)
+- [x] **개발자센터 결제내역에 "취소" 표시** + `cancels[]` 에 전액
+- [x] 같은 주문 다시 `cancel` → `ORDER_CANCEL_FORBIDDEN` (이미 취소, 토스 재호출 없음)
+- [x] `PENDING` 주문(결제 전) `cancel` → 200, 토스 호출 없이 `CANCELLED` (개발자센터에 아무것도 안 뜸)
+- [x] 관리자 `POST /api/v1/admin/orders/{order_number}/cancel` (`{"reason":"..."}`) → 동일 + 토스 취소 사유에 reason 전달됐는지
+- [x] `DELIVERED` 주문 `POST /api/v1/orders/{order_number}/refund/request` → `REFUNDED` + 토스 취소. 재고는 복구 안 됨(정상)
+- [x] (선택) 토스가 취소 거절하는 상황 재현(예: 이미 콘솔에서 수동취소한 결제를 우리가 cancel) → 422, **주문 상태가 롤백되어 그대로인지** (전환 안 됨 확인)
 
 **E. 웹훅 (Task 1·2 + 2026-09-04 하드닝 핵심 검증)**
-- [ ] 결제하면 서버 로그에 `"event": "토스 웹훅 수신"` + `"event_type": "PAYMENT_STATUS_CHANGED"`, `"remote_status": "DONE"` 뜨는지
+- [x] 결제하면 서버 로그에 `"event": "토스 웹훅 수신"` + `"event_type": "PAYMENT_STATUS_CHANGED"`, `"remote_status": "DONE"` 뜨는지
       (2026-11-05 구조화 로그로 형식 변경 — `docker logs rekle-app | grep "토스 웹훅 수신"`)
       (이미 confirm 으로 PAID 면 멱등 무시 — 로그는 뜨되 상태 변경 없음)
-- [ ] 개발자센터 → 해당 웹훅 상세 → **전송 기록이 "성공"(200)** 인지 (실패면 URL/nginx/방화벽 점검)
-- [ ] **⭐ confirm 유실 시나리오** — 결제창 인증까지 끝내고 successUrl 리다이렉트 직전에 **브라우저/탭 강제 종료**
+- [x] 개발자센터 → 해당 웹훅 상세 → **전송 기록이 "성공"(200)** 인지 (실패면 URL/nginx/방화벽 점검)
+- [x] **⭐ confirm 유실 시나리오** — 결제창 인증까지 끝내고 successUrl 리다이렉트 직전에 **브라우저/탭 강제 종료**
       (`/payments/confirm` 이 호출 안 되게). 몇 초~수십 초 후:
       `payments` 행이 웹훅만으로 `PAID` + `orders` `PAID` 로 전환됐는지 + 카드메타 채워졌는지.
       → **이게 웹훅의 존재 이유. 반드시 통과해야 함**
-- [ ] 위 시나리오 후 로그에 `웹훅 DONE 금액 불일치` 에러가 **없어야** 함 (있으면 `totalAmount` 파싱/금액 산정 버그)
-- [ ] **개발자센터에서 결제를 수동 취소** → `CANCELED` 웹훅 도착 → 우리 `payments` `CANCELLED` + `orders` `CANCELLED` + 재고 복구 자동으로 되는지 (조회 재확인 방식 동작 증거)
-- [ ] 개발자센터 웹훅 "재전송" → 멱등 (이중 재고 복구/상태 재전환 없음, 로그만 다시 뜸)
-- [ ] 백엔드를 잠깐 껐다 켠 상태에서 웹훅 도착 → 토스가 재시도(최대 7회)해서 결국 처리되는지 (5xx→재시도)
-- [ ] 응답 시간 — 웹훅 처리가 10초 이내 200 인지 (초과 시 토스가 실패로 간주·재시도). `get_payment` 지연 시 위험
+- [x] 위 시나리오 후 로그에 `웹훅 DONE 금액 불일치` 에러가 **없어야** 함 (있으면 `totalAmount` 파싱/금액 산정 버그)
+- [x] **개발자센터에서 결제를 수동 취소** → `CANCELED` 웹훅 도착 → 우리 `payments` `CANCELLED` + `orders` `CANCELLED` + 재고 복구 자동으로 되는지 (조회 재확인 방식 동작 증거)
+- [x] 개발자센터 웹훅 "재전송" → 멱등 (이중 재고 복구/상태 재전환 없음, 로그만 다시 뜸)
+- [x] 백엔드를 잠깐 껐다 켠 상태에서 웹훅 도착 → 토스가 재시도(최대 7회)해서 결국 처리되는지 (5xx→재시도)
+- [x] 응답 시간 — 웹훅 처리가 10초 이내 200 인지 (초과 시 토스가 실패로 간주·재시도). `get_payment` 지연 시 위험
 
 **F. 결과 기록**
-- [ ] 통과/실패를 이 목록에 체크, 실패 케이스는 별도 이슈로
-- [ ] **[DB] Alembic 마이그레이션 배포 반영** — `6105137b8e93`(CI/DI 제거 →
+- [x] 통과/실패를 이 목록에 체크, 실패 케이스는 별도 이슈로
+- [x] **[DB] Alembic 마이그레이션 배포 반영** (수동 실행 불필요 — 운영 compose 가 기동 시 `alembic upgrade head` 자동 실행, `6105137b8e93` 은 태그 0.0.4 에 포함) — `6105137b8e93`(CI/DI 제거 →
       Octomo 전화인증 대체)가 로컬 dev DB엔 이미 적용돼 있음(`alembic current`
       == head). staging/production 에는 아직 미적용 — 배포 전
       `.venv/bin/alembic upgrade head` 실행 필요.
@@ -150,11 +150,11 @@
       SQL 정규식으로 백필. 로컬 dev DB 적용 완료(users 3건/addresses 7건/
       orders 12건 재포맷 확인), downgrade(하이픈 제거) 왕복 검증 완료.
       staging/production 배포 시 `alembic upgrade head` 필요.
-- [ ] **[검증] Octomo 인증 플로우 실사용 확인** — 이번 세션에서 발견한 버그
+- [x] **[검증] Octomo 인증 플로우 실사용 확인** (2026-11-05 사용자 확인 완료) — 이번 세션에서 발견한 버그
       2건(QR 발급/exists 조회가 200 아닌 201 반환, 성공 후 Redis 키 삭제 안 되던
       것)이 전부 "실제 키로 붙여봐야 드러나는" 종류였음. 실 API 키로 QR
       발급→스캔→전송까지 한 번 더 end-to-end 확인 권장.
-- [ ] **[협업] 세션 간 작업 충돌 주의** — 이번 세션 도중 다른 세션이 동시에
+- **[참고·작업 규칙] 세션 간 작업 충돌 주의** — 이번 세션 도중 다른 세션이 동시에
       같은 파일(`app/payment/adapters/ports.py`)을 건드려, NicePay 전환 준비로
       클래스명만 바꾸고 나머지 파일은 그대로 둔 채(임포트 에러 유발) 남겨둔
       적이 있었음(현재는 원복 완료). 여러 세션을 동시에 돌릴 땐 자주
@@ -191,8 +191,7 @@
   - 테스트 `tests/test_logging.py` 12건. 로컬 gunicorn(APP_ENV=production) 으로 uvicorn·액세스·SQL 로그 JSON 출력 확인
   - 부수 수정: `database.py` `echo=settings.debug` 제거 → DEBUG 시 `sqlalchemy.engine` 레벨만 INFO
     (echo 는 자체 핸들러를 달아 root 핸들러와 SQL 이중 출력)
-  - 남은 것: gunicorn **master** 프로세스 로그(`Booting worker` 등)는 gunicorn 자체 포맷(로컬 TZ) 유지 —
-    앱 import 전 단계라 configure_logging 영향 밖. 필요 시 `gunicorn.conf.py`(O2-5) 에 `logconfig_dict` 로 통일
+  - ~~남은 것: gunicorn master 로그 포맷~~ → 2026-11-05 해결 (아래 "O1 남은 한계" 참고)
   - structlog + 표준 `logging` 통합 (`ProcessorFormatter`) — 기존 `logging.getLogger(__name__)` 호출부 수정 없이 JSON 출력
   - 운영(`APP_ENV=production`): JSON 한 줄 / 로컬: 컬러 콘솔
   - `LOG_LEVEL` 환경변수 (default `INFO`) — `config.py` · `.env.example` · `.env` 3곳 동시 수정
@@ -228,6 +227,7 @@
   - **한계**: `event` 문구·SQL 로그 본문 안에 섞인 값은 못 가림 → 민감값은 반드시 키워드 인자로.
     DEBUG=true 의 SQL 로그는 바인딩 파라미터(로그인 아이디 등)를 그대로 출력 — 운영 DEBUG 금지
     (추가 하드닝 후보: 운영 engine `hide_parameters=True` — DB 예외 메시지 속 파라미터도 숨김)
+    - [ ] 2026-11-05 사용자 결정으로 보류
 - [x] **O1-6 기존 로그 호출부 정비 (2026-11-05 완료)** — 18곳 전부 `structlog.stdlib.get_logger(__name__)` + 키워드 인자로 전환
   - 대상: `payment_service.py`(8), `abandoned_order_sweeper.py`(2), `auth_service.py`(4), `adapters/{kakao,naver,google}_oauth.py`,
     `core/exceptions.py`. `pg_tid` 는 마스킹 대상이 되도록 키 이름 `payment_key` 로 통일
@@ -256,11 +256,25 @@
   - 들어온 `X-Request-ID` 이어받음 / 없으면 UUID 생성해 응답 헤더 반환 / 인증 요청 액세스 로그에 `user_id`
   - path 템플릿·`<unmatched>`·`비즈니스 예외 code=ORDER_NOT_FOUND`·`로그인 실패 reason=unknown_login_id` 확인, uvicorn.access 0줄
 - **O1 남은 한계 / 발견 사항**
-  - [ ] **500 응답에 CORS 헤더 없음 (기존 버그, 이번 변경 전부터)** — Starlette 1.0 은 `Exception` 핸들러를
+  - [x] **500 응답에 CORS 헤더 없음 (기존 버그) — 2026-11-05 해결** — Starlette 는 `Exception` 핸들러를
         `ServerErrorMiddleware`(모든 사용자 미들웨어 바깥)에 붙인다 → `Access-Control-Allow-Origin` 누락 → 브라우저는
-        500 을 CORS 에러로 표시. 아래 §2 "500도 CORS 헤더 부착" 기록은 사실과 다름(27ddb68 에서 재현 확인).
-        해결안: 미처리 예외를 CORS 안쪽에서 500 응답으로 바꾸는 순수 ASGI 미들웨어 추가 (별도 작업)
-  - gunicorn master 로그 포맷(O1-1 남은 것)은 그대로
+        500 을 CORS 에러로 표시. 해결: `UnhandledExceptionMiddleware`(app/core/middleware.py) 를 **가장 안쪽**
+        사용자 미들웨어로 추가 — 라우트의 미처리 예외를 CORS 안쪽에서 표준 500 으로 바꿔 CORS·request_id 를 거쳐 나감.
+        로그는 1번만(재발생 안 함). 응답 시작 후(스트리밍 도중) 예외는 바꿀 수 없어 재발생 → 기존 `_unhandled` fallback.
+        미들웨어 순서는 `main.install_middlewares()` 한 곳에서 관리, 순서 회귀 테스트 있음
+  - [x] **액세스 로그 path 에서 `/api/v1` 누락 (운영 이미지만) — 2026-11-05 해결** — FastAPI 0.162+ 는 `include_router`
+        가 라우트를 평탄화하지 않아 `scope["route"].path` 에 바깥 prefix 가 빠진다(0.136 은 포함). 기존 테스트는
+        `@app.get` 직접 등록한 미니 앱이라 재현 불가였음. 해결: 템플릿에 실제 path 파라미터를 채운 꼬리로 원본 경로에서
+        prefix 를 복원(비공개 `scope["fastapi"]["included_router"]` 미사용). 2단 prefix 라우터 + 실제 `app.main.app` 테스트 추가
+  - [x] **gunicorn master 로그 포맷 — 2026-11-05 해결** — 레포 루트 `gunicorn.conf.py`(O2-5 에서도 사용) 의
+        `logconfig_dict` = `app.core.logging.gunicorn_logconfig_dict()` → master 로그(`Booting worker` 등)도 앱과 같은
+        JSON·UTC (`build_formatter` 공용). 워커 클래스·수·바인드·errorlog 도 conf 로 옮기고 Dockerfile CMD·compose command 는
+        `gunicorn -c gunicorn.conf.py app.main:app` 만
+  - [ ] **⚠️ 롤백 호환성 (배포 분석 ②와 같은 문제가 더 커짐)** — deploy 잡은 master 의 compose 를 쓰는데 이제 command 가
+        `-c gunicorn.conf.py` — 이 파일이 없는 0.0.5 이전 이미지로 롤백하면 기동 실패. Jenkinsfile.deploy 에서 compose 를
+        배포 태그에 맞추는 수정이 선행돼야 함
+  - Python warnings(`StarletteDeprecationWarning` 등)는 `warnings` 모듈이 stderr 로 직접 써서 JSON 이 아님 — 기동 시 몇 줄
+  - 로컬 venv(Python 3.13, FastAPI 0.136) ≠ 운영 이미지(Python 3.11, FastAPI 0.162) — 버전 의존 동작은 이미지에서도 검증 필요
 
 ### O2. 애플리케이션 메트릭 (Prometheus)
 
@@ -388,7 +402,7 @@
 > **분석 기준**: `/Volumes/A/web_projects/rekle` 프론트 디자인 (Vue 3 mockup, `_design/buyer/*`, `_design/admin/*`)
 > **현 백엔드 상태** (2026-07-04 기준):
 > - **구현 완료**: auth 전체(이메일 인증 가입 포함) / users (PATCH·DELETE /me + 휴대폰 인증 변경) / catalog (DB 동적 카테고리, bulk 조회) / admin catalog CRUD(이미지 단건 수정 포함) / admin dashboard·orders·members·sales / cart / favorites / address(label/memo) / order (환불요청·배송조회 포함) / payment (init·confirm·webhook) / uploads / **help(공지·FAQ·문의) 신규 완료 — 로그인 필수 전환 + 답변 등록 + 내 문의 조회 추가** / **Redis 인프라 신규 완료**
-> - **미구현**: 회원가입/전화번호 변경 이외의 SMS 인증(`/auth/sms/*`) / 실제 SMS 발송 어댑터(Console mock만 존재) / 본인인증 PG 연동 / shipment 추적 (스마트택배 API) / 인앱 알림센터(벨 아이콘) / PG 환불 실호출 / rate limit / CI·DI 암호화 / 보안 헤더 미들웨어
+> - **미구현** (2026-11-05 갱신): shipment 추적 (스마트택배 API) / 인앱 알림센터(벨 아이콘) / rate limit / 보안 헤더 미들웨어 / 이메일 변경. (SMS 인증·본인인증 PG·CI/DI 암호화는 폐기, PG 환불 실호출은 완료)
 > - **테스트**: 366개 통과 (단위 + 통합, `tests/integration/` 포함, 실제 Postgres 대상 통합 테스트 신규 포함) / ruff·mypy 전체 클린
 > **작성일**: 2026-05-01 / **최종 업데이트**: 2026-07-04
 
@@ -439,21 +453,19 @@
 - [x] `POST /users/me/password` — 비밀번호 변경 (`must_change_password` 해제)
 - [x] `POST /auth/email/send-verification` — **신규 완료** 회원가입용 이메일 인증코드 발송 (Redis TTL 10분, 60초 rate-limit)
 - [x] `POST /auth/email/verify-code` — **신규 완료** 코드 검증 → `verifiedToken`(JWT 15분) 발급, `sign-up` 요청에 필수로 사용
-- [ ] `POST /auth/sms/send` — 회원가입 단계 SMS 인증번호 발송 (Redis에 코드 캐시, rate-limit) _(휴대폰 변경용과 별개, 미구현)_
-- [ ] `POST /auth/sms/verify` — SMS 인증번호 검증 → `phone_verified_at` 기록
+- [x] ~~`POST /auth/sms/send`, `POST /auth/sms/verify` — 회원가입 단계 SMS 인증~~ — 폐기: **2026-11-05 결정: SMS 인증 안 함** — 휴대폰 인증은 Octomo(`/users/me/phone/*`)로 일원화
 - [x] `PATCH /users/me` — username/phone 부분 업데이트 _(현재 인증 없이 자유변경 — §7.3 개인정보 수정 정책 참고)_
-- [x] `POST /users/me/phone/send-verification` — **신규 완료** 전화번호 변경: 새 번호로 SMS 인증코드 발송 (Redis, 60초 rate-limit) — 실제 SMS는 `ConsoleSmsSender`(mock)만 연결됨
+- [x] `POST /users/me/phone/send-verification` — **신규 완료** 전화번호 변경: Octomo 인증 QR 발급 (60초 rate-limit)
 - [x] `POST /users/me/phone/verify` — **신규 완료** 인증코드 확인 후 `users.phone` 교체 (`OtpInvalidError` 422)
 - [ ] `POST /users/me/email/send-verification` — 이메일 변경: 새 주소로 인증코드 발송 (Redis TTL 10분)
 - [ ] `POST /users/me/email/verify` — 인증코드 확인 후 `users.email` 교체
-- [x] `DELETE /users/me` — 회원탈퇴 (PII 전체 익명화 — email/login_id/username/phone/CI·DI 파기, `UserStatus.WITHDRAWN` + `withdrawn_at` 기록, 거래정보 5년 보존)
+- [x] `DELETE /users/me` — 회원탈퇴 (PII 전체 익명화 — email/login_id/username/phone 파기, `UserStatus.WITHDRAWN` + `withdrawn_at` 기록, 거래정보 5년 보존)
 - [ ] `POST /users/me/social/connect` — 기가입 사용자 소셜 계정 추가 연결
 
-### 1.2 본인인증 (`/api/v1/verifications`)
+### 1.2 본인인증 (`/api/v1/verifications`) — 폐기
 
-- [ ] `POST /verifications/start` — 본인인증 세션 생성 (provider: TOSS/NICE), redirect URL 반환
-- [ ] `POST /verifications/callback` — PG 콜백 (멱등성 보장 — request_id 유니크)
-- [ ] `GET /verifications/me/status` — 현재 사용자 인증 상태
+> 2026-07-12 마이그레이션 `6105137b8e93` 으로 본인인증 PG(CI/DI) 대신 **Octomo 휴대폰 인증**으로 대체.
+> 주문 가드는 `User.verified`(= `phone_verified_at IS NOT NULL`). verifications 엔드포인트 3종은 만들지 않는다.
 
 ### 1.3 주소록 (`/api/v1/addresses`) ✅ 구현 완료
 
@@ -468,7 +480,7 @@
 - [x] `GET /products/{id}` — 상세 (이미지 다중, 스펙, 등급 안내, 배송정보)
 - [x] `GET /products/featured` — 홈 "오늘 입고된 상품" 4건 (`order by created_at desc, status=ACTIVE`)
 - [x] `POST /products/bulk` — **신규 완료** 상품 ID 배열로 bulk 조회 (장바구니/찜 목록 렌더용)
-- [x] `GET /categories` — 카테고리 메타(아이콘/라벨 — 정적 응답)
+- [x] `GET /categories` — 카테고리 목록 (DB `product_categories` 테이블 — 아이콘·대표 이미지 포함)
 
 ### 1.5 관심상품 / 찜 (`/api/v1/favorites`) ✅ 구현 완료
 
@@ -494,7 +506,7 @@
 - [x] `POST /payments/init` — Payment(READY) 생성 + 토스 결제창 정보 반환
 - [x] `POST /payments/confirm` — 토스 서버confirm + 금액 검증 + Order PAID 전환
 - [x] `POST /payments/webhooks/toss` — 수신 후 결제 조회 API 재확인 + 멱등 상태 전환 (토스 결제 웹훅엔 서명 없음)
-- [x] `POST /orders/{order_number}/refund/request` — 환불 요청 (DELIVERED → REFUNDED 상태 전환. PG 실호출은 미구현)
+- [x] `POST /orders/{order_number}/refund/request` — 환불 요청 (DELIVERED → PG 전액 취소 후 REFUNDED — Task 3·4 `636f00f`)
 
 ### 1.8 배송 (`/api/v1/shipments`)
 
@@ -524,7 +536,7 @@
 
 ### 1.10 관리자 — 대시보드 (`/api/v1/admin/dashboard`) ✅ 구현 완료
 
-- [x] `GET /admin/dashboard/summary` — KPI 4종(오늘 주문수/매출/처리대기/재고부족), 비교값(전일 대비, 긴급 카운트)
+- [x] `GET /admin/dashboard/summary` — KPI 4종(오늘 주문수/매출/처리대기/재고부족) — ⚠️ 비교값(전일 대비, 긴급 카운트)은 **미구현** (§7.2)
 - [x] `GET /admin/dashboard/sales-chart?period=7d|30d|90d` — 일별 막대그래프
 - [x] `GET /admin/dashboard/pending-orders?limit=4` — 처리 대기 최근 주문
 - [x] `GET /admin/dashboard/popular-categories` — 카테고리별 판매건수/비율
@@ -548,7 +560,7 @@
 - [x] `POST /admin/orders/{order_number}/shipment` — 송장 입력 (carrier+tracking_number) → 자동 SHIPPING 상태 전환
 - [x] `PATCH /admin/orders/{order_number}/status` — 수동 상태 변경 (배송완료 등)
 - [x] `POST /admin/orders/{order_number}/cancel` — 관리자 취소
-- [ ] `POST /admin/orders/{order_number}/refund` — PG 부분/전액 취소 호출 (미구현 — PG 연동 필요)
+- [ ] `POST /admin/orders/{order_number}/refund` — 미구현 — PG 취소 연동 자체는 완료(`PaymentService.cancel_payment`, PAID/PREPARING 은 관리자 cancel 이 PG 취소까지 수행). 남은 건 DELIVERED 주문을 관리자가 환불하는 엔드포인트
 - [x] `GET /admin/orders/export.csv`
 
 ### 1.13 관리자 — 회원 (`/api/v1/admin/members`) ✅ 구현 완료
@@ -560,7 +572,7 @@
 
 ### 1.14 관리자 — 매출 (`/api/v1/admin/sales`) ✅ 구현 완료
 
-- [x] `GET /admin/sales/summary?from=&to=` — 헤드라인(총매출/주문수/평균주문/취소율, 전월 대비)
+- [x] `GET /admin/sales/summary?from=&to=` — 헤드라인(총매출/주문수/평균주문/취소율) — ⚠️ 전월 대비는 **미구현** (§7.2)
 - [x] `GET /admin/sales/timeseries?from=&to=&granularity=day|week`
 - [x] `GET /admin/sales/by-payment-method?from=&to=`
 - [x] `GET /admin/sales/top-products?from=&to=&limit=5`
@@ -577,25 +589,25 @@
 ## 2. 인프라 / 공통 작업
 
 - [x] **JWT 인증 의존성** (`Depends(get_current_user)`, `Depends(get_current_active_user)`) — `app/core/security.py` + `app/core/deps.py` 완료
-- [x] **에러 응답 표준화** — `{code, message}` 포맷 + 글로벌 Exception 핸들러 (⚠️ 500 CORS 헤더는 실제로 안 붙음 — 관측성 O1 "남은 한계" 참고)
+- [x] **에러 응답 표준화** — `{code, message}` 포맷 + 글로벌 Exception 핸들러 (500 CORS 헤더는 2026-11-05 `UnhandledExceptionMiddleware` 로 해결 — 관측성 O1 "남은 한계" 참고)
 - [x] **CORS** — `settings.cors_origins` 설정 완료, 글로벌 에러도 CORS 헤더 부착
 - [x] **Pydantic 스키마** — auth/user 도메인 완료 (`app/auth/auth_schemas.py`, `app/user/user_schemas.py`)
 - [x] **BackgroundTasks** — 이메일 발송 분리 (SMTP 지연이 요청 트랜잭션 묶지 않음)
 - [x] **이메일 어댑터** — `ConsoleEmailSender` (개발) + `GmailSmtpEmailSender` (운영) Protocol 기반
 - [x] **OAuth 어댑터** — 카카오/네이버/구글 `httpx` 기반 + `translate_oauth_error` 헬퍼 (Ports & Adapters)
-- [x] **테스트** — 359개 (단위 + `tests/integration/` 통합), `tests/conftest.py` 기반
+- [x] **테스트** — 666개 (2026-11-05 기준) (단위 + `tests/integration/` 통합), `tests/conftest.py` 기반
 - [x] **CRUD 레이어** — catalog/cart/address/order/payment/favorites/admin_catalog/help 완료
 - [x] **`order_number` 생성기** — `RK-YYMMDD{id:04d}` 포맷, `app/order/order_number.py`
 - [x] **Redis 통합** — **신규 완료** `app/core/redis.py` (`get_redis()` Depends 주입) — 이메일/휴대폰 인증코드 캐시 + 60초 rate-limit 에 사용 중
-- [ ] **CI/DI 암호화 유틸** — KMS or Fernet, `services/crypto.py` — 여전히 미구현 (`User.ci`/`di` 평문 저장)
+- [x] ~~**CI/DI 암호화 유틸**~~ — 폐기: CI/DI 컬럼 삭제(`6105137b8e93`)로 대상 없음
 - [ ] **외부 연동 서비스 모듈**
-  - [x] SMS 발송 **포트/의존성 주입 구조는 완료** — `app/auth/adapters/console_sms.py`(`ConsoleSmsSender`, 로그 출력 mock)만 연결됨. 운영용 NHN Cloud/알리고 어댑터로 교체 필요
+  - [x] ~~SMS 발송 어댑터 (ConsoleSmsSender → NHN Cloud/알리고)~~ — 폐기: `ConsoleSmsSender` 삭제됨, 휴대폰 인증은 `app/auth/adapters/octomo.py`. **2026-11-05 결정: SMS 인증 안 함** — 휴대폰 인증은 Octomo(`/users/me/phone/*`)로 일원화
   - [x] `app/payment/adapters/toss.py` — 결제 confirm/webhook 검증 (TossPaymentGateway)
-  - [ ] `services/toss_identity.py` 또는 `services/nice_identity.py` — 본인인증 PG, 미구현 (`identity_verifications` 테이블/모델만 존재, DB 직접 설정으로 우회 중)
+  - [x] ~~`services/toss_identity.py` / `nice_identity.py` — 본인인증 PG~~ — 폐기: Octomo 휴대폰 인증으로 대체 (§1.2)
   - [ ] `services/sweet_tracker.py` — 배송 추적 (Redis 캐시 5분)
 - [x] ~~`services/social_oauth.py`~~ — 어댑터 패턴으로 `app/auth/adapters/` 에 구현 완료
-- [ ] **Rate Limit** — `slowapi` 의존성 있음, 미적용 (auth류 1분 10회, 일반 60회) — 이메일/휴대폰 인증코드 자체 rate-limit(60초)은 Redis로 개별 구현되어 있으나 라우터 전역 rate limit은 아직 없음
-- [ ] **보안 헤더 미들웨어** — HSTS/X-Content-Type-Options, `app/core/middleware.py` 미구현
+- [ ] **Rate Limit** (Week 0 `rate_limit.py`·Week 7 레이트 리밋·Phase 2 #16 과 같은 항목 — 여기서 관리) — `slowapi` 의존성 있음, 미적용 (auth류 1분 10회, 일반 60회) — 이메일/휴대폰 인증코드 자체 rate-limit(60초)은 Redis로 개별 구현되어 있으나 라우터 전역 rate limit은 아직 없음
+- [ ] **보안 헤더 미들웨어** (Week 0·Week 7 운영 헤더와 같은 항목 — 여기서 관리) — HSTS/X-Content-Type-Options. `app/core/middleware.py` 는 2026-11-05 request_id 미들웨어로 생성됨, 보안 헤더만 미구현
 - [ ] **관리자 보안** — IP 화이트리스트 또는 2FA, OpenAPI 문서 prod 비공개 (이미 적용됨)
 - [x] **통합 테스트** — `tests/integration/` 디렉터리로 신규 추가됨 (라우터 ↔ DB 결합 검증). testcontainers 도입 여부는 미확인 — 실 DB 세션 fixture 구성 방식 재확인 필요
 
@@ -603,7 +615,7 @@
 
 ## 3. 데이터/시드
 
-- [x] 카테고리 메타 응답 (정적): `GET /categories` — `app/catalog/catalog_schemas.py`의 `CATEGORY_META`
+- [x] 카테고리 응답: `GET /categories` — DB `product_categories` 테이블 (정적 `CATEGORY_META` 는 동적 카테고리 전환 `b427d8f8f268` 으로 제거)
 - [x] 관리자 계정 부트스트랩 스크립트 — `scripts/seed.py` (재실행 안전, admin01/hong001/kim001)
 - [x] 더미 상품 시드 (개발 편의) — `scripts/seed.py` 6개 상품 포함
 - [x] 더미 FAQ 시드 — **신규 완료** `scripts/seed.py::seed_faqs` 16건 (6개 카테고리, 1회 존재확인 쿼리로 재실행 안전)
@@ -621,24 +633,24 @@
 3. ✅ 상품 조회 (buyer) — `GET /products`(+bulk), `GET /products/{id}`, `GET /products/featured`, `GET /categories`
 4. ✅ 주소록 CRUD (label/memo 포함)
 5. ✅ 장바구니 CRUD + 관심상품 CRUD
-6. 본인인증 PG 연동 (start/callback/me) — Order 진입 가드 **(여전히 DB 직접 설정으로 우회 중, 미구현)**
+6. ✅ ~~본인인증 PG 연동~~ → Octomo 휴대폰 인증으로 대체 (주문 가드 `User.verified`)
 7. ✅ 주문 생성 + 토스 결제 confirm/webhook (멱등) + 환불 요청 + 배송 정보 조회
 8. ✅ 관리자 상품 CRUD + 이미지 관리(전체 교체 + 단건 수정) + 주문 관리(송장·상태·취소·CSV) + 대시보드 + 회원 + 매출
-9. ✅ 휴대폰 번호 변경 인증(`/users/me/phone/*`) — Redis OTP, **신규 완료** (실 SMS 발송은 mock)
+9. ✅ 휴대폰 번호 변경 인증(`/users/me/phone/*`) — Octomo 인증, **완료**
 10. ✅ 공지사항/FAQ/1:1문의 (`app/help/`) — **신규 완료**
 
 ### Phase 2 (안정화)
 
 11. 배송 추적 자동 폴링 (Celery / 스마트택배 API) — 미구현
-12. PG 환불 실호출 (`POST /admin/orders/{n}/refund`, `POST /payments/{id}/refund`) — 미구현
-13. 실 SMS 발송 어댑터 (NHN Cloud/알리고) 교체 — mock만 존재
-14. 회원가입 단계 SMS 인증(`/auth/sms/*`), 이메일 변경(`/users/me/email/*`) — 미구현
+12. ✅ PG 환불 실호출 — 주문 취소·환불요청·관리자 취소가 PG 취소 호출 (Task 3·4). 남은 것: 관리자 DELIVERED 환불 엔드포인트 (§1.12)
+13. ~~실 SMS 발송 어댑터~~ — 폐기 (Octomo 인증, SMS 인증 안 함)
+14. 이메일 변경(`/users/me/email/*`) — 미구현 (회원가입 SMS 인증은 2026-11-05 결정으로 안 함)
 15. 알림센터 (`Notification` 모델 + 목록/읽음) — 미구현
-16. Rate limit 전역 적용, 보안 헤더 미들웨어, CI/DI 암호화 — 미구현
+16. Rate limit 전역 적용, 보안 헤더 미들웨어 — 미구현 (§2 에서 관리. CI/DI 암호화는 컬럼 삭제로 폐기)
 
 ### Phase 3 (확장)
 
-14. 후기 (리뷰), 직접배송 지역 관리, 검색 고도화, 다중 판매자
+17. 후기 (리뷰), 직접배송 지역 관리, 검색 고도화, 다중 판매자
 
 ---
 
@@ -688,7 +700,7 @@ sold_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 - 정렬 `discount_desc`는 컬럼 추가 없이 SQL 표현식 `(original_price - price) * 1.0 / nullif(original_price, 0) DESC`로 처리 가능.
 - `tag`를 enum으로 강제할지 자유 문자열로 둘지 — MVP는 자유 문자열, 운영 안정 후 enum화 권장.
 
-### 6.2 `ProductCategory` enum — 8개로 확장 검토
+### 6.2 `ProductCategory` enum — 8개로 확장 검토 — ⚠️ 폐기: 카테고리가 DB 테이블로 전환(`b427d8f8f268`), 추가는 `/admin/categories` 로
 
 **현 상태**: 6개(`REFRIGERATOR`, `WASHING_MACHINE`, `TV`, `AIR_CONDITIONER`, `KITCHEN`, `ETC`).
 
@@ -875,7 +887,7 @@ class Promotion(Base, TimestampMixin):
 
 ### 7.1 모델 변경 (마이그레이션 필요)
 
-- [ ] `ProductCategory` — enum이 아닌 동적 varchar 카테고리로 전환됨(`b427d8f8f268`) — `VACUUM`/`SMALL_APPLIANCE`는 이제 DB 시드 데이터로 추가하면 됨, 마이그레이션 불필요 (§6.2 재검토)
+- [x] `ProductCategory` — enum이 아닌 동적 varchar 카테고리로 전환됨(`b427d8f8f268`) — `VACUUM`/`SMALL_APPLIANCE`는 이제 DB 시드 데이터로 추가하면 됨, 마이그레이션 불필요 (§6.2 재검토)
 - [ ] `Product` — `tag`, `featured_until`, `view_count`, `favorite_count`, `sold_count` 추가 (§6.1) — 여전히 미구현
 - [ ] `ProductImage` — `label`을 `ProductImageLabel` enum으로 전환, `Product.thumbnail_image_id` FK 또는 `is_primary` 추가 (§6.3) — 여전히 미구현 (현재 `label`은 nullable string)
 - [x] `User` — `status: UserStatus(ACTIVE/BANNED/DORMANT/WITHDRAWN)` 추가 완료 (§6.4)
@@ -891,14 +903,14 @@ class Promotion(Base, TimestampMixin):
 
 - [ ] `GET /products` 정렬 옵션에 **`discount_desc`** 추가 — 기존 latest/price_asc/price_desc에 한 항목 늘림 (§6.1)
 - [ ] `GET /products/featured` — 응답에 `tag` 노출 + `featured_until` 필터 적용
-- [ ] `POST /orders/quote` — `shipping_method` 인자에 따라 `shipping_fee`/`discount_amount` 계산
+- [x] `POST /orders/quote` — `shipping_method` 인자에 따라 `shipping_fee`/`discount_amount` 계산 — FREIGHT/DIRECT 완료 (일반택배 PARCEL 은 미구현)
   - 화물택배: 60,000원
   - 직접배송: 40,000원, 직배송 가능 지역(서울/경기) 외엔 선택 불가
   - 일반택배: 무게/사이즈 기반 (작은 가전 한정)
-- [ ] `POST /orders` 응답 `order_number` 포맷 확정 — `RK-YYMMDD####` (요구사항정의서/디자인 모두 일치)
+- [x] `POST /orders` 응답 `order_number` 포맷 확정 — `RK-YYMMDD####` (요구사항정의서/디자인 모두 일치)
 - [ ] `GET /admin/dashboard/summary` 응답 필드 — KPI 4종에 **비교값 텍스트(`+3건`, `+18%`, `긴급 2`, `품절 임박`)** 포함
-- [ ] `GET /admin/orders` 응답에 **상태별 카운트** 동시 반환 (전체/결제완료/준비중/배송중/배송완료/취소·환불) — 탭 헤더에 표기
-- [ ] `GET /admin/members/summary` 응답에 **신규(이번주)** 카운트 포함 — `created_at >= week_start` 집계
+- [x] `GET /admin/orders` 응답에 **상태별 카운트** 동시 반환 (`AdminOrderStatusCounts`) (전체/결제완료/준비중/배송중/배송완료/취소·환불) — 탭 헤더에 표기
+- [x] `GET /admin/members/summary` 응답에 **신규(이번주)** 카운트 포함 (`new_this_week`) — `created_at >= week_start` 집계
 - [ ] `GET /admin/sales/summary` 응답에 **전월 대비 증감액 + 증감률** 포함
 - [ ] `GET /users/me` 응답에 **누적 절약 무게(kg)** 포함 — 배송완료된 OrderItem의 `weight_snapshot` 합산
 - [ ] `GET /products/{id}` 응답에 **이미지 라벨별 그룹핑** 또는 라벨 정렬 보장 (정면→측면→내부→흠집→뒷면→제품번호)
@@ -913,23 +925,23 @@ class Promotion(Base, TimestampMixin):
   | `password` | 현재 비번 확인 후 변경 | ✅ 완료 |
   | `phone` | SMS 인증코드 발송 → 확인 후 교체 | ✅ **완료** (`/users/me/phone/send-verification`, `/verify` — Redis OTP, mock SMS) |
   | `email` | 새 이메일로 인증코드 발송 → 확인 후 교체 | ❌ 미구현 (`/users/me/email/*` — Redis는 준비됐으나 라우터 없음). 회원가입 단계 이메일 인증(`/auth/email/*`)은 별도로 완료됨 |
-  | `username` | 본인인증 완료 후 변경 잠금 (현재 자유변경 가능) | ⚠️ 본인인증 PG 연동 후 처리 |
+  | `username` | Octomo 휴대폰 인증 완료 후 변경 잠금 (현재 자유변경 가능) | ❌ 미구현 — 조건 `phone_verified_at IS NOT NULL` |
   | `login_id` | 변경 불가 | ✅ 변경 불가 유지 |
 
   - `app/core/redis.py`가 이미 구현되어 이메일 변경 라우터 추가 시 인프라 준비는 끝난 상태 — 남은 건 `/users/me/email/*` 엔드포인트와 서비스 로직뿐
-  - `username` 잠금: 본인인증 PG 연동(§1.2) 완료 후 `identity_verified_at IS NOT NULL` 조건으로 `PATCH /users/me` 에서 차단
+  - `username` 잠금: `phone_verified_at IS NOT NULL`(Octomo 인증 완료) 조건으로 `PATCH /users/me` 에서 차단 (본인인증 PG 폐기로 2026-11-05 조건 갱신)
 - [ ] **환불 정책 7일** ([screens-buyer-1.jsx:371](/tmp/rekle-design/extracted2/rekle/project/screens-buyer-1.jsx)): "배송 후 7일 이내 동작 불량은 환불 가능, 단순 변심 반품 불가"
   - `POST /orders/{id}/refund/request`에서 `delivered_at + 7일` 윈도우 검증
   - 사유를 `MALFUNCTION` / `CHANGE_OF_MIND` 구분 — 후자는 자동 거절
 - [x] **직접배송 가능 지역**: 주문서에서 `address.zipcode`가 서울/경기일 때만 `DIRECT` 옵션 노출
   - [x] 1차: 정적 zipcode prefix 화이트리스트 `app/core/shipping.py`의 `is_direct_delivery_available()`
   - [ ] 2차: `ProductDirectRegion` 모델로 상품별 가능 지역 다르게 (Phase 3)
-- [x] **본인인증 우회 방지**: `POST /orders` 호출 시 `user.identity_verified_at IS NOT NULL` 검증, `IDENTITY_REQUIRED` 에러 반환
-- [ ] **재고 차감 타이밍**: 주문 생성(PENDING) 시 예약 → 결제 confirm 시 확정 / 취소 시 복구 (요구사항 정의서와 동일)
+- [x] **본인인증 우회 방지**: `POST /orders` 호출 시 `user.verified`(= `phone_verified_at IS NOT NULL`, Octomo) 검증, `IDENTITY_REQUIRED` 에러 반환
+- [x] **재고 차감 타이밍**: 주문 생성(PENDING) 시 예약 → 결제 confirm 시 확정 / 취소 시 복구 (요구사항 정의서와 동일)
 
 ### 7.4 정적 데이터 / 상수
 
-- [x] `app/catalog/catalog_schemas.py`의 `CATEGORY_META` — 카테고리 메타 dict (id, label_ko, icon_key, sort_order)
+- [x] ~~`app/catalog/catalog_schemas.py`의 `CATEGORY_META`~~ — DB `product_categories` 로 대체 (`b427d8f8f268`)
 - [x] `app/core/shipping.py` — 배송비 상수 + `is_direct_delivery_available()` (zipcode prefix 검증)
   ```python
   FREIGHT_FEE = 60_000        # 화물택배
@@ -952,7 +964,7 @@ class Promotion(Base, TimestampMixin):
 
 ## 8. 디자인-백엔드 정합성 체크리스트 (구현 후 확인)
 
-- [ ] 홈 카테고리 그리드 8개와 `ProductCategory` enum + `CATEGORY_META` 매핑이 1:1로 일치
+- [x] ~~홈 카테고리 그리드 8개와 `ProductCategory` enum + `CATEGORY_META` 매핑이 1:1로 일치~~ — 폐기: 카테고리 DB 관리로 고정 매핑 불필요
 - [ ] 상품 카드의 `discountPct`, `won(price)`, 등급 뱃지 색상 — API 응답 `original_price`/`price`/`condition_grade`로 모두 계산 가능
 - [ ] 상세 이미지 6 라벨이 모두 노출 가능한 ProductImage 데이터로 채워질 수 있음 (정면 필수, 흠집은 B/C 권장)
 - [ ] 장바구니 합계 = 상품금액 + 화물 배송비(60K) - 직배송 할인(20K) — `cart/summary` API와 화면 모두 동일 식
@@ -966,7 +978,7 @@ class Promotion(Base, TimestampMixin):
 
 > **아키텍처**: Modular Monolith + Layered (기본) + Ports & Adapters (외부 통합 모듈만)
 > **모듈 위치**: `app/{auth,user,catalog,cart,address,order,payment,common,admin,help}/` — `docs/memory.md` 참고
-> **현재 상태 (2026-07-04)**: Week 0~6 대부분 완료 + help 모듈(공지/FAQ/문의) 신규 완료. 테스트 359개. 미완: 회원가입 SMS 인증(`/auth/sms/*`)·실 SMS 발송·본인인증 PG·PG환불실호출·shipment추적·알림센터·rate limit·CI/DI 암호화.
+> **현재 상태 (2026-11-05)**: Week 0~6 대부분 완료 + help 모듈 + 토스 실연동 + 관측성 O0·O1(로깅). 테스트 666개. 미완: shipment추적·알림센터·rate limit·보안 헤더·이메일 변경. (SMS 인증·본인인증 PG·CI/DI 암호화는 폐기)
 
 각 주차 끝에 마이그레이션 1개씩 추가하고, 모든 새 엔드포인트는 통합 테스트(pytest + httpx) 1개씩 동반.
 
@@ -978,9 +990,9 @@ class Promotion(Base, TimestampMixin):
 - [x] `app/core/exceptions.py` — `BusinessError` 계층 + 글로벌 Exception 핸들러 (CORS 헤더 포함)
 - [x] `tests/conftest.py` — async test client, `make_user` 헬퍼, fake repo 패턴
 - [x] `pyproject.toml dev extras` — ruff/mypy/pytest-asyncio 설정 완료
-- [ ] `app/core/middleware.py` — 보안 헤더(HSTS/X-Content-Type-Options), structlog JSON 로깅
+- [ ] `app/core/middleware.py` — 보안 헤더(HSTS/X-Content-Type-Options) → §2 보안 헤더로 통합 (structlog JSON 로깅·request_id 는 2026-11-05 완료)
 - [x] `app/core/redis.py` — **신규 완료** `redis-py` async 클라이언트 + `Depends(get_redis)`, 이메일/휴대폰 인증코드 캐시에 사용 중
-- [ ] `app/core/rate_limit.py` — slowapi 기반 (auth류 1분 10회, 일반 60회) — 전역 미적용 (인증코드 발송 자체의 60초 rate-limit은 Redis로 개별 구현됨)
+- [ ] `app/core/rate_limit.py` (→ §2 Rate Limit 으로 통합) — slowapi 기반 (auth류 1분 10회, 일반 60회) — 전역 미적용 (인증코드 발송 자체의 60초 rate-limit은 Redis로 개별 구현됨)
 
 ### Week 1 — Auth + User 모듈 ✅ 완료 (일부 잔여)
 
@@ -998,12 +1010,12 @@ class Promotion(Base, TimestampMixin):
 - [x] `app/user/{user_router,user_service,user_repository,user_schemas}.py`
 - [x] `GET /users/me` — 프로필 + 소셜 연결 현황
 - [x] `POST /users/me/password` — 비밀번호 변경 (`must_change_password` 해제)
-- [ ] `POST /auth/sms/send`, `POST /auth/sms/verify` — 회원가입 단계 휴대폰 인증 (미구현, 아래 phone 변경용과는 별개)
-- [x] `POST /users/me/phone/send-verification`, `POST /users/me/phone/verify` — **신규 완료** 전화번호 변경용 Redis OTP (실 SMS는 `ConsoleSmsSender` mock)
+- [x] ~~`POST /auth/sms/send`, `POST /auth/sms/verify`~~ — 폐기: **2026-11-05 결정: SMS 인증 안 함** — 휴대폰 인증은 Octomo(`/users/me/phone/*`)로 일원화
+- [x] `POST /users/me/phone/send-verification`, `POST /users/me/phone/verify` — **완료** 전화번호 변경용 Octomo 인증
 - [x] `PATCH /users/me` — username/phone 부분 업데이트
-  - ⚠️ **TODO**: `username` 은 본인인증 결과(실명)와 연동되므로, 본인인증 완료 이후에는 PATCH 로 자유 변경 불가로 바꿔야 함. 현재는 인증 없이 변경 가능한 상태로 열려 있음 — 본인인증 PG 연동(§1.2) 완료 후 함께 처리.
+  - ⚠️ **TODO**: `username` 변경 잠금 — Octomo 휴대폰 인증(`phone_verified_at`) 완료 후에는 PATCH 로 자유 변경 불가로 바꿔야 함. 현재는 인증 없이 변경 가능 (본인인증 PG 는 폐기 — §7.3 개인정보 수정 정책과 같은 항목)
 - [x] `DELETE /users/me` — PII 전체 익명화 + `UserStatus.WITHDRAWN` + `withdrawn_at` 기록
-- [ ] CI/DI 컬럼 양방향 암호화 (AES-GCM) — 미구현
+- [x] ~~CI/DI 컬럼 양방향 암호화 (AES-GCM)~~ — 폐기: CI/DI 컬럼 삭제(`6105137b8e93`)
 
 ### Week 2 — Catalog (상품) 모듈 ✅ 완료 (일부 잔여)
 
@@ -1011,11 +1023,11 @@ class Promotion(Base, TimestampMixin):
 - [x] `GET /products` — 필터(category/q/grade/min_price/max_price/warranty) + 정렬 + 페이지네이션
 - [x] `GET /products/{id}` — 이미지·스펙·등급 안내·배송정보 통합 응답
 - [x] `GET /products/featured` — 홈 "오늘 입고된 상품" 4건
-- [x] `GET /categories` — 카테고리 메타 (정적 dict)
+- [x] `GET /categories` — 카테고리 목록 (DB 테이블)
 - [ ] `GET /products/popular-keywords` — 검색 페이지 (Redis 집계 캐시, 미구현)
 - [x] **시드 데이터**: `scripts/seed.py` 6개 상품
 - [x] (Admin) `GET/POST/GET/{id}/PATCH/DELETE /admin/products` — CRUD + ADMIN role guard
-- [ ] (Admin) `POST /admin/products/{id}/images` — 이미지 추가/순서 변경 (미구현)
+- [x] ~~(Admin) `POST /admin/products/{id}/images`~~ — `PUT .../images`(전체 교체)·`PATCH .../images/{image_id}`(단건 수정)로 구현
 
 ### Week 3 — Cart + Favorites + Address 모듈 ✅ 완료 (일부 잔여)
 
@@ -1038,7 +1050,7 @@ class Promotion(Base, TimestampMixin):
 - [x] `POST /orders` — 본인인증 → 배치 `WHERE id IN (...) FOR UPDATE` → 주문 생성 → 재고 차감
 - [x] `GET /orders`, `GET /orders/{order_number}` — 본인 주문만
 - [x] `POST /orders/{order_number}/cancel` — PENDING/PAID/PREPARING만, `cancelled_at` 기록
-- [x] `POST /orders/{order_number}/refund/request` — DELIVERED → REFUNDED 전환 (PG 실호출은 미구현)
+- [x] `POST /orders/{order_number}/refund/request` — DELIVERED → PG 전액 취소 후 REFUNDED (Task 3·4)
 - [ ] 주문 생성 동시성 통합 테스트 — 동일 상품 동시 주문 1건만 성공 검증 (미구현)
 
 ### Week 5 — Payment 모듈 ✅ 완료 (일부 잔여)
@@ -1048,10 +1060,10 @@ class Promotion(Base, TimestampMixin):
 - [x] `POST /payments/init` — 주문 검증(소유자 + PENDING) + Payment(READY) 생성
 - [x] `POST /payments/confirm` — Toss confirm + 금액 검증 + Order PAID 전환
 - [x] `POST /payments/webhooks/toss` — 수신 후 결제 조회 API 재확인 + 멱등 상태 전환 (토스 결제 웹훅엔 서명 없음)
-- [x] `PaymentService.verify_webhook()` — router가 _gateway에 직접 접근 안 함
-- [ ] `POST /payments/{id}/cancel`, `POST /payments/{id}/refund` (미구현)
-- [ ] **본인인증 PG**: `app/auth/adapters/toss_identity.py` — `IdentityVerifier` 구현 (미구현)
-- [ ] `POST /verifications/{start,callback}` — 콜백 멱등성 (미구현)
+- [x] ~~`PaymentService.verify_webhook()`~~ — Task 1(`233a264`)에서 제거, 웹훅은 결제 조회 재확인 방식(`handle_webhook`)
+- [x] ~~`POST /payments/{id}/cancel`, `POST /payments/{id}/refund`~~ — 설계 변경: 주문 취소·환불요청·관리자 취소 엔드포인트가 `PaymentService.cancel_payment` 호출
+- [x] ~~**본인인증 PG**: `toss_identity.py` — `IdentityVerifier`~~ — 폐기: Octomo 휴대폰 인증으로 대체
+- [x] ~~`POST /verifications/{start,callback}`~~ — 폐기 (§1.2)
 
 ### Week 6 — Shipment + Help + Admin (1.8, 1.9, 1.10~1.13) ✅ 대부분 완료
 
@@ -1072,8 +1084,8 @@ class Promotion(Base, TimestampMixin):
 
 - [ ] **감사 로그** — Hibernate Envers 대용으로 SQLAlchemy `event.listens_for` 또는 `Audited` 패턴 (mutation 1년 보존)
 - [ ] **모니터링** — 상단 "관측성 구축" 섹션 O0~O6 으로 상세화 (structlog JSON + Prometheus/Grafana + Sentry)
-- [ ] **운영 헤더** — `Strict-Transport-Security`, `X-Content-Type-Options: nosniff` 미들웨어
-- [ ] **레이트 리밋** 전 라우터 적용 (auth류 / 일반 / admin)
+- [ ] **운영 헤더** (→ §2 보안 헤더 미들웨어로 통합) — `Strict-Transport-Security`, `X-Content-Type-Options: nosniff` 미들웨어
+- [ ] **레이트 리밋** 전 라우터 적용 (→ §2 Rate Limit 으로 통합)
 - [ ] **PII 양방향 암호화** 검증 — phone/email AES-GCM, 비번 argon2id
 - [ ] **백업** — pg_dump 일 1회 + WAL 5분 단위 (infra 작업)
 - [ ] **부하 테스트** — 상단 "관측성 구축" 섹션 O7~O8 로 상세화 (k6, 스테이징 전용, 개선 루프)

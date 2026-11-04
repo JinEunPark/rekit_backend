@@ -75,23 +75,16 @@ def mask_sensitive_fields(_: WrappedLogger, __: str, event_dict: EventDict) -> E
     return {k: v if k == "event" else _mask_value(k, v) for k, v in event_dict.items()}
 
 
-def configure_logging(*, level: str, json_logs: bool) -> None:
-    shared_processors: list[Processor] = [
-        structlog.contextvars.merge_contextvars,
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.add_logger_name,
-        structlog.processors.TimeStamper(fmt="iso", utc=True),
-    ]
+_SHARED_PROCESSORS: list[Processor] = [
+    structlog.contextvars.merge_contextvars,
+    structlog.stdlib.add_log_level,
+    structlog.stdlib.add_logger_name,
+    structlog.processors.TimeStamper(fmt="iso", utc=True),
+]
 
-    structlog.configure(
-        processors=[*shared_processors, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
-        logger_factory=structlog.stdlib.LoggerFactory(),
-        wrapper_class=structlog.stdlib.BoundLogger,
-        # 캐시하면 로거가 첫 사용 시점 설정에 고정된다 — 이후 configure 재호출이나
-        # structlog.testing.capture_logs 가 반영되지 않음. 이 트래픽 규모에선 비용 무시 가능.
-        cache_logger_on_first_use=False,
-    )
 
+def build_formatter(*, json_logs: bool) -> structlog.stdlib.ProcessorFormatter:
+    """앱(configure_logging)과 gunicorn master(gunicorn_logconfig_dict)가 같이 쓰는 formatter."""
     renderers: list[Processor]
     if json_logs:
         # ProcessorFormatter 는 exc_info 를 event dict 에 넘기기만 한다 — 문자열화하지 않으면
@@ -104,16 +97,28 @@ def configure_logging(*, level: str, json_logs: bool) -> None:
     else:
         renderers = [structlog.dev.ConsoleRenderer()]
 
-    formatter = structlog.stdlib.ProcessorFormatter(
-        foreign_pre_chain=shared_processors,
+    return structlog.stdlib.ProcessorFormatter(
+        foreign_pre_chain=_SHARED_PROCESSORS,
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             mask_sensitive_fields,
             *renderers,
         ],
     )
+
+
+def configure_logging(*, level: str, json_logs: bool) -> None:
+    structlog.configure(
+        processors=[*_SHARED_PROCESSORS, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        # 캐시하면 로거가 첫 사용 시점 설정에 고정된다 — 이후 configure 재호출이나
+        # structlog.testing.capture_logs 가 반영되지 않음. 이 트래픽 규모에선 비용 무시 가능.
+        cache_logger_on_first_use=False,
+    )
+
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(formatter)
+    handler.setFormatter(build_formatter(json_logs=json_logs))
 
     root = logging.getLogger()
     root.setLevel(level.upper())
@@ -126,3 +131,31 @@ def configure_logging(*, level: str, json_logs: bool) -> None:
     # RequestContextMiddleware 가 템플릿 경로·request_id 를 담은 액세스 로그를 남긴다
     # — uvicorn 기본 액세스 로그는 꺼서 이중 기록 방지
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
+
+def gunicorn_logconfig_dict(*, level: str, json_logs: bool) -> dict[str, Any]:
+    """gunicorn.conf.py 의 logconfig_dict — master 로그(Booting worker 등)를 앱과 같은 포맷으로.
+
+    master 는 앱을 import 하기 전에 로그를 찍어 configure_logging 영향 밖이다. gunicorn 은 이
+    dict 로 기본 설정(CONFIG_DEFAULTS)의 키를 통째로 덮어쓰므로 root/loggers/handlers/formatters
+    를 모두 준다.
+    gunicorn.* 는 자기 핸들러 없이 root 로 전파 — 워커에선 configure_logging 이 root 핸들러를
+    같은 포맷으로 교체하므로 어느 프로세스에서든 한 번만 출력된다.
+    """
+    return {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {"structlog": {"()": build_formatter, "json_logs": json_logs}},
+        "handlers": {
+            "stdout": {
+                "class": "logging.StreamHandler",
+                "formatter": "structlog",
+                "stream": "ext://sys.stdout",
+            }
+        },
+        "root": {"level": level.upper(), "handlers": ["stdout"]},
+        "loggers": {
+            name: {"level": level.upper(), "handlers": [], "propagate": True}
+            for name in ("gunicorn.error", "gunicorn.access")
+        },
+    }

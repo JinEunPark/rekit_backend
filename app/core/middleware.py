@@ -2,6 +2,7 @@
 
 RequestContextMiddleware — 요청마다 request_id 를 부여하고(로그 상관 ID, Spring MDC 대응)
 요청 1건당 구조화 액세스 로그 1줄을 남긴다.
+UnhandledExceptionMiddleware — 미처리 예외를 CORS 안쪽에서 표준 500 응답으로 바꾼다.
 
 순수 ASGI 로 구현한다. BaseHTTPMiddleware 는 하위 앱을 별도 task 로 돌려서, 인증
 dependency 가 바인딩한 user_id 같은 contextvars 가 미들웨어로 돌아오지 않는다.
@@ -13,7 +14,10 @@ import uuid
 
 import structlog
 from starlette.datastructures import Headers, MutableHeaders
+from starlette.routing import replace_params
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from app.core.exceptions import internal_error_response
 
 REQUEST_ID_HEADER = "X-Request-ID"
 
@@ -39,8 +43,20 @@ def _resolve_request_id(headers: Headers) -> str:
 
 def _route_template(scope: Scope) -> str:
     route = scope.get("route")
-    path = getattr(route, "path", None)
-    return path if isinstance(path, str) else _UNMATCHED_PATH
+    template = getattr(route, "path", None)
+    if route is None or not isinstance(template, str):
+        return _UNMATCHED_PATH
+    # FastAPI 0.162+ 는 include_router 가 라우트를 평탄화하지 않아 route.path 에 바깥 라우터
+    # prefix(/api/v1)가 빠진다 (0.136 은 포함). 템플릿에 실제 파라미터를 채운 "꼬리" 가 원본 경로의
+    # 끝과 같으면 그 앞부분이 생략된 prefix — 비공개 내부 구조 없이 버전과 무관하게 복원한다.
+    # replace_params 는 넘긴 dict 를 pop 하므로 복사본을 넘긴다.
+    rendered, _ = replace_params(
+        route.path_format, route.param_convertors, dict(scope.get("path_params", {}))
+    )
+    raw_path: str = scope["path"]
+    if rendered and raw_path.endswith(rendered):
+        return raw_path[: len(raw_path) - len(rendered)] + template
+    return template
 
 
 class RequestContextMiddleware:
@@ -81,3 +97,38 @@ class RequestContextMiddleware:
                     duration_ms=round((time.perf_counter() - started) * 1000, 2),
                     client_ip=client[0] if client else None,
                 )
+
+
+class UnhandledExceptionMiddleware:
+    """라우트의 미처리 예외를 CORS 안쪽에서 표준 500 응답으로 바꾼다.
+
+    Starlette 는 `Exception` 핸들러를 모든 사용자 미들웨어 바깥(ServerErrorMiddleware)에 붙여서
+    그 500 응답엔 Access-Control-Allow-Origin 이 없다 → 브라우저는 서버 오류를 CORS 에러로 오인.
+    가장 안쪽 사용자 미들웨어로 두면 응답이 CORS·RequestContextMiddleware 를 거쳐 나간다.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        response_started = False
+
+        async def send_tracking_start(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_tracking_start)
+        except Exception as exc:
+            # 헤더를 이미 보낸 스트리밍 도중 예외는 500 으로 바꿀 수 없다 — 바깥 fallback 에 맡긴다
+            if response_started:
+                raise
+            # 재발생시키지 않는다 — 여기서 로그를 남겼으니 ServerErrorMiddleware·uvicorn 이
+            # 같은 traceback 을 한 번 더 찍지 않게
+            await internal_error_response(exc)(scope, receive, send)

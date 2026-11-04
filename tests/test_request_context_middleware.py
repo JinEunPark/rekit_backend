@@ -5,11 +5,12 @@
 
 import json
 import uuid
+from collections.abc import AsyncIterator
 
 import httpx
 import pytest
 import structlog
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 
 from app.core.config import settings
 from app.core.exceptions import OrderNotFoundError, register_exception_handlers
@@ -277,3 +278,188 @@ async def test_main_app_cors_exposes_request_id_header() -> None:
     exposed = res.headers.get("access-control-expose-headers", "")
     assert REQUEST_ID_HEADER.lower() in exposed.lower()
     assert REQUEST_ID_HEADER in res.headers
+
+
+# ── 중첩 라우터 (운영 구조: api_v1(prefix=/api/v1) ⊃ 도메인 라우터(prefix=/orders)) ──
+
+
+def _nested_router_app() -> FastAPI:
+    """운영과 같은 2단 prefix 라우터. FastAPI 0.162+ 는 include_router 가 라우트를 평탄화하지 않아
+    scope["route"].path 에 바깥 prefix 가 빠진다 — 위 미니 앱(@app.get 직접 등록)으론 재현 안 됨."""
+    configure_logging(level="INFO", json_logs=True)
+    inner = APIRouter(prefix="/orders")
+
+    @inner.get("/{order_number}")
+    async def get_order(order_number: str) -> dict[str, str]:
+        return {"order_number": order_number}
+
+    @inner.get("")
+    async def list_orders() -> list[str]:
+        return []
+
+    outer = APIRouter(prefix="/api/v1")
+    outer.include_router(inner)
+    app = FastAPI()
+    app.add_middleware(RequestContextMiddleware)
+    app.include_router(outer)
+    return app
+
+
+async def test_access_log_path_keeps_outer_router_prefix_for_path_param_route(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """중첩 라우터의 path 파라미터 라우트도 바깥 prefix 포함 전체 템플릿으로 기록된다."""
+    app = _nested_router_app()
+    async with _client(app) as client:
+        await client.get("/api/v1/orders/RK-2611050001")
+
+    [line] = _access_logs(capsys.readouterr().out)
+    assert line["path"] == "/api/v1/orders/{order_number}"
+
+
+async def test_access_log_path_keeps_outer_router_prefix_for_static_route(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """파라미터 없는 라우트(prefix 만 있는 빈 경로)도 전체 경로로 기록된다."""
+    app = _nested_router_app()
+    async with _client(app) as client:
+        await client.get("/api/v1/orders")
+
+    [line] = _access_logs(capsys.readouterr().out)
+    assert line["path"] == "/api/v1/orders"
+
+
+async def test_main_app_access_log_path_is_full_template(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """실제 app.main.app 라우터 구조에서도 /api/v1 포함 템플릿 (미인증 401 이어도 라우트 매칭)."""
+    configure_logging(level="INFO", json_logs=True)
+    async with _client(main_app) as client:
+        res = await client.get("/api/v1/orders/RK-2611050001")
+
+    assert res.status_code == 401
+    [line] = _access_logs(capsys.readouterr().out)
+    assert line["path"] == "/api/v1/orders/{order_number}"
+
+
+# ── 미처리 예외 500 + CORS (운영 미들웨어 구성 그대로) ──
+
+_ORIGIN = "https://rekit.co.kr"
+
+
+def _production_stack_app() -> FastAPI:
+    """create_app 과 같은 install_middlewares 로 미들웨어를 붙인 미니 앱 (예외 라우트 추가용)."""
+    from fastapi.responses import StreamingResponse
+
+    from app.main import install_middlewares
+
+    configure_logging(level="INFO", json_logs=True)
+    app = FastAPI()
+    register_exception_handlers(app)
+    install_middlewares(app, cors_origins=[_ORIGIN])
+
+    @app.get("/boom")
+    async def boom() -> None:
+        raise RuntimeError("의도한 예외")
+
+    @app.get("/missing")
+    async def missing() -> None:
+        raise OrderNotFoundError()
+
+    @app.get("/stream-boom")
+    async def stream_boom() -> StreamingResponse:
+        async def body() -> AsyncIterator[bytes]:
+            yield b"first-chunk"
+            raise RuntimeError("스트리밍 도중 예외")
+
+        return StreamingResponse(body())
+
+    return app
+
+
+async def test_unhandled_500_without_origin_has_standard_body_and_no_cors_header() -> None:
+    """Origin 없는 요청(서버 간 호출)의 500 — 표준 에러 body, CORS 헤더는 붙지 않는다."""
+    app = _production_stack_app()
+    async with _client(app) as client:
+        res = await client.get("/boom")
+
+    assert res.status_code == 500
+    assert res.json() == {
+        "error": {"code": "INTERNAL_ERROR", "message": "서버 오류가 발생했습니다."}
+    }
+    assert "access-control-allow-origin" not in res.headers
+
+
+async def test_unhandled_500_with_origin_includes_cors_allow_origin_header() -> None:
+    """브라우저 요청의 500 에도 Access-Control-Allow-Origin — 없으면 브라우저가 CORS 에러로 오인."""
+    app = _production_stack_app()
+    async with _client(app) as client:
+        res = await client.get("/boom", headers={"Origin": _ORIGIN})
+
+    assert res.status_code == 500
+    assert res.headers["access-control-allow-origin"] == _ORIGIN
+    assert res.json()["error"]["code"] == "INTERNAL_ERROR"
+    assert REQUEST_ID_HEADER in res.headers
+
+
+async def test_unhandled_500_is_logged_once_with_request_id_and_access_status(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """미처리 예외 로그는 1번만(중복 traceback 없음) + request_id, 액세스 로그는 status 500."""
+    app = _production_stack_app()
+    async with _client(app) as client:
+        res = await client.get("/boom", headers={"Origin": _ORIGIN})
+
+    lines = _json_lines(capsys.readouterr().out)
+    errors = [ln for ln in lines if ln["event"] == "미처리 예외"]
+    [access] = [ln for ln in lines if ln["event"] == "http_request"]
+    assert len(errors) == 1
+    assert errors[0]["request_id"] == res.headers[REQUEST_ID_HEADER]
+    assert "RuntimeError" in str(errors[0]["exception"])
+    assert access["status"] == 500
+
+
+async def test_business_error_with_origin_keeps_cors_header() -> None:
+    """4xx(BusinessError) 는 기존처럼 CORS 헤더 + 표준 body — 회귀 방지."""
+    app = _production_stack_app()
+    async with _client(app) as client:
+        res = await client.get("/missing", headers={"Origin": _ORIGIN})
+
+    assert res.status_code == 404
+    assert res.headers["access-control-allow-origin"] == _ORIGIN
+    assert res.json()["error"]["code"] == "ORDER_NOT_FOUND"
+
+
+async def test_preflight_is_still_answered_by_cors_with_request_id() -> None:
+    """preflight 는 CORS 가 직접 응답 — request_id 도 그대로 붙는다 (미들웨어 순서 회귀 방지)."""
+    app = _production_stack_app()
+    async with _client(app) as client:
+        res = await client.options(
+            "/boom",
+            headers={"Origin": _ORIGIN, "Access-Control-Request-Method": "GET"},
+        )
+
+    assert res.status_code == 200
+    assert res.headers["access-control-allow-origin"] == _ORIGIN
+    assert REQUEST_ID_HEADER in res.headers
+
+
+async def test_exception_after_response_started_is_not_converted_to_500() -> None:
+    """응답 헤더를 이미 보낸 뒤(스트리밍 도중) 예외는 500 으로 바꿀 수 없다 — 두 번째
+    http.response.start 를 보내지 않고 그대로 재발생시킨다."""
+    app = _production_stack_app()
+    async with _client(app) as client:
+        res = await client.get("/stream-boom")
+
+    assert res.status_code == 200
+
+
+def test_main_app_converts_unhandled_exceptions_inside_cors() -> None:
+    """운영 앱 미들웨어 순서: RequestContext(가장 바깥) → CORS → UnhandledException(가장 안쪽).
+    순서가 바뀌면 500 응답이 CORS 를 거치지 않는다."""
+    from app.core.middleware import UnhandledExceptionMiddleware
+
+    classes = [m.cls for m in main_app.user_middleware]
+
+    assert classes[0] is RequestContextMiddleware
+    assert classes[-1] is UnhandledExceptionMiddleware

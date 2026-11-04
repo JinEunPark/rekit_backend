@@ -22,8 +22,5 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["gunicorn", "app.main:app", \
-     "-k", "uvicorn_worker.UvicornWorker", \
-     "-w", "4", \
-     "-b", "0.0.0.0:8000", \
-     "--error-logfile", "-"]
+# 워커 클래스·워커 수·바인드·로그 설정은 gunicorn.conf.py 한 곳에서
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "app.main:app"]

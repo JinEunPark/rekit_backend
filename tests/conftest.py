@@ -88,7 +88,14 @@ def make_user(
     return user
 
 
-_THIRD_PARTY_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
+# gunicorn.* 는 gunicorn_logconfig_dict 테스트가 dictConfig 로 바꾼다
+_THIRD_PARTY_LOGGERS = (
+    "uvicorn",
+    "uvicorn.error",
+    "uvicorn.access",
+    "gunicorn.error",
+    "gunicorn.access",
+)
 
 
 @pytest.fixture

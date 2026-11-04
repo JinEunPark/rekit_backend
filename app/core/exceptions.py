@@ -304,6 +304,23 @@ class ContactNotFoundError(BusinessError):
 # ── handler 등록 ──────────────────────────────────────────────
 
 
+def internal_error_response(exc: Exception) -> JSONResponse:
+    """미처리 예외 → error 로그 + 표준 500 응답 (traceback 은 응답에 노출하지 않음).
+
+    UnhandledExceptionMiddleware 와 fallback 핸들러(_unhandled) 공용.
+    """
+    _log.error("미처리 예외", exc_info=exc)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "error": {
+                "code": "INTERNAL_ERROR",
+                "message": "서버 오류가 발생했습니다.",
+            }
+        },
+    )
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """main.create_app 에서 호출. 모든 응답을 표준 포맷으로 통일한다."""
 
@@ -319,24 +336,15 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
-        # 미처리 예외 — 표준 500 포맷으로 변환 + traceback 노출 차단
-        # (debug=True 에서 raw 응답 방지).
-        # 주의: Exception 핸들러는 Starlette 가 ServerErrorMiddleware(모든 사용자 미들웨어 바깥)에
-        # 붙인다. 그래서 이 응답은 CORS·RequestContextMiddleware 를 거치지 않는다 —
-        # Access-Control-Allow-Origin 이 빠져 브라우저엔 CORS 에러로 보인다 (todo.md O1 남은 한계).
-        # request_id 헤더는 여기서 직접 붙인다.
-        _log.error("미처리 예외", exc_info=exc)
+        # fallback — 라우트의 미처리 예외는 UnhandledExceptionMiddleware 가 CORS 안쪽에서 먼저
+        # 500 으로 바꾼다. 여기로 오는 건 그보다 바깥(사용자 미들웨어 자체)에서 터졌거나 스트리밍
+        # 도중 예외인 경우뿐. Starlette 는 이 핸들러를 ServerErrorMiddleware(모든 사용자 미들웨어
+        # 바깥)에 붙여서 이 응답엔 CORS 헤더가 없다 — request_id 헤더만 직접 붙인다.
+        response = internal_error_response(exc)
         request_id = structlog.contextvars.get_contextvars().get("request_id")
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "서버 오류가 발생했습니다.",
-                }
-            },
-            headers={_REQUEST_ID_HEADER: request_id} if request_id else None,
-        )
+        if request_id:
+            response.headers[_REQUEST_ID_HEADER] = request_id
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:
