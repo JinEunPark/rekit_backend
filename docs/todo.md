@@ -161,6 +161,192 @@
 
 ---
 
+## 관측성(로깅·메트릭·모니터링) 구축 + 부하테스트 개선 루프 (2026-11-05 계획)
+
+> **목표**: "장애를 사용자 문의로 먼저 알게 되는" 상황 제거 → 부하테스트로 병목을 숫자로 찾고 개선하는 루프 확립.
+> **진행 순서**: O0(선결 버그) → O1(로깅) → O2(메트릭) → O3(에러 추적) → O4(헬스체크) → O5(모니터링 스택)
+> → O6(알림) → O7(부하테스트) → O8(개선 루프). 각 단계는 TDD(Red→Green→Refactor) + 완료 게이트
+> (`pytest -v` / `ruff check app tests` / `mypy app` 전부 0건) 통과 후 체크.
+> **원칙**: 라벨/메트릭에 `user_id`·`order_number` 등 고유값 금지(→ 로그로) · 모든 시간 UTC · 운영에서 부하테스트 금지.
+
+### O0. 선결 — 현재 이미 유실 중인 것 (가장 먼저)
+
+- [x] **(2026-11-05 완료 — O1-1)** **로깅 미설정으로 INFO 로그 전부 유실** — 앱 어디에도 `basicConfig`/`dictConfig` 없음 → root 로거
+      `WARNING`·핸들러 0개 (2026-11-05 확인). gunicorn 은 `gunicorn.*` 로거만 설정. 그 결과
+      `payment_service.py` 의 `"토스 웹훅 수신 — ..."` / 결제 확정 INFO, 스위퍼 `"방치 주문 N건 정리"` 가
+      운영에서 안 찍힘 → 위 [결제] 수동 테스트 체크리스트의 "로그에 ~ 뜨는지" 항목 검증 불가. **O1-1 로 해결**
+- [x] **(2026-11-05 완료)** **컨테이너 로그 로테이션 없음** — `docker-compose.prod.yml` 에 `logging:` 옵션 없음 → json-file 무제한 →
+      디스크 고갈 위험. app/postgres/redis 전부에
+      `logging: {driver: json-file, options: {max-size: "20m", max-file: "5"}}` 추가
+      → `x-logging` anchor 로 1회 정의 후 3개 서비스 참조. **운영 반영은 `docker compose up -d` 로 컨테이너 재생성 필요**
+      (logging 옵션은 재시작만으론 안 바뀜 — postgres/redis 포함)
+- [x] **(2026-11-05 완료)** **`uvicorn.workers.UvicornWorker` deprecated** (uvicorn 0.46.0 에서 경고 확인) — `uvicorn-worker` 패키지 추가 +
+      `-k uvicorn_worker.UvicornWorker` 로 교체. `docker-compose.prod.yml` `command` 와 `Dockerfile` `CMD` 둘 다
+      (+ `docs/요구사항정의서.md` 권장 명령 갱신). 로컬 gunicorn -w 2 기동·요청·종료 확인
+
+### O1. 구조화 로깅 (structlog — 의존성에만 있고 미사용 상태)
+
+- [x] **O1-1 로깅 초기화 (2026-11-05 완료)** — `app/core/logging.py` 신규 `configure_logging()`
+  - 테스트 `tests/test_logging.py` 12건. 로컬 gunicorn(APP_ENV=production) 으로 uvicorn·액세스·SQL 로그 JSON 출력 확인
+  - 부수 수정: `database.py` `echo=settings.debug` 제거 → DEBUG 시 `sqlalchemy.engine` 레벨만 INFO
+    (echo 는 자체 핸들러를 달아 root 핸들러와 SQL 이중 출력)
+  - 남은 것: gunicorn **master** 프로세스 로그(`Booting worker` 등)는 gunicorn 자체 포맷(로컬 TZ) 유지 —
+    앱 import 전 단계라 configure_logging 영향 밖. 필요 시 `gunicorn.conf.py`(O2-5) 에 `logconfig_dict` 로 통일
+  - structlog + 표준 `logging` 통합 (`ProcessorFormatter`) — 기존 `logging.getLogger(__name__)` 호출부 수정 없이 JSON 출력
+  - 운영(`APP_ENV=production`): JSON 한 줄 / 로컬: 컬러 콘솔
+  - `LOG_LEVEL` 환경변수 (default `INFO`) — `config.py` · `.env.example` · `.env` 3곳 동시 수정
+  - `timestamp` 는 UTC ISO-8601 (`TimeStamper(fmt="iso", utc=True)`)
+  - uvicorn/gunicorn 로거도 같은 포맷으로 (중복 출력 방지: `propagate` 정리)
+  - `create_app()` 초입에서 호출
+  - 테스트: 설정 후 INFO 로그가 출력되는지 / JSON 파싱 가능한지 / 레벨 env 반영되는지
+- [ ] **O1-2 Request ID (상관 ID)** — `app/core/middleware.py` (보안 헤더 미들웨어와 같은 파일)
+  - 요청 헤더 `X-Request-ID` 있으면 사용(길이·문자 검증), 없으면 UUID4 생성
+  - `structlog.contextvars.bind_contextvars(request_id=...)` → 그 요청의 모든 로그에 자동 포함 (Spring MDC 대응)
+  - 응답 헤더에 `X-Request-ID` 반환 (고객 문의 시 추적용) — CORS `expose_headers` 에도 추가
+  - 요청 종료 시 `clear_contextvars()` (다음 요청에 누수 방지)
+  - 엣지 nginx 에서 `proxy_set_header X-Request-ID $request_id;` 로 nginx 로그와도 연결 (레포 밖: `~/rekit/nginx`)
+- [ ] **O1-3 인증 사용자 컨텍스트** — `get_current_user` 에서 `bind_contextvars(user_id=...)` → 로그에 user_id 자동 포함
+- [ ] **O1-4 구조화 액세스 로그** — 미들웨어에서 1요청 1줄: `method, path(템플릿), status, duration_ms, request_id, user_id, client_ip`
+  - gunicorn `--access-logfile -` 제거 (이중 기록 방지)
+  - `/health`, `/metrics` 는 액세스 로그 제외 (노이즈)
+  - client_ip 는 `X-Forwarded-For` 기준 (FORWARDED_ALLOW_IPS 설정과 일관)
+- [ ] **O1-5 민감정보 마스킹 processor** — 키 이름 기준 마스킹: `password`, `token`, `access_token`, `refresh_token`,
+      `authorization`, `secret`, `payment_key`(앞 6자만), `phone`(가운데 마스킹), `email`(로컬파트 일부), `ci`, `di`
+  - 테스트: 각 키가 마스킹되는지 / 중첩 dict 도 처리되는지
+- [ ] **O1-6 기존 로그 호출부 정비** — `%s` 포맷 문자열 → 구조화 키로 전환 (검색 가능하게)
+  - 대상: `payment_service.py`, `abandoned_order_sweeper.py`, `auth_service.py`, `adapters/*_oauth.py`, `core/exceptions.py`
+  - 예: `logger.info("토스 웹훅 수신", event=..., order_number=..., remote_status=...)`
+  - 이벤트명 일관화 규칙을 이 섹션 하단 또는 CLAUDE.md 에 기록
+- [ ] **O1-7 로그 추가가 필요한 지점 보강** — 현재 로그 0건인 중요 흐름
+  - 로그인 성공/실패 (실패는 username 마스킹, 브루트포스 탐지용), 회원 탈퇴, 비밀번호 변경
+  - 주문 생성/취소/환불요청, 관리자 상태변경·취소 (누가 무엇을 — 감사 로그 전 단계)
+  - 외부 API 실패 (토스/Octomo/SMTP/S3) — 응답 코드·소요시간 포함
+  - `BusinessError` 는 WARNING 아님 INFO (정상 거절) — 4xx 를 에러로 세지 않기
+- [ ] **O1-8 로컬 확인** — `uvicorn` 실행 → API 호출 → JSON 로그에 request_id/user_id/duration_ms 확인
+
+### O2. 애플리케이션 메트릭 (Prometheus)
+
+- [ ] **O2-1 의존성** — `prometheus-client`, `prometheus-fastapi-instrumentator` (`pyproject.toml`)
+- [ ] **O2-2 HTTP 자동 계측** — `app/core/metrics.py` `setup_metrics(app)`
+  - `metrics.requests()` + `metrics.latency(buckets=(0.025,0.05,0.1,0.2,0.3,0.5,0.75,1,2,5))` (기본 3구간은 p95 부정확)
+  - `should_instrument_requests_inprogress=True` (동시 처리 중 요청 수 — 부하테스트 핵심 지표)
+  - `excluded_handlers=["/metrics", "/health", "/health/ready"]`
+  - handler 라벨은 경로 템플릿(`/products/{product_id}`) 인지 테스트로 고정 (카디널리티 방지)
+- [ ] **O2-3 비즈니스 메트릭** (정의는 `app/core/metrics.py` 한 곳, 서비스/어댑터는 import 만)
+  - `rekle_payment_confirm_total{result=success|failed|unknown}` — `payment_service.py`
+  - `rekle_pg_request_duration_seconds{operation=confirm|get_payment|cancel}` — 토스 어댑터 (우리 로직 vs 토스 지연 분리)
+  - `rekle_webhook_received_total{status}` — 웹훅 수신
+  - `rekle_abandoned_orders_released_total` — 스위퍼
+  - `rekle_orders_created_total`, `rekle_signups_total{provider=email|kakao|naver|google}`
+  - `rekle_external_request_duration_seconds{service=octomo|smtp|s3}`
+  - 테스트: `REGISTRY.get_sample_value()` 로 **전후 차이** 검증 (전역 상태라 절대값 금지)
+- [ ] **O2-4 DB 커넥션 풀 메트릭** — SQLAlchemy pool `checkedout`/`overflow` 를 Gauge(`multiprocess_mode="livesum"`) 로 노출
+      (부하 시 "pool 대기" 병목 식별용)
+- [ ] **O2-5 gunicorn 멀티프로세스 대응** (⚠️ 안 하면 워커 4개 값이 번갈아 나와 그래프 톱니)
+  - 컨테이너 env `PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc` (Settings 아님 — 라이브러리가 직접 읽음)
+  - compose `command` 에 기동 전 `rm -rf` + `mkdir -p` (이전 실행 잔여 파일 합산 방지)
+  - `gunicorn.conf.py` 신규 — `child_exit` hook 에서 `multiprocess.mark_process_dead(worker.pid)`
+  - 로컬/테스트는 env 미설정 → 단일 프로세스 모드
+- [ ] **O2-6 `/metrics` 비공개** — 엣지 nginx `location = /metrics { return 404; }` (레포 밖: `~/rekit/nginx`).
+      Prometheus 는 docker 내부망 `rekle-app:8000/metrics` 로 직접 수집. 배포 후 외부 `curl https://rekit.co.kr/metrics` → 404 확인
+- [ ] **O2-7 테스트** — `/metrics` 200 + `http_requests_total` 포함 / `/health` 제외 확인.
+      주의: `create_app()` 재호출 시 `Duplicated timeseries` — 테스트는 `app.main.app` 단일 인스턴스 공유 유지
+
+### O3. 에러 추적 (Sentry)
+
+- [ ] **O3-1 Sentry 프로젝트 생성** (무료 플랜) → DSN 발급
+- [ ] **O3-2 SDK 연동** — `sentry-sdk[fastapi]`, `SENTRY_DSN`(default 없음 — 비어있으면 비활성) ·
+      `SENTRY_ENVIRONMENT` · `SENTRY_TRACES_SAMPLE_RATE`(default 0.1) 3곳 동시 수정
+  - `release` = 배포 이미지 태그(`IMAGE_TAG`) → 어느 배포에서 에러가 시작됐는지 추적
+  - `send_default_pii=False` + `before_send` 에서 O1-5 와 같은 마스킹
+  - `BusinessError` 는 Sentry 전송 제외 (정상 4xx 거절이 이슈로 쌓이지 않게)
+- [ ] **O3-3 이벤트에 request_id·user_id 태그** — 로그 ↔ Sentry 이슈 상호 검색
+- [ ] **O3-4 "사람이 즉시 봐야 하는" 이벤트 명시 전송** — `capture_message(level="error")`
+  - 취소된 주문의 결제 승인 감지(자동환불), 웹훅 금액 불일치, PG 취소 실패, `PaymentGatewayUnknownError`
+  - 스위퍼 반복 실패 (`run_periodically` except 블록)
+- [ ] **O3-5 검증** — 스테이징에서 의도적 예외 1회 → Sentry 이슈·스택트레이스·request_id 확인 후 제거
+
+### O4. 헬스체크
+
+- [ ] **O4-1 liveness / readiness 분리**
+  - `/health` — 프로세스 생존만 (현행 유지, 의존성 체크 X — DB 장애 때 재시작 폭주 방지)
+  - `/health/ready` — DB `SELECT 1` + Redis `PING` (각 타임아웃 1~2초), 실패 시 503 + 어느 의존성인지 응답
+  - 테스트: 정상 200 / DB 실패 fake → 503 / Redis 실패 fake → 503
+- [ ] **O4-2 compose `healthcheck`** — app 서비스에 `curl -f localhost:8000/health` (Dockerfile 에 curl 이미 설치됨)
+- [ ] **O4-3 외부 업타임 모니터** — UptimeRobot 또는 Uptime Kuma → `https://rekit.co.kr/health/ready` 1분 주기,
+      실패 시 이메일/카카오톡/슬랙 알림 (외부에서 봐야 서버 자체 다운도 감지)
+- [ ] **O4-4 방치 주문 스위퍼 단일 실행 검토** — 현재 `lifespan` 에서 gunicorn 워커 4개가 각자 스위퍼 기동.
+      `SKIP LOCKED` 로 정합성은 안전하나 토스 조회·DB 쿼리 4배. Redis 락(leader 1개) 또는 별도 프로세스로 분리 검토
+
+### O5. 모니터링 스택 (Prometheus + Grafana + exporter)
+
+- [ ] **O5-1 구성 위치 결정** — 운영 서버에 같이 띄울지 / 별도 모니터링 서버 둘지 (운영 서버 리소스 여유 확인 후).
+      `infra/monitoring/docker-compose.yml` 로 레포에 버전 관리
+- [ ] **O5-2 Prometheus** — `prometheus.yml` scrape: `rekle-app:8000`, node_exporter, cAdvisor, postgres_exporter, redis_exporter.
+      보존기간 `--storage.tsdb.retention.time=30d`, 외부 포트 미노출(loopback/내부망)
+- [ ] **O5-3 exporter** — node_exporter(서버 CPU·메모리·디스크), cAdvisor(컨테이너별),
+      postgres_exporter, redis_exporter
+- [ ] **O5-4 Postgres `pg_stat_statements` 활성화** — `shared_preload_libraries` 설정 + `CREATE EXTENSION`
+      (쿼리별 호출 수·평균 시간 → N+1·느린 쿼리 식별). 운영 적용 시 Postgres 재시작 필요 — 점검 시간에
+- [ ] **O5-5 Grafana** — Prometheus 데이터소스 + 대시보드
+  - 커뮤니티 대시보드 import: Node Exporter Full, cAdvisor, PostgreSQL, Redis
+  - 직접 작성 "Rekle 서비스" 대시보드: API별 RPS / p95·p99 / 5xx 비율 / in-progress / DB pool /
+    결제 성공률 / 토스 API p95 / 주문·가입 수
+  - 대시보드 JSON 을 `infra/monitoring/grafana/` 에 커밋 (provisioning)
+  - Grafana 접근: 외부 공개 시 nginx + 강한 비밀번호 / 가능하면 SSH 터널만
+- [ ] **O5-6 (선택) 로그 수집** — Loki + Promtail(또는 Alloy) 로 컨테이너 JSON 로그 수집 → Grafana 에서
+      request_id 로 검색. `docker logs` + `grep` 한계 느껴질 때 도입
+
+### O6. 알림 (SLO 기반)
+
+- [ ] **O6-1 SLO 정의** (`docs/slo.md`) — 예: 조회 API p95 < 300ms · 결제 confirm p95 < 1s ·
+      5xx 비율 < 0.5% · 결제 성공률 ≥ 99% (토스 실패 제외 기준 명시) — 30일 기준
+- [ ] **O6-2 알림 규칙** (Grafana Alerting 또는 Alertmanager)
+  - 5xx 비율 5분간 > 2% / 결제 `unknown` 1건 이상 / 토스 API p95 > 3s 10분 지속 / readiness 실패
+  - 디스크 사용 > 80% / 컨테이너 재시작 감지
+  - CPU 같은 자원 지표는 대시보드만 (알림 피로 방지)
+- [ ] **O6-3 알림 채널** — 슬랙 또는 이메일 (Sentry·UptimeRobot·Grafana 채널 통일)
+- [ ] **O6-4 런북** — Week 7 `docs/runbook.md` 와 통합: 알림별 "확인할 대시보드 / 로그 쿼리 / 조치"
+
+### O7. 부하테스트 (k6)
+
+- [ ] **O7-1 스테이징 환경** — 운영과 같은 사양 서버(필요 시 클라우드 임시 서버). **운영 서버에서 실행 금지**
+      (DB·Redis·앱·nginx 동거 → 테스트가 곧 장애). 부하 생성기는 서버와 다른 머신
+- [ ] **O7-2 외부 연동 Fake** — 토스: 현재 Fake 제거됨(커밋 `282c34c`) → 스테이징 전용 지연 주입 Fake 재도입
+      (예: 300ms, 설정으로만 활성 / 운영 기동 시 활성되면 에러). SMS·이메일도 Fake 강제
+- [ ] **O7-3 시드 데이터** — 운영 예상 규모 (상품 수만 · 사용자 수천 · 주문 수만) `scripts/seed_load.py`
+- [ ] **O7-4 rate limit 우회** — 인증코드 60초 제한 등 스테이징에서만 완화 (설정값)
+- [ ] **O7-5 k6 시나리오** — `loadtest/` 디렉터리
+  - 혼합 비율: 상품 조회·검색 70% / 로그인 10% / 장바구니·관심 15% / 주문·결제 5% (운영 후 액세스 로그로 보정)
+  - `sleep` 으로 사람 같은 대기, thresholds 로 합격 기준 코드화 (`p(95)<300`, `rate<0.01`)
+  - 결과를 Prometheus remote write 로 보내 Grafana 에서 서버 지표와 같은 시간축으로 확인
+- [ ] **O7-6 테스트 종류 순서** — 스모크(1~2 VU, 1분) → 부하(예상 평시, 10~30분) → 스트레스(점증, 붕괴점 찾기)
+      → 스파이크(순간 10배) → 소크(평시 수 시간, 메모리·커넥션 누수)
+- [ ] **O7-7 기준선(baseline) 측정 + 기록** — `docs/perf/YYYY-MM-DD-<이름>.md`
+      (조건: 커밋·서버 사양·워커 수·pool / 결과: API별 RPS·p95·에러율 / Grafana 스크린샷 / 원인 분석 / 조치)
+
+### O8. 개선 루프 — 사전 식별된 병목 가설 (부하테스트로 검증 후 하나씩)
+
+> 한 번에 **하나만** 바꾸고 같은 시나리오로 재측정 → `docs/perf/` 에 전후 비교 기록.
+
+- [ ] **O8-1 bcrypt 가 이벤트 루프 블로킹** — `app/core/security.py` `hashpw`/`checkpw` 가 async 핸들러에서 동기 호출
+      (1회 ~0.2–0.3초 동안 해당 워커의 모든 요청 정지). 가설 검증: 로그인 부하 시 상품 조회 p95 동반 상승.
+      조치: `await asyncio.to_thread(...)` (호출부 `auth_service.py`, `user_service.py` async 화)
+- [ ] **O8-2 DB 커넥션 수** — 워커 4 × (pool 5 + overflow 10) = 최대 60 vs Postgres `max_connections` 100.
+      O2-4 pool 메트릭으로 대기 발생 여부 확인 후 조정 (워커 증설 시 재계산)
+- [ ] **O8-3 N+1 쿼리** — `pg_stat_statements` 호출 수 상위 쿼리 확인 → 상품 목록·주문 목록·관리자 목록 `selectinload` 점검
+- [ ] **O8-4 인덱스** — 느린 쿼리 `EXPLAIN ANALYZE` → 누락 인덱스 마이그레이션
+- [ ] **O8-5 캐싱 후보** — 카테고리·featured 상품 등 읽기 많은 응답 Redis 캐시 (측정 후 효과 있을 때만)
+- [ ] **O8-6 워커 수 튜닝** — `-w` 값을 CPU 코어 기준으로 측정 비교 (2·4·코어×2)
+
+### O9. (확장 — 규모 커지면)
+
+- [ ] OpenTelemetry 분산 트레이싱 (Tempo/Jaeger) — 서비스 분리·외부 호출 증가 시
+- [ ] 로그 핫/콜드 계층 (최근 2주 Loki / 이후 S3) — 보관 의무·비용 이슈 생길 때
+- [ ] 쿠버네티스 전환 시 컨테이너당 uvicorn 1프로세스 → `PROMETHEUS_MULTIPROC_DIR`·gunicorn hook 제거
+
+---
+
 > **분석 기준**: `/Volumes/A/web_projects/rekle` 프론트 디자인 (Vue 3 mockup, `_design/buyer/*`, `_design/admin/*`)
 > **현 백엔드 상태** (2026-07-04 기준):
 > - **구현 완료**: auth 전체(이메일 인증 가입 포함) / users (PATCH·DELETE /me + 휴대폰 인증 변경) / catalog (DB 동적 카테고리, bulk 조회) / admin catalog CRUD(이미지 단건 수정 포함) / admin dashboard·orders·members·sales / cart / favorites / address(label/memo) / order (환불요청·배송조회 포함) / payment (init·confirm·webhook) / uploads / **help(공지·FAQ·문의) 신규 완료 — 로그인 필수 전환 + 답변 등록 + 내 문의 조회 추가** / **Redis 인프라 신규 완료**
@@ -847,12 +1033,12 @@ class Promotion(Base, TimestampMixin):
 ### Week 7 — 운영 / 마무리 (필수)
 
 - [ ] **감사 로그** — Hibernate Envers 대용으로 SQLAlchemy `event.listens_for` 또는 `Audited` 패턴 (mutation 1년 보존)
-- [ ] **모니터링** — Sentry SDK + structlog JSON 포맷 + Datadog 또는 Grafana 메트릭
+- [ ] **모니터링** — 상단 "관측성 구축" 섹션 O0~O6 으로 상세화 (structlog JSON + Prometheus/Grafana + Sentry)
 - [ ] **운영 헤더** — `Strict-Transport-Security`, `X-Content-Type-Options: nosniff` 미들웨어
 - [ ] **레이트 리밋** 전 라우터 적용 (auth류 / 일반 / admin)
 - [ ] **PII 양방향 암호화** 검증 — phone/email AES-GCM, 비번 argon2id
 - [ ] **백업** — pg_dump 일 1회 + WAL 5분 단위 (infra 작업)
-- [ ] **부하 테스트** — k6 또는 locust로 P95 read 200ms / write 500ms 검증
+- [ ] **부하 테스트** — 상단 "관측성 구축" 섹션 O7~O8 로 상세화 (k6, 스테이징 전용, 개선 루프)
 - [ ] **운영 문서** — `docs/runbook.md` (PG 결제 실패 / 재고 race / webhook 미수신 대응)
 
 ### 우선순위 매트릭스 (블로킹 / 긴급)

@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     app_name: str = "Rekle Backend"
     app_env: Literal["development", "staging", "production"] = "development"
     debug: bool = False
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     api_v1_prefix: str = "/api/v1"
 
@@ -94,6 +95,11 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @property
+    def json_logs(self) -> bool:
+        """development 외(staging·production)는 수집·검색용 JSON 로그."""
+        return self.app_env != "development"
 
     @property
     def effective_admin_email(self) -> str | None:

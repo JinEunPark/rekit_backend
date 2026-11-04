@@ -1,8 +1,16 @@
+# docker 기본 json-file 드라이버는 용량 제한이 없어 로그가 디스크를 채운다 → 컨테이너당 최대 20MB×5개.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:15-alpine
     container_name: rekle-postgres
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: rekle
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -23,6 +31,7 @@ services:
     image: redis:7-alpine
     container_name: rekle-redis
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - redis_data:/data
     healthcheck:
@@ -36,6 +45,7 @@ services:
     image: 127.0.0.1:5000/rekit-backend:${IMAGE_TAG:-latest}
     container_name: rekle-app
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - .env
     environment:
@@ -69,7 +79,7 @@ services:
       - rekit_edge
     command: >
       sh -c "alembic upgrade head &&
-             gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:8000 --access-logfile - --error-logfile -"
+             gunicorn app.main:app -k uvicorn_worker.UvicornWorker -w 4 -b 0.0.0.0:8000 --access-logfile - --error-logfile -"
 
 networks:
   seaweedfs_default:

@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.database import async_session_factory, engine
 from app.core.deps import build_payment_gateway, get_email_sender
 from app.core.exceptions import register_exception_handlers
+from app.core.logging import configure_logging
 from app.db import registry  # noqa: F401  # 모든 SQLAlchemy 모델 로드 — string ref resolve 용
 from app.order.abandoned_order_sweeper import run_periodically, sweep_abandoned_orders
 
@@ -42,6 +43,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    configure_logging(level=settings.log_level, json_logs=settings.json_logs)
+
     app = FastAPI(
         title=settings.app_name,
         version="0.1.0",
