@@ -19,6 +19,20 @@ _DEFAULT_PROMETHEUS_MULTIPROC_DIR = "/tmp/prometheus_multiproc"
 worker_class = "uvicorn_worker.UvicornWorker"
 workers = 4
 bind = "0.0.0.0:8000"
+
+# ── 튜닝값 (기본값에 기대지 않고 명시 — todo O4b-4) ──
+# async 워커에선 요청 타임아웃이 아니라 하트비트: uvicorn 이 이벤트 루프 위에서 master 에 생존 신호를
+# 보내므로, 루프가 이 시간 이상 막히면 master 가 행 걸린 워커로 보고 재시작한다
+timeout = 30
+# SIGTERM 후 처리 중 요청을 마칠 유예. docker stop 기본 유예(10초) 안에 끝나야 SIGKILL 로 잘리지 않는다
+graceful_timeout = 8
+# 유휴 keep-alive 유지 시간. 엣지 nginx upstream keepalive_timeout(기본 60초)보다 길어야 한다 —
+# gunicorn 이 먼저 끊으면 nginx 가 방금 닫힌 커넥션을 재사용해 간헐적 502 가 난다
+keepalive = 75
+# 소크 테스트에서 드러날 메모리 누수 대비 안전장치 — 요청 N건마다 워커 교체.
+# jitter 로 워커 4개가 같은 순간에 재시작(순간 처리량 0)하지 않게 분산
+max_requests = 10_000
+max_requests_jitter = 1_000
 errorlog = "-"
 # accesslog 미설정 — 액세스 로그는 RequestContextMiddleware 가 템플릿 경로·request_id 로 남긴다
 loglevel = settings.log_level.lower()

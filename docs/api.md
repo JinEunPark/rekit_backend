@@ -91,6 +91,7 @@ Authorization: Bearer <accessToken>
 | `PASSWORD_CHANGE_REQUIRED` | 403 | 임시 비밀번호 사용 중 — 비번 변경 외 차단. 클라는 비번 변경 페이지로 redirect |
 | `SOCIAL_EMAIL_REQUIRED` | 422 | 소셜 OAuth 콜백에 이메일 동의 누락 — PG 측에서 동의 후 재시도 |
 | `SOCIAL_PROVIDER_NOT_CONFIGURED` | 503 | 해당 소셜 PG 의 .env 설정 누락 (운영 측 채워야 함) |
+| `SERVICE_BUSY` | 503 | DB 커넥션 풀 대기 타임아웃 (일시 과부하) — 잠시 후 재시도 |
 | `USERNAME_TAKEN` | 409 | 아이디 중복 |
 | `EMAIL_TAKEN` | 409 | 이메일 중복 |
 | `IDENTITY_REQUIRED` | 422 | 본인인증 필요 |

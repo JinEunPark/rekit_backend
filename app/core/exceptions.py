@@ -12,6 +12,7 @@ import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 _log = structlog.stdlib.get_logger(__name__)
 
@@ -345,6 +346,21 @@ def register_exception_handlers(app: FastAPI) -> None:
         if request_id:
             response.headers[_REQUEST_ID_HEADER] = request_id
         return response
+
+    @app.exception_handler(PoolTimeoutError)
+    async def _pool_timeout(_: Request, exc: PoolTimeoutError) -> JSONResponse:
+        # 커넥션 풀 고갈 — 코드 버그가 아닌 일시 과부하라 500 대신 503. 내부 메시지(풀 크기 등)는
+        # 응답에 노출하지 않고 로그로만 남긴다
+        _log.warning("DB 커넥션 풀 대기 타임아웃", error=str(exc))
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": {
+                    "code": "SERVICE_BUSY",
+                    "message": "요청이 많아 잠시 처리할 수 없습니다. 잠시 후 다시 시도해주세요.",
+                }
+            },
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:

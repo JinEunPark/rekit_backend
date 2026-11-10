@@ -21,4 +21,10 @@ from app.core.config import settings
 @lru_cache(maxsize=1)
 def get_redis() -> Redis:
     """FastAPI Depends() 진입점. 프로세스 단위 싱글턴 (lru_cache 1슬롯)."""
-    return Redis.from_url(settings.redis_url, decode_responses=True)
+    return Redis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        socket_timeout=settings.redis_socket_timeout,
+        socket_connect_timeout=settings.redis_socket_connect_timeout,
+        max_connections=settings.redis_max_connections,
+    )

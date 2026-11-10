@@ -110,3 +110,34 @@ async def test_increment_stock_does_not_reactivate_inactive_product(
 
     assert product.stock == 1
     assert product.status == ProductStatus.INACTIVE
+
+
+@pytest.mark.asyncio
+async def test_get_products_with_lock_orders_by_id_for_deterministic_lock_order(
+    db_session: AsyncSession,
+):
+    """FOR UPDATE 조회는 id 순으로 락을 잡는다 — 장바구니가 겹치는 동시 주문의 데드락 방지.
+
+    ORDER BY 가 없으면 Postgres 가 고른 스캔 순서대로 락을 잡아, 두 트랜잭션이 서로 다른
+    순서로 같은 행들을 잠그고 서로를 기다릴 수 있다. 실제로 실행된 SQL 을 가로채 검증한다.
+    """
+    from sqlalchemy import event
+
+    from app.core.database import engine
+
+    p1 = await _make_product(db_session, stock=1)
+    p2 = await _make_product(db_session, stock=1)
+    executed: list[str] = []
+
+    def _capture(_conn: object, _cursor: object, statement: str, *_: object) -> None:
+        executed.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", _capture)
+    try:
+        products = await OrderRepository(db_session).get_products_with_lock([p2.id, p1.id])
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _capture)
+
+    lock_sql = next(s for s in executed if "FOR UPDATE" in s)
+    assert "ORDER BY products.id" in lock_sql
+    assert set(products) == {p1.id, p2.id}

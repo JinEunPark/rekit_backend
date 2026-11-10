@@ -11,6 +11,7 @@ from app.common.storage import storage_service
 from app.core.config import settings
 from app.core.database import async_session_factory, engine
 from app.core.deps import build_payment_gateway, get_email_sender
+from app.core.event_loop_lag import run_event_loop_lag_monitor
 from app.core.exceptions import register_exception_handlers
 from app.core.health import (
     READINESS_TIMEOUT_SECONDS,
@@ -44,15 +45,27 @@ def _start_abandoned_order_sweeper() -> asyncio.Task[None] | None:
     )
 
 
+def _start_event_loop_lag_monitor() -> asyncio.Task[None] | None:
+    interval = settings.event_loop_lag_interval_seconds
+    if interval <= 0:
+        return None
+    return asyncio.create_task(run_event_loop_lag_monitor(interval_seconds=interval))
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await storage_service.ensure_bucket()
-    sweeper = _start_abandoned_order_sweeper()
+    background = [
+        task
+        for task in (_start_abandoned_order_sweeper(), _start_event_loop_lag_monitor())
+        if task is not None
+    ]
     yield
-    if sweeper is not None:
-        sweeper.cancel()
+    for task in background:
+        task.cancel()
+    for task in background:
         with suppress(asyncio.CancelledError):
-            await sweeper
+            await task
     await engine.dispose()
 
 

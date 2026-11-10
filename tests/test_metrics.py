@@ -170,3 +170,67 @@ async def test_app_engine_pool_stays_instrumented_after_dispose() -> None:
 
     assert during == before + 1
     assert _sample("rekle_db_pool_connections_in_use") == before
+
+
+async def test_db_pool_checkout_wait_observed_per_connect() -> None:
+    """커넥션 획득마다 풀 대기 시간이 한 번 관측된다 — in_use 만으론 "얼마나 기다렸나" 를 모른다."""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from app.core.config import settings
+
+    test_engine = create_async_engine(
+        settings.database_url, poolclass=metrics.InstrumentedAsyncAdaptedQueuePool
+    )
+    before = _sample("rekle_db_pool_checkout_wait_seconds_count")
+    try:
+        async with test_engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    finally:
+        await test_engine.dispose()
+
+    assert _sample("rekle_db_pool_checkout_wait_seconds_count") == before + 1
+
+
+async def test_db_pool_timeout_counted_when_pool_exhausted() -> None:
+    """풀이 꽉 차 pool_timeout 을 넘기면 타임아웃 카운터가 오르고, 기다린 시간도 관측된다."""
+    from sqlalchemy import exc as sa_exc
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from app.core.config import settings
+
+    test_engine = create_async_engine(
+        settings.database_url,
+        poolclass=metrics.InstrumentedAsyncAdaptedQueuePool,
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=0.05,
+    )
+    before_timeouts = _sample("rekle_db_pool_timeouts_total")
+    before_waits = _sample("rekle_db_pool_checkout_wait_seconds_count")
+    try:
+        async with test_engine.connect():
+            with pytest.raises(sa_exc.TimeoutError):
+                async with test_engine.connect():
+                    pass
+    finally:
+        await test_engine.dispose()
+
+    assert _sample("rekle_db_pool_timeouts_total") == before_timeouts + 1
+    assert _sample("rekle_db_pool_checkout_wait_seconds_count") == before_waits + 2
+
+
+async def test_app_engine_pool_observes_checkout_wait_after_dispose() -> None:
+    """앱 전역 engine 도 대기 시간을 잰다 — dispose 로 풀이 재생성돼도 같은 풀 클래스가 유지된다."""
+    from sqlalchemy import text
+
+    from app.core.database import engine
+
+    await engine.dispose()
+    before = _sample("rekle_db_pool_checkout_wait_seconds_count")
+
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+    await engine.dispose()
+
+    assert _sample("rekle_db_pool_checkout_wait_seconds_count") == before + 1

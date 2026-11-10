@@ -58,3 +58,34 @@ def test_child_exit_marks_dead_worker_files(monkeypatch: pytest.MonkeyPatch) -> 
     _conf()["child_exit"](SimpleNamespace(), SimpleNamespace(pid=4242))
 
     assert marked == [4242]
+
+
+# 엣지 nginx upstream `keepalive_timeout` 기본값(초) / docker stop 기본 유예(초)
+_NGINX_UPSTREAM_KEEPALIVE_TIMEOUT = 60
+_DOCKER_STOP_GRACE_PERIOD = 10
+
+
+def test_keepalive_outlives_nginx_upstream_idle_timeout() -> None:
+    """gunicorn 이 nginx 보다 먼저 유휴 커넥션을 끊으면 안 된다.
+
+    nginx 가 방금 닫힌 커넥션에 요청을 보내 간헐적 502 가 난다.
+    """
+    assert _conf()["keepalive"] > _NGINX_UPSTREAM_KEEPALIVE_TIMEOUT
+
+
+def test_graceful_timeout_finishes_before_docker_sigkill() -> None:
+    """docker 가 SIGKILL 하기 전에 gunicorn 이 스스로 종료를 마쳐야 처리 중 요청 정리가 보장된다."""
+    assert 0 < _conf()["graceful_timeout"] < _DOCKER_STOP_GRACE_PERIOD
+
+
+def test_worker_timeout_is_explicit() -> None:
+    """async 워커의 timeout 은 하트비트 — 루프가 이만큼 막히면 master 가 워커를 재시작한다."""
+    assert _conf()["timeout"] == 30
+
+
+def test_max_requests_recycles_workers_with_jitter() -> None:
+    """누수 대비 주기적 워커 재시작. jitter 로 4개 워커가 동시에 재시작하는 것을 막는다."""
+    conf = _conf()
+
+    assert conf["max_requests"] > 0
+    assert 0 < conf["max_requests_jitter"] < conf["max_requests"]
