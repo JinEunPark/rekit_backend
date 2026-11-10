@@ -1,0 +1,271 @@
+# promtool 단위 테스트 — 실행:
+#   docker run --rm -v "$PWD/infra/monitoring/prometheus:/p" -w /p/tests --entrypoint promtool \
+#     prom/prometheus:v3.5.0 test rules rekle-alerts.test.yml
+rule_files:
+  - ../rules/rekle-alerts.yml
+  - ../rules/rekle-slo.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ── 앱 다운: 2분 지속돼야 발화 ──
+  - interval: 1m
+    input_series:
+      - series: 'up{job="rekle-app",instance="rekle-app:8000"}'
+        values: '1 1 0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RekleAppDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: RekleAppDown
+        exp_alerts:
+          - exp_labels: {severity: critical, component: availability, job: rekle-app, instance: "rekle-app:8000"}
+            exp_annotations:
+              summary: "rekle-app 메트릭 수집 실패 (2분+)"
+              description: "Prometheus 가 rekle-app:8000/metrics 에 접근 못 함 — 컨테이너 다운·재시작 반복·네트워크 확인. docker ps / docker logs rekle-app"
+
+  # ── 5xx 비율 5% (분당 600건) → 발화 ──
+  - interval: 1m
+    input_series:
+      - series: 'rekle_http_requests_total{method="GET",path="/api/v1/products",status="200"}'
+        values: '0+570x20'
+      - series: 'rekle_http_requests_total{method="GET",path="/api/v1/products",status="500"}'
+        values: '0+30x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: RekleHigh5xxRatio
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: RekleHigh5xxRatio
+        exp_alerts:
+          - exp_labels: {severity: critical, component: app}
+            exp_annotations:
+              summary: "5xx 비율 5% (5분 평균 > 2%)"
+              description: "Rekle 서비스 대시보드 5xx 비율·경로별 패널 → Sentry 이슈 → docker logs rekle-app | grep '\"status\": 5'"
+
+  # ── 5xx 비율 1% → 침묵 ──
+  - interval: 1m
+    input_series:
+      - series: 'rekle_http_requests_total{method="GET",path="/api/v1/products",status="200"}'
+        values: '0+594x20'
+      - series: 'rekle_http_requests_total{method="GET",path="/api/v1/products",status="500"}'
+        values: '0+6x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RekleHigh5xxRatio
+        exp_alerts: []
+
+  # ── 트래픽이 적으면(5분 20건 미만) 50% 라도 침묵 ──
+  - interval: 1m
+    input_series:
+      - series: 'rekle_http_requests_total{method="GET",path="/api/v1/products",status="200"}'
+        values: '0+1x20'
+      - series: 'rekle_http_requests_total{method="GET",path="/api/v1/products",status="500"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: RekleHigh5xxRatio
+        exp_alerts: []
+
+  # ── 결제 unknown: 앱 재기동 후 시계열이 새로 생긴 첫 1건도 잡고, 10분 뒤 해제 ──
+  - interval: 1m
+    input_series:
+      - series: 'rekle_payment_confirm_total{result="unknown"}'
+        values: '_x5 1x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ReklePaymentUnknown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ReklePaymentUnknown
+        exp_alerts: &payment_unknown
+          - exp_labels: {severity: critical, component: payment, result: unknown}
+            exp_annotations:
+              summary: "결제 승인 결과 불명(unknown) 발생"
+              description: "토스 콘솔에서 해당 시각 결제 상태 확인 → 주문 상태와 대조. 로그: docker logs rekle-app | grep '토스 API 통신 실패'"
+      - eval_time: 25m
+        alertname: ReklePaymentUnknown
+        exp_alerts: []
+
+  # ── 결제 unknown: 기존 시계열 증가 ──
+  - interval: 1m
+    input_series:
+      - series: 'rekle_payment_confirm_total{result="unknown"}'
+        values: '1x15 2x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: ReklePaymentUnknown
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: ReklePaymentUnknown
+        exp_alerts: *payment_unknown
+
+  # ── 토스 confirm p95 ≈ 4.85s (전부 2~5s 구간) 10분 지속 → 발화 ──
+  - interval: 1m
+    input_series:
+      - {series: 'rekle_pg_request_duration_seconds_bucket{operation="confirm",le="1.0"}', values: '0x30'}
+      - {series: 'rekle_pg_request_duration_seconds_bucket{operation="confirm",le="2.0"}', values: '0x30'}
+      - {series: 'rekle_pg_request_duration_seconds_bucket{operation="confirm",le="5.0"}', values: '0+10x30'}
+      - {series: 'rekle_pg_request_duration_seconds_bucket{operation="confirm",le="10.0"}', values: '0+10x30'}
+      - {series: 'rekle_pg_request_duration_seconds_bucket{operation="confirm",le="+Inf"}', values: '0+10x30'}
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: RekleTossLatencyHigh
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RekleTossLatencyHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, component: app, operation: confirm}
+            exp_annotations:
+              summary: "토스 API confirm p95 4.85s (10분+ > 3s)"
+              description: "토스 장애 공지 확인 (https://status.tosspayments.com 등). 우리 쪽 문제인지는 rekle_http_request_duration 과 비교"
+
+  # ── DB 풀 타임아웃 1건 → 즉시 발화 ──
+  - interval: 1m
+    input_series:
+      - series: 'rekle_db_pool_timeouts_total'
+        values: '0x5 1x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: RekleDbPoolTimeouts
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: RekleDbPoolTimeouts
+        exp_alerts:
+          - exp_labels: {severity: warning, component: app}
+            exp_annotations:
+              summary: "DB 커넥션 풀 타임아웃 발생 (503 SERVICE_BUSY 응답 중)"
+              description: "DB 풀 사용 중·대기 p95 패널, Postgres 커넥션 수 확인. 느린 쿼리/트랜잭션 누수 또는 pool_size 부족 (todo O8-2)"
+
+  # ── 이벤트 루프 지연 p99 ≈ 1s (전부 0.5~1s 구간) 5분 지속 → 발화 ──
+  - interval: 1m
+    input_series:
+      - {series: 'rekle_event_loop_lag_seconds_bucket{le="0.25"}', values: '0x20'}
+      - {series: 'rekle_event_loop_lag_seconds_bucket{le="0.5"}', values: '0x20'}
+      - {series: 'rekle_event_loop_lag_seconds_bucket{le="1.0"}', values: '0+10x20'}
+      - {series: 'rekle_event_loop_lag_seconds_bucket{le="2.5"}', values: '0+10x20'}
+      - {series: 'rekle_event_loop_lag_seconds_bucket{le="+Inf"}', values: '0+10x20'}
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: RekleEventLoopLagHigh
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: RekleEventLoopLagHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, component: app}
+            exp_annotations:
+              summary: "이벤트 루프 지연 p99 995ms (5분+ > 0.5s)"
+              description: "async 핸들러 안의 동기 블로킹 의심 (bcrypt 등, todo O8-1). 그 시각 로그인/무거운 요청 확인"
+
+  # ── Postgres 다운 / 데드락 (template DB 는 무시) ──
+  - interval: 1m
+    input_series:
+      - {series: 'pg_up{job="postgres"}', values: '1 1 0x10'}
+      - {series: 'pg_stat_database_deadlocks{job="postgres",datname="rekle"}', values: '0x5 1x10'}
+      - {series: 'pg_stat_database_deadlocks{job="postgres",datname="template1"}', values: '0x5 3x10'}
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ReklePostgresDown
+        exp_alerts:
+          - exp_labels: {severity: critical, component: availability, job: postgres}
+            exp_annotations:
+              summary: "Postgres 접속 불가 (readiness 실패 상태)"
+              description: "docker ps / docker logs rekle-postgres. exporter 계정(rekle_monitor) 비밀번호 변경 여부도 확인"
+      - eval_time: 7m
+        alertname: ReklePostgresDeadlocks
+        exp_alerts:
+          - exp_labels: {severity: warning, component: database, job: postgres, datname: rekle}
+            exp_annotations:
+              summary: "Postgres 데드락 발생 (rekle)"
+              description: "docker logs rekle-postgres | grep -A5 deadlock — 락 순서(todo O8-7) 위반 쿼리 확인"
+
+  # ── 디스크 85% → warning 만 (tmpfs·읽기 전용은 무시) ──
+  - interval: 1m
+    input_series:
+      - {series: 'node_filesystem_avail_bytes{job="node",mountpoint="/",fstype="ext4"}', values: '15x20'}
+      - {series: 'node_filesystem_size_bytes{job="node",mountpoint="/",fstype="ext4"}', values: '100x20'}
+      - {series: 'node_filesystem_avail_bytes{job="node",mountpoint="/run",fstype="tmpfs"}', values: '1x20'}
+      - {series: 'node_filesystem_size_bytes{job="node",mountpoint="/run",fstype="tmpfs"}', values: '100x20'}
+      - {series: 'node_filesystem_avail_bytes{job="node",mountpoint="/oldroot",fstype="erofs",device="/dev/root"}', values: '0x20'}
+      - {series: 'node_filesystem_size_bytes{job="node",mountpoint="/oldroot",fstype="erofs",device="/dev/root"}', values: '100x20'}
+      - {series: 'node_filesystem_readonly{job="node",mountpoint="/oldroot",fstype="erofs",device="/dev/root"}', values: '1x20'}
+      - {series: 'node_filesystem_readonly{job="node",mountpoint="/",fstype="ext4"}', values: '0x20'}
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HostDiskUsageHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, component: infra, job: node, mountpoint: /, fstype: ext4}
+            exp_annotations:
+              summary: "디스크 / 85% 사용 (> 80%)"
+              description: "docker system df / docker image prune / 로그 용량(du -sh /var/lib/docker/containers) 확인"
+      - eval_time: 15m
+        alertname: HostDiskUsageCritical
+        exp_alerts: []
+
+  # ── 컨테이너 재시작(같은 id 의 시작 시각 변경) → 발화 후 10분 뒤 해제 ──
+  - interval: 1m
+    input_series:
+      - series: 'container_start_time_seconds{job="cadvisor",name="rekle-app",id="/docker/abc"}'
+        values: '1000x5 2000x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ContainerRestarted
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: ContainerRestarted
+        exp_alerts:
+          - exp_labels: {severity: warning, component: infra, job: cadvisor, name: rekle-app, id: /docker/abc}
+            exp_annotations:
+              summary: "컨테이너 재시작: rekle-app"
+              description: "docker logs --tail 100 rekle-app / docker inspect rekle-app | grep -E 'OOMKilled|ExitCode'"
+      - eval_time: 20m
+        alertname: ContainerRestarted
+        exp_alerts: []
+
+  # ── SeaweedFS: metricsPort 미설정(메트릭 받은 적 없음)이면 침묵 ──
+  - interval: 1m
+    input_series:
+      - {series: 'up{job="seaweedfs",instance="seaweedfs:9324"}', values: '0x20'}
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: SeaweedFSDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: MonitoringTargetDown
+        exp_alerts: []
+
+  # ── SeaweedFS: 수집되다가 끊기면 발화 ──
+  - interval: 1m
+    input_series:
+      - {series: 'up{job="seaweedfs",instance="seaweedfs:9324"}', values: '1x5 0x15'}
+      - {series: 'SeaweedFS_build_info{job="seaweedfs",instance="seaweedfs:9324",version="4.42"}', values: '1x5'}
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: SeaweedFSDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SeaweedFSDown
+        exp_alerts:
+          - exp_labels: {severity: critical, component: availability, job: seaweedfs, instance: "seaweedfs:9324"}
+            exp_annotations:
+              summary: "SeaweedFS 메트릭 수집 실패 (2분+) — 상품 이미지 업로드·조회 영향"
+              description: "docker ps / docker logs seaweedfs (~/rekit/seaweedfs). 앱 쪽 rekle_external_request_duration_seconds{service=\"s3\",outcome=\"error\"} 확인"
+
+  # ── SLI 기록 규칙: 조회 지연 good 은 le=0.3 만, 관리자 경로 제외 ──
+  - interval: 1m
+    input_series:
+      - {series: 'rekle_http_request_duration_seconds_bucket{method="GET",path="/api/v1/products",le="0.3"}', values: '0+54x10'}
+      - {series: 'rekle_http_request_duration_seconds_bucket{method="GET",path="/api/v1/products",le="0.5"}', values: '0+60x10'}
+      - {series: 'rekle_http_request_duration_seconds_count{method="GET",path="/api/v1/products"}', values: '0+60x10'}
+      - {series: 'rekle_http_request_duration_seconds_bucket{method="GET",path="/api/v1/admin/orders",le="0.3"}', values: '0+600x10'}
+      - {series: 'rekle_http_request_duration_seconds_count{method="GET",path="/api/v1/admin/orders"}', values: '0+600x10'}
+    promql_expr_test:
+      - expr: rekle:sli_read_latency_good:rate5m
+        eval_time: 10m
+        exp_samples:
+          - {labels: 'rekle:sli_read_latency_good:rate5m', value: 0.9}
+      - expr: rekle:sli_read_latency_total:rate5m
+        eval_time: 10m
+        exp_samples:
+          - {labels: 'rekle:sli_read_latency_total:rate5m', value: 1}

@@ -1,0 +1,214 @@
+# 알림 규칙 (todo O6-2) — 로컬·운영 Prometheus 공용. 단위 테스트: ../tests/rekle-alerts.test.yml
+#
+# severity: critical = 즉시 대응(슬랙 1시간마다 반복) / warning = 업무시간 내 확인
+# component: app 이면 RekleAppDown 이 떠 있는 동안 억제된다 (alertmanager inhibit_rules)
+# CPU 같은 자원 지표는 대시보드만 — 알림 피로 방지 (디스크만 예외: 차면 즉시 장애)
+groups:
+  - name: rekle-app
+    rules:
+      - alert: RekleAppDown
+        expr: up{job="rekle-app"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: availability
+        annotations:
+          summary: "rekle-app 메트릭 수집 실패 (2분+)"
+          description: "Prometheus 가 rekle-app:8000/metrics 에 접근 못 함 — 컨테이너 다운·재시작 반복·네트워크 확인. docker ps / docker logs rekle-app"
+
+      - alert: RekleHigh5xxRatio
+        # 요청 20건 미만이면 1건만 실패해도 비율이 튀므로 제외 (개별 500 은 Sentry 가 잡는다)
+        expr: |
+          (
+            sum(rate(rekle_http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(rekle_http_requests_total[5m]))
+          ) > 0.02
+          and
+          sum(increase(rekle_http_requests_total[5m])) >= 20
+        for: 5m
+        labels:
+          severity: critical
+          component: app
+        annotations:
+          summary: "5xx 비율 {{ $value | humanizePercentage }} (5분 평균 > 2%)"
+          description: "Rekle 서비스 대시보드 5xx 비율·경로별 패널 → Sentry 이슈 → docker logs rekle-app | grep '\"status\": 5'"
+
+      - alert: ReklePaymentUnknown
+        # 결과 불명 = 토스는 승인했을 수도 있는데 우리는 모름 → 사람이 토스 콘솔과 대조해야 함.
+        # 두 번째 항: 앱 재기동 후 첫 unknown 은 시계열이 새로 생겨 increase 로 안 잡히므로 "새로 나타남" 도 감지
+        expr: |
+          increase(rekle_payment_confirm_total{result="unknown"}[10m]) > 0
+          or
+          (
+            rekle_payment_confirm_total{result="unknown"}
+            unless
+            rekle_payment_confirm_total{result="unknown"} offset 10m
+          )
+        labels:
+          severity: critical
+          component: payment
+        annotations:
+          summary: "결제 승인 결과 불명(unknown) 발생"
+          description: "토스 콘솔에서 해당 시각 결제 상태 확인 → 주문 상태와 대조. 로그: docker logs rekle-app | grep '토스 API 통신 실패'"
+
+      - alert: RekleTossLatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, operation) (rate(rekle_pg_request_duration_seconds_bucket[5m]))
+          ) > 3
+        for: 10m
+        labels:
+          severity: warning
+          component: app
+        annotations:
+          summary: "토스 API {{ $labels.operation }} p95 {{ $value | humanizeDuration }} (10분+ > 3s)"
+          description: "토스 장애 공지 확인 (https://status.tosspayments.com 등). 우리 쪽 문제인지는 rekle_http_request_duration 과 비교"
+
+      - alert: RekleDbPoolTimeouts
+        expr: increase(rekle_db_pool_timeouts_total[5m]) > 0
+        labels:
+          severity: warning
+          component: app
+        annotations:
+          summary: "DB 커넥션 풀 타임아웃 발생 (503 SERVICE_BUSY 응답 중)"
+          description: "DB 풀 사용 중·대기 p95 패널, Postgres 커넥션 수 확인. 느린 쿼리/트랜잭션 누수 또는 pool_size 부족 (todo O8-2)"
+
+      - alert: RekleEventLoopLagHigh
+        expr: |
+          histogram_quantile(0.99, sum by (le) (rate(rekle_event_loop_lag_seconds_bucket[5m]))) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: app
+        annotations:
+          summary: "이벤트 루프 지연 p99 {{ $value | humanizeDuration }} (5분+ > 0.5s)"
+          description: "async 핸들러 안의 동기 블로킹 의심 (bcrypt 등, todo O8-1). 그 시각 로그인/무거운 요청 확인"
+
+  - name: rekle-dependencies
+    rules:
+      # readiness(/health/ready) 가 보는 DB·Redis 를 exporter 로 직접 본다 (blackbox 없이)
+      - alert: ReklePostgresDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: availability
+        annotations:
+          summary: "Postgres 접속 불가 (readiness 실패 상태)"
+          description: "docker ps / docker logs rekle-postgres. exporter 계정(rekle_monitor) 비밀번호 변경 여부도 확인"
+
+      - alert: RekleRedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: availability
+        annotations:
+          summary: "Redis 접속 불가 (readiness 실패 상태 — 로그인·인증코드 영향)"
+          description: "docker ps / docker logs rekle-redis"
+
+      - alert: ReklePostgresDeadlocks
+        expr: increase(pg_stat_database_deadlocks{datname!~"template.*|postgres"}[10m]) > 0
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "Postgres 데드락 발생 ({{ $labels.datname }})"
+          description: "docker logs rekle-postgres | grep -A5 deadlock — 락 순서(todo O8-7) 위반 쿼리 확인"
+
+      - alert: ReklePostgresConnectionsHigh
+        expr: sum(pg_stat_database_numbackends) / max(pg_settings_max_connections) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "Postgres 커넥션 {{ $value | humanizePercentage }} 사용 (max_connections 의 80%+)"
+          description: "워커 수 × (pool_size + max_overflow) 재계산 (todo O8-2). idle in transaction 세션 확인"
+
+  - name: rekle-infra
+    rules:
+      - alert: HostDiskUsageHigh
+        expr: |
+          1 - (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs|overlay|squashfs|nsfs|autofs|fuse.*"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|ramfs|overlay|squashfs|nsfs|autofs|fuse.*"}
+          ) > 0.8
+          # 읽기 전용(이미지·ISO 등)은 항상 100% 라 제외
+          unless on (instance, device, mountpoint) node_filesystem_readonly == 1
+        for: 10m
+        labels:
+          severity: warning
+          component: infra
+        annotations:
+          summary: "디스크 {{ $labels.mountpoint }} {{ $value | humanizePercentage }} 사용 (> 80%)"
+          description: "docker system df / docker image prune / 로그 용량(du -sh /var/lib/docker/containers) 확인"
+
+      - alert: HostDiskUsageCritical
+        expr: |
+          1 - (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs|overlay|squashfs|nsfs|autofs|fuse.*"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|ramfs|overlay|squashfs|nsfs|autofs|fuse.*"}
+          ) > 0.9
+          # 읽기 전용(이미지·ISO 등)은 항상 100% 라 제외
+          unless on (instance, device, mountpoint) node_filesystem_readonly == 1
+        for: 5m
+        labels:
+          severity: critical
+          component: infra
+        annotations:
+          summary: "디스크 {{ $labels.mountpoint }} {{ $value | humanizePercentage }} 사용 (> 90%) — Postgres 쓰기 실패 임박"
+          description: "docker system df / docker image prune / 로그 용량(du -sh /var/lib/docker/containers) 확인"
+
+      - alert: ContainerRestarted
+        # docker restart(정책 재시작 포함)는 같은 컨테이너 id 의 시작 시각만 바뀐다.
+        # 배포(컨테이너 재생성)는 id 가 바뀌어 새 시계열이 되므로 여기 안 걸린다
+        expr: changes(container_start_time_seconds{name!=""}[10m]) > 0
+        labels:
+          severity: warning
+          component: infra
+        annotations:
+          summary: "컨테이너 재시작: {{ $labels.name }}"
+          description: "docker logs --tail 100 {{ $labels.name }} / docker inspect {{ $labels.name }} | grep -E 'OOMKilled|ExitCode'"
+
+      - alert: SeaweedFSDown
+        # -metricsPort 를 켜기 전(메트릭을 한 번도 못 받음)엔 침묵 — 최근 7일 안에 받은 적이 있을 때만 발화
+        expr: |
+          up{job="seaweedfs"} == 0
+          and on ()
+          count(count_over_time(SeaweedFS_build_info[7d])) > 0
+        for: 2m
+        labels:
+          severity: critical
+          component: availability
+        annotations:
+          summary: "SeaweedFS 메트릭 수집 실패 (2분+) — 상품 이미지 업로드·조회 영향"
+          description: "docker ps / docker logs seaweedfs (~/rekit/seaweedfs). 앱 쪽 rekle_external_request_duration_seconds{service=\"s3\",outcome=\"error\"} 확인"
+
+      - alert: SeaweedFSS3ErrorsHigh
+        expr: |
+          (
+            sum(rate(SeaweedFS_s3_request_total{code=~"5.."}[5m]))
+            /
+            sum(rate(SeaweedFS_s3_request_total[5m]))
+          ) > 0.05
+          and
+          sum(increase(SeaweedFS_s3_request_total[5m])) >= 20
+        for: 10m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "SeaweedFS S3 5xx 비율 {{ $value | humanizePercentage }} (10분+ > 5%)"
+          description: "Rekle 인프라 대시보드 SeaweedFS 행 — volume 여유(max_volumes)·디스크 확인. docker logs seaweedfs"
+
+      - alert: MonitoringTargetDown
+        expr: up{job=~"node|cadvisor|postgres|redis|alertmanager"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: monitoring
+        annotations:
+          summary: "모니터링 수집 대상 다운: {{ $labels.job }}"
+          description: "docker compose -p rekle-monitoring ps — 해당 exporter 가 죽으면 관련 알림이 침묵한다"
