@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     database_url: str
     database_pool_size: int = 5
     database_max_overflow: int = 10
+    # 풀이 꽉 찼을 때 커넥션을 기다리는 최대 시간(초). 기본 30초면 고갈 시 요청이 줄줄이 쌓인다 →
+    # 짧게 끊고 503 으로 빨리 실패시킨다
+    database_pool_timeout: float = Field(default=5.0, gt=0)
+    # Postgres 세션 타임아웃(ms, 0 = 끔 — Postgres 자체 의미). 느린 쿼리·락 대기·트랜잭션 방치가
+    # 커넥션을 무기한 점유해 풀이 마르는 것을 막는다. 앱 엔진에만 적용 (alembic 은 자체 엔진)
+    database_statement_timeout_ms: int = Field(default=10_000, ge=0)
+    database_idle_in_transaction_timeout_ms: int = Field(default=30_000, ge=0)
 
     # JWT
     jwt_secret: str
@@ -43,6 +50,11 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
+    # 초 단위. 없으면 Redis 가 멈췄을 때 요청도 무기한 멈춘다
+    redis_socket_timeout: float = Field(default=2.0, gt=0)
+    redis_socket_connect_timeout: float = Field(default=2.0, gt=0)
+    # 워커(프로세스)당 커넥션 상한. 기본 풀은 초과 시 대기하지 않고 즉시 ConnectionError
+    redis_max_connections: int = Field(default=50, gt=0)
 
     # CORS (JSON 배열 형식)
     cors_origins: list[str] = Field(default_factory=list)
@@ -86,6 +98,10 @@ class Settings(BaseSettings):
     toss_secret_key: str
     # 방치된 PENDING 주문(결제창 이탈) 정리 주기(초). 0 이면 스위퍼 끔.
     pending_order_sweep_interval_seconds: int = 120
+
+    # ── 런타임 관측 ──────────────────────────────────────
+    # 이벤트 루프 지연 측정 주기(초). 0 이면 끔. 짧을수록 짧은 블로킹도 잡지만 관측치가 늘어난다
+    event_loop_lag_interval_seconds: float = Field(default=0.5, ge=0)
 
     # ── 전화번호 인증 (Octomo) ─────────────────────────────
     octomo_api_key: str | None = None

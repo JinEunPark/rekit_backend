@@ -136,11 +136,14 @@ class OrderRepository:
         """N개 상품을 WHERE id IN (...) FOR UPDATE 한 번에 조회.
 
         create_order 에서 순차 락 대신 사용 — 쿼리 수 O(N)→O(1).
+        id 순 정렬 = 락 획득 순서 고정. 장바구니가 겹치는 동시 주문이 서로 다른 순서로 행을
+        잠그면 데드락이 난다.
         반환: {product_id: Product} — 없는 id 는 포함되지 않음.
         """
         stmt = (
             select(Product)
             .where(Product.id.in_(product_ids))
+            .order_by(Product.id)
             .with_for_update()
             .options(selectinload(Product.images))
         )

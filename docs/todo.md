@@ -291,7 +291,8 @@
   - `rekle_payment_webhook_received_total{remote_status}` — 조회 API 로 재확인한 실제 상태별
   - `rekle_orders_created_total`, `rekle_signups_total{provider=email|kakao|naver|google}`, `rekle_abandoned_orders_released_total`
   - 테스트 `tests/test_business_metrics.py` (전후 차이로 검증)
-  - [ ] (미착수) `rekle_external_request_duration_seconds{service=octomo|smtp|s3}`
+  - [ ] (미착수) `rekle_external_request_duration_seconds{service=octomo|smtp|s3|redis}` — Redis 도 포함
+        (인증코드·rate limit 의존. Redis 지연이 요청 지연으로 번지는지 구분)
 - [x] **O2-4 DB 커넥션 풀** — `rekle_db_pool_connections_in_use` (livesum), pool `checkout`/`checkin` 이벤트로 갱신.
       scrape 시점에 pool 을 읽으면 그 워커 하나 값만 보여 멀티 워커에서 틀림. `engine.dispose()` 후에도 유지 확인
 - [x] **O2-5 gunicorn 멀티프로세스** — **계획 변경**: compose `rm -rf` 대신 `gunicorn.conf.py` hook 으로 자체 완결
@@ -303,6 +304,18 @@
       배포 후 `curl https://rekit.co.kr/metrics` 가 앱 응답(`rekle_` 텍스트)이 아닌지 확인. nginx 라우팅을 넓히면
       `location = /metrics { return 404; }` 필수. Prometheus 는 내부망 `rekle-app:8000/metrics` 로 수집
 - [x] **O2-7 테스트** — `tests/test_metrics.py`(12)·`test_business_metrics.py`(10)·`test_gunicorn_conf.py`(3)
+      (O2-8·O2-9·O4b 로 `test_metrics.py` +3, `test_gunicorn_conf.py` +4, 신규 `test_event_loop_lag.py`(4)·
+      `test_database_timeouts.py`(4)·`test_redis_client.py`(2))
+- [x] **O2-8 이벤트 루프 지연 메트릭 (2026-11-05 완료)** — `rekle_event_loop_lag_seconds` Histogram(0.005~2.5s).
+      `app/core/event_loop_lag.py` — `asyncio.sleep(interval)` 이 예정보다 늦게 깨어난 만큼 = 루프가 막힌 시간.
+      lifespan 백그라운드 태스크(스위퍼와 함께 cancel), 주기 `EVENT_LOOP_LAG_INTERVAL_SECONDS`(기본 0.5, 0=끔).
+      테스트는 `time.sleep(0.1)` 블로킹으로 지연 관측 확인. Grafana p99/p50 패널 추가 → O8-1 직접 검증용
+- [x] **O2-9 DB 풀 대기 시간·타임아웃 (2026-11-05 완료)** — `rekle_db_pool_checkout_wait_seconds` Histogram +
+      `rekle_db_pool_timeouts_total`. pool `checkout` 이벤트는 획득 *후* 라 대기를 못 재서, `AsyncAdaptedQueuePool`
+      서브클래스(`InstrumentedAsyncAdaptedQueuePool`)의 공개 `connect()` 를 감싸 잼 (대기 + 새 커넥션 생성 + pre_ping 포함).
+      `_do_get` 은 경합 시 재귀라 이중 관측돼 제외. dispose 후 재생성 풀도 같은 클래스 → 계측 유지. Grafana 패널 2개
+- **O2 한계 메모** — `prometheus_client` 멀티프로세스 모드는 `process_*`(CPU·메모리) 메트릭을 노출하지 않는다
+  → 소크 테스트의 메모리 누수 관찰은 cAdvisor(O5-3) 필수
 
 ### O3. 에러 추적 (Sentry) — 코드 ✅ 2026-11-05 완료, DSN 발급·검증은 직접
 
@@ -332,12 +345,32 @@
 - [ ] **O4-4 방치 주문 스위퍼 단일 실행 검토** — 현재 `lifespan` 에서 gunicorn 워커 4개가 각자 스위퍼 기동.
       `SKIP LOCKED` 로 정합성은 안전하나 토스 조회·DB 쿼리 4배. Redis 락(leader 1개) 또는 별도 프로세스로 분리 검토
 
+### O4b. 타임아웃·보호 설정 (부하 시 "무한 대기" 방지 — 부하테스트 전 선행)
+
+- [x] **O4b-1 DB 풀 `pool_timeout` (2026-11-05 완료)** — `DATABASE_POOL_TIMEOUT`(기본 5초). 초과 시
+      `sqlalchemy.exc.TimeoutError` 전용 핸들러 → **503 `SERVICE_BUSY`** 표준 에러 포맷 (내부 메시지 비노출, WARNING 로그).
+      api.md §1.5 에 코드 추가. 타임아웃 횟수는 O2-9 카운터
+- [x] **O4b-2 Postgres `statement_timeout` · `idle_in_transaction_session_timeout` (2026-11-05 완료)** —
+      asyncpg `connect_args={"server_settings": ...}`, `DATABASE_STATEMENT_TIMEOUT_MS`(10000)·
+      `DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS`(30000), 0=끔. 실제 커넥션의 `pg_settings` 로 검증.
+      `alembic/env.py` 는 별도 엔진(`async_engine_from_config`)이라 마이그레이션엔 적용 안 됨 (긴 DDL 안전)
+- [x] **O4b-3 Redis 클라이언트 타임아웃 (2026-11-05 완료)** — `REDIS_SOCKET_TIMEOUT`·`REDIS_SOCKET_CONNECT_TIMEOUT`
+      (2.0초)·`REDIS_MAX_CONNECTIONS`(워커당 50). 기본 `ConnectionPool` 은 상한 초과 시 대기 없이 즉시 ConnectionError —
+      부하테스트에서 걸리면 상한 상향 또는 `BlockingConnectionPool` 검토
+- [x] **O4b-4 gunicorn 튜닝값 명시 (2026-11-05 완료)** — `timeout=30`(async 워커에선 요청 타임아웃이 아닌 하트비트 —
+      루프가 30초 막히면 워커 재시작)·`graceful_timeout=8`(docker stop 기본 유예 10초 안)·`keepalive=75`(nginx upstream
+      `keepalive_timeout` 기본 60초보다 길게 — 짧으면 간헐 502)·`max_requests=10000`+`jitter=1000`. 테스트 4건 추가
+  - [ ] **(직접) 엣지 nginx 확인** — `~/rekit/nginx` upstream 의 `keepalive_timeout` 이 60초 이하인지
+  - [ ] **compose `command` 의 `sh -c "alembic … && gunicorn …"`** — sh 가 PID 1 이라 SIGTERM 이 gunicorn 에 전달
+        안 될 수 있음 → `&& exec gunicorn …` 으로 바꿔야 graceful_timeout 이 실제로 의미 있음 (미적용, 검토 필요)
+- [ ] **O4b-5 rate limit** — 로그인은 bcrypt 로 요청당 CPU 가 큰 엔드포인트 → 그 자체로 DoS 경로. 부하테스트·공개 전 선행 검토
+
 ### O5. 모니터링 스택 (Prometheus + Grafana + exporter) — 로컬 ✅ 2026-11-05, 운영 구성 남음
 
 - [x] **O5-0 로컬 스택** — `infra/monitoring/docker-compose.yml` (prom/prometheus v3.5.0 · grafana 12.1.0, loopback 만)
   - Prometheus → `host.docker.internal:8000` (Mac 의 uvicorn) 15초 수집, 보존 7일. **nginx 불필요**
-  - Grafana provisioning — 데이터소스 + "Rekle 서비스" 대시보드(`grafana/dashboards/rekle-service.json`, 10패널:
-    RPS·p95·5xx·in-progress·DB pool·결제 결과·토스 p95·주문/가입·웹훅·방치 주문). 로컬 전용 익명 로그인
+  - Grafana provisioning — 데이터소스 + "Rekle 서비스" 대시보드(`grafana/dashboards/rekle-service.json`, 13패널:
+    RPS·p95·5xx·in-progress·DB pool·결제 결과·토스 p95·주문/가입·웹훅·방치 주문 + 루프 지연 p99·풀 대기 p95·풀 타임아웃). 로컬 전용 익명 로그인
   - 실측: target up, 요청 60건이 경로·status 별 집계, Grafana→Prometheus 쿼리 60
 - [ ] **O5-1 운영 구성 위치 결정** — 운영 서버에 같이 띄울지 / 별도 모니터링 서버 둘지 (운영 서버 리소스 여유 확인 후)
 - [ ] **O5-2 운영 Prometheus** — scrape: `rekle-app:8000`(rekit_edge 또는 공용 네트워크), node_exporter, cAdvisor,
@@ -373,6 +406,15 @@
   - 혼합 비율: 상품 조회·검색 70% / 로그인 10% / 장바구니·관심 15% / 주문·결제 5% (운영 후 액세스 로그로 보정)
   - `sleep` 으로 사람 같은 대기, thresholds 로 합격 기준 코드화 (`p(95)<300`, `rate<0.01`)
   - 결과를 Prometheus remote write 로 보내 Grafana 에서 서버 지표와 같은 시간축으로 확인
+  - Prometheus 에 `--web.enable-remote-write-receiver` 플래그 필요 (`infra/monitoring/docker-compose.yml` 에 없음)
+    + 대시보드에 k6 패널 (VU 수·k6 측 p95) 추가
+  - **정합성 시나리오**: 재고 1개 상품에 VU N명 동시 주문 → 정확히 1건 성공 (초과 판매 없음) +
+    장바구니가 겹치는 다품목 동시 주문 → `pg_stat_database.deadlocks` 0 확인
+- [ ] **O7-5b 토큰 사전 발급 스크립트** — VU 수천 명이 매번 로그인하면 bcrypt 가 결과를 지배 →
+      시드 사용자 JWT 를 미리 발급해 k6 에 주입 (O7-3 과 함께)
+- [ ] **O7-5c 엣지 nginx 경유 측정** — 앱 직접(8000) vs nginx 경유 결과가 다름(`worker_connections`·버퍼). 최소 1회는 nginx 경유
+- **O7 주의** — 로컬(Mac Docker · Python 3.13 · FastAPI 0.136) ≠ 운영(Linux · 3.11 · 0.162) → 로컬은 스모크·시나리오
+  검증까지만, 기준선(O7-7)은 스테이징에서
 - [ ] **O7-6 테스트 종류 순서** — 스모크(1~2 VU, 1분) → 부하(예상 평시, 10~30분) → 스트레스(점증, 붕괴점 찾기)
       → 스파이크(순간 10배) → 소크(평시 수 시간, 메모리·커넥션 누수)
 - [ ] **O7-7 기준선(baseline) 측정 + 기록** — `docs/perf/YYYY-MM-DD-<이름>.md`
@@ -391,6 +433,13 @@
 - [ ] **O8-4 인덱스** — 느린 쿼리 `EXPLAIN ANALYZE` → 누락 인덱스 마이그레이션
 - [ ] **O8-5 캐싱 후보** — 카테고리·featured 상품 등 읽기 많은 응답 Redis 캐시 (측정 후 효과 있을 때만)
 - [ ] **O8-6 워커 수 튜닝** — `-w` 값을 CPU 코어 기준으로 측정 비교 (2·4·코어×2)
+- [x] **O8-7 상품 락 순서 고정 (데드락 방지) (2026-11-05 완료)** — `get_products_with_lock` 에 `.order_by(Product.id)`.
+      장바구니가 겹치는 동시 주문이 항상 id 순으로 락을 잡음. 통합 테스트가 실제 실행 SQL(`before_cursor_execute`)에서
+      `ORDER BY products.id` + `FOR UPDATE` 확인 (정합성 문제라 측정 없이 선반영)
+- [ ] **O8-8 httpx 클라이언트 공유** — 토스·OAuth·Octomo 어댑터가 호출마다 `httpx.AsyncClient` 새로 생성 →
+      매번 TCP+TLS 핸드셰이크. lifespan 에서 공유 클라이언트(커넥션 풀) → `rekle_pg_request_duration_seconds` 전후 비교
+- [ ] **O8-9 상품 검색** — `catalog_repository` 의 3컬럼 `ILIKE '%x%'` + 매 페이지 `count(*)` 서브쿼리 + `OFFSET`
+      → 상품 수만 건에서 페이지당 전체 스캔 2회. 후보: `pg_trgm` GIN 인덱스 / count 캐싱
 
 ### O9. (확장 — 규모 커지면)
 
