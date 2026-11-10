@@ -17,6 +17,7 @@ import structlog
 
 from app.auth.adapters._oauth_helpers import translate_oauth_error
 from app.auth.adapters.ports import SocialProfile
+from app.core.metrics import observe_external_call
 
 _log = structlog.stdlib.get_logger(__name__)
 
@@ -52,24 +53,26 @@ class GoogleOAuthAdapter:
             "redirect_uri": self.redirect_uri,
             "code": code,
         }
-        res = await client.post(_TOKEN_URL, data=data)
-        if res.is_error:
-            _log.error(
-                "소셜 토큰 교환 실패",
-                provider="google",
-                status_code=res.status_code,
-                response_body=res.text[:500],
-                redirect_uri=self.redirect_uri,
-            )
-            res.raise_for_status()
+        with observe_external_call("google", "token"):
+            res = await client.post(_TOKEN_URL, data=data)
+            if res.is_error:
+                _log.error(
+                    "소셜 토큰 교환 실패",
+                    provider="google",
+                    status_code=res.status_code,
+                    response_body=res.text[:500],
+                    redirect_uri=self.redirect_uri,
+                )
+                res.raise_for_status()
         return str(res.json()["access_token"])
 
     async def _fetch_profile(self, client: httpx.AsyncClient, access_token: str) -> SocialProfile:
-        res = await client.get(
-            _USER_INFO_URL,
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        res.raise_for_status()
+        with observe_external_call("google", "profile"):
+            res = await client.get(
+                _USER_INFO_URL,
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            res.raise_for_status()
         body = res.json()
 
         # email_verified=False 인 구글 계정 (드물지만 가능) 은 신뢰 불가 — None 처리.

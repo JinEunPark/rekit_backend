@@ -10,6 +10,7 @@ from redis.asyncio import Redis
 
 from app.auth.adapters.ports import PhoneVerificationChallenge
 from app.core.config import settings
+from app.core.metrics import observe_external_call
 
 _OCTOMO_API_BASE = "https://api.octoverse.kr"
 _WITHIN_MINUTES = 5  # Octomo 에 "최근 N분 내 수신" 을 묻는 창
@@ -40,21 +41,23 @@ class OctomoPhoneVerifier:
         code = secrets.token_hex(8)
         await self._redis.set(_CODE_KEY.format(digits), code, ex=_CODE_TTL_SECONDS)
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{_OCTOMO_API_BASE}/octomo/v1/public/message/qr-code",
-                json={"text": code},
-                headers=self._auth_headers(),
-            )
-        # Octomo QR 생성 API 는 성공 시 200 이 아닌 201(Created) 을 반환한다.
-        if resp.status_code not in (200, 201):
-            _log.error(
-                "Octomo API 오류 응답",
-                operation="issue_challenge",
-                status_code=resp.status_code,
-                response_body=resp.text[:500],
-            )
-            raise RuntimeError(f"Octomo QR API 오류: {resp.status_code} {resp.text}")
+        headers = self._auth_headers()
+        with observe_external_call("octomo", "issue_challenge"):
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{_OCTOMO_API_BASE}/octomo/v1/public/message/qr-code",
+                    json={"text": code},
+                    headers=headers,
+                )
+            # Octomo QR 생성 API 는 성공 시 200 이 아닌 201(Created) 을 반환한다.
+            if resp.status_code not in (200, 201):
+                _log.error(
+                    "Octomo API 오류 응답",
+                    operation="issue_challenge",
+                    status_code=resp.status_code,
+                    response_body=resp.text[:500],
+                )
+                raise RuntimeError(f"Octomo QR API 오류: {resp.status_code} {resp.text}")
 
         qr_code = resp.json()["qrCode"]
         return PhoneVerificationChallenge(code=code, qr_code=qr_code)
@@ -65,21 +68,23 @@ class OctomoPhoneVerifier:
         if code is None:
             return False  # 발급된 적 없거나 TTL 만료 — Octomo 호출 자체가 무의미
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{_OCTOMO_API_BASE}/octomo/v1/public/message/exists",
-                json={"mobileNum": digits, "text": code, "withinMinutes": _WITHIN_MINUTES},
-                headers=self._auth_headers(),
-            )
-        # Octomo exists API 도 성공 시 200 이 아닌 201(Created) 을 반환한다.
-        if resp.status_code not in (200, 201):
-            _log.error(
-                "Octomo API 오류 응답",
-                operation="verify",
-                status_code=resp.status_code,
-                response_body=resp.text[:500],
-            )
-            raise RuntimeError(f"Octomo API 오류: {resp.status_code} {resp.text}")
+        headers = self._auth_headers()
+        with observe_external_call("octomo", "verify"):
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{_OCTOMO_API_BASE}/octomo/v1/public/message/exists",
+                    json={"mobileNum": digits, "text": code, "withinMinutes": _WITHIN_MINUTES},
+                    headers=headers,
+                )
+            # Octomo exists API 도 성공 시 200 이 아닌 201(Created) 을 반환한다.
+            if resp.status_code not in (200, 201):
+                _log.error(
+                    "Octomo API 오류 응답",
+                    operation="verify",
+                    status_code=resp.status_code,
+                    response_body=resp.text[:500],
+                )
+                raise RuntimeError(f"Octomo API 오류: {resp.status_code} {resp.text}")
 
         exists = bool(resp.json().get("exists"))
         if exists:

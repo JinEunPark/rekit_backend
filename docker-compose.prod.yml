@@ -18,6 +18,14 @@ services:
       TZ: Asia/Seoul
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # pg_stat_statements — 쿼리별 호출 수·평균 시간 (N+1·느린 쿼리 식별). preload 는 서버 시작 때만
+    # 읽혀서 이 값을 바꾸면 컨테이너 재생성(=Postgres 재시작)이 필요하다. 확장 생성은 alembic 마이그레이션
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
     # SSH 터널(ssh -L 5432:localhost:5432)로만 접근 — loopback 바인딩이라 외부/LAN 직접 노출 없음
     ports:
       - "127.0.0.1:5432:5432"
@@ -86,9 +94,11 @@ services:
       - default
       - seaweedfs_default
       - rekit_edge
+    # exec 로 sh 를 gunicorn 으로 교체 — sh 가 PID 1 로 남으면 docker stop 의 SIGTERM 이 gunicorn 에
+    # 전달되지 않아 graceful_timeout 이 무의미하고, 10초 뒤 SIGKILL 로 처리 중 요청이 끊긴다
     command: >
       sh -c "alembic upgrade head &&
-             gunicorn -c gunicorn.conf.py app.main:app"
+             exec gunicorn -c gunicorn.conf.py app.main:app"
 
 networks:
   seaweedfs_default:

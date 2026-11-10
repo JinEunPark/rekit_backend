@@ -12,6 +12,8 @@ gunicorn 은 워커마다 메모리가 분리돼 있어, PROMETHEUS_MULTIPROC_DI
 
 import os
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
@@ -31,6 +33,7 @@ __all__ = [
     "CONTENT_TYPE_LATEST",
     "InstrumentedAsyncAdaptedQueuePool",
     "instrument_pool",
+    "observe_external_call",
     "render_latest",
 ]
 
@@ -41,6 +44,10 @@ _PG_LATENCY_BUCKETS = (0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0)
 _POOL_WAIT_BUCKETS = (0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
 # 루프 지연 — 수 ms 는 정상 스케줄링 오차, bcrypt 1회(~0.2~0.3s) 가 0.25 구간에 잡히게
 _LOOP_LAG_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5)
+# 외부 호출 — Redis(sub-ms)부터 SMTP·Octomo(수 초, httpx timeout 10초)까지 한 metric 에 담는다
+_EXTERNAL_LATENCY_BUCKETS = (
+    0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+)
 
 # ── HTTP (RequestContextMiddleware 가 기록 — 액세스 로그와 같은 path 템플릿·status) ──
 
@@ -111,6 +118,17 @@ SIGNUPS_TOTAL = Counter(
     "회원가입 수",
     ["provider"],  # email | kakao | naver | google
 )
+# ── 외부 호출 (토스는 위 PG 전용 metric — 결제 SLO 패널이 이미 그걸 본다) ──
+
+EXTERNAL_REQUEST_DURATION_SECONDS = Histogram(
+    "rekle_external_request_duration_seconds",
+    "외부 시스템 호출 시간 — 요청 지연이 우리 코드 탓인지 외부 탓인지 분리해서 본다",
+    # service: octomo | smtp | s3 | kakao | naver | google | redis
+    # operation: 어댑터 메서드 단위 (redis 는 명령 이름) / outcome: ok | error
+    ["service", "operation", "outcome"],
+    buckets=_EXTERNAL_LATENCY_BUCKETS,
+)
+
 ABANDONED_ORDERS_RELEASED_TOTAL = Counter(
     "rekle_abandoned_orders_released_total",
     "스위퍼가 정리한 방치 PENDING 주문 수",
@@ -153,6 +171,23 @@ def _on_checkout(*_: object) -> None:
 
 def _on_checkin(*_: object) -> None:
     DB_POOL_CONNECTIONS_IN_USE.dec()
+
+
+@contextmanager
+def observe_external_call(service: str, operation: str) -> Iterator[None]:
+    """블록 실행 시간을 외부 호출 metric 에 기록. 예외가 블록 밖으로 나가면 outcome=error.
+
+    "정상적인 없음"(S3 404 등)처럼 어댑터가 블록 안에서 처리한 예외는 ok — 장애 신호가 아니다.
+    """
+    start = time.perf_counter()
+    outcome = "error"
+    try:
+        yield
+        outcome = "ok"
+    finally:
+        EXTERNAL_REQUEST_DURATION_SECONDS.labels(
+            service=service, operation=operation, outcome=outcome
+        ).observe(time.perf_counter() - start)
 
 
 def render_latest() -> bytes:

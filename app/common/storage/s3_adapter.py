@@ -10,6 +10,7 @@ from botocore.exceptions import ClientError
 from app.common.storage.ports import ObjectMeta
 from app.core.config import Settings
 from app.core.config import settings as default_settings
+from app.core.metrics import observe_external_call
 
 if TYPE_CHECKING:
     # 런타임 의존성 없는 타입 전용 import (dev 의존성 types-aioboto3[s3] 에서만 제공)
@@ -77,15 +78,16 @@ class S3StorageAdapter:
 
     async def head(self, key: str) -> ObjectMeta | None:
         async with self._client() as s3:
-            try:
-                response = await s3.head_object(
-                    Bucket=self.settings.s3_bucket, Key=key
-                )
-            except ClientError as exc:
-                code = exc.response.get("Error", {}).get("Code")
-                if code in ("404", "NoSuchKey", "NotFound"):
-                    return None
-                raise
+            with observe_external_call("s3", "head"):
+                try:
+                    response = await s3.head_object(
+                        Bucket=self.settings.s3_bucket, Key=key
+                    )
+                except ClientError as exc:
+                    code = exc.response.get("Error", {}).get("Code")
+                    if code in ("404", "NoSuchKey", "NotFound"):
+                        return None
+                    raise
             return ObjectMeta(
                 size=int(response["ContentLength"]),
                 content_type=response.get("ContentType", "application/octet-stream"),
@@ -94,35 +96,39 @@ class S3StorageAdapter:
 
     async def get_object(self, key: str) -> bytes:
         async with self._client() as s3:
-            response = await s3.get_object(Bucket=self.settings.s3_bucket, Key=key)
-            body: bytes = await response["Body"].read()
+            with observe_external_call("s3", "get_object"):
+                response = await s3.get_object(Bucket=self.settings.s3_bucket, Key=key)
+                body: bytes = await response["Body"].read()
             return body
 
     async def put_object(self, key: str, body: bytes, content_type: str) -> None:
         """서버가 본문을 직접 올리는 경로 — SVG 처럼 저장 전 검사가 필요한 경우만 사용."""
         async with self._client() as s3:
-            await s3.put_object(
-                Bucket=self.settings.s3_bucket,
-                Key=key,
-                Body=body,
-                ContentType=content_type,
-            )
+            with observe_external_call("s3", "put_object"):
+                await s3.put_object(
+                    Bucket=self.settings.s3_bucket,
+                    Key=key,
+                    Body=body,
+                    ContentType=content_type,
+                )
 
     async def delete(self, key: str) -> None:
         async with self._client() as s3:
-            await s3.delete_object(Bucket=self.settings.s3_bucket, Key=key)
+            with observe_external_call("s3", "delete"):
+                await s3.delete_object(Bucket=self.settings.s3_bucket, Key=key)
 
     async def ensure_bucket(self) -> None:
         """앱 부팅 시 1회 호출 — SeaweedFS는 버킷이 없으면 PUT이 실패."""
         async with self._client() as s3:
-            try:
-                await s3.head_bucket(Bucket=self.settings.s3_bucket)
-            except ClientError as exc:
-                code = exc.response.get("Error", {}).get("Code")
-                if code in ("404", "NoSuchBucket", "NotFound"):
-                    await s3.create_bucket(Bucket=self.settings.s3_bucket)
-                else:
-                    raise
+            with observe_external_call("s3", "ensure_bucket"):
+                try:
+                    await s3.head_bucket(Bucket=self.settings.s3_bucket)
+                except ClientError as exc:
+                    code = exc.response.get("Error", {}).get("Code")
+                    if code in ("404", "NoSuchBucket", "NotFound"):
+                        await s3.create_bucket(Bucket=self.settings.s3_bucket)
+                    else:
+                        raise
 
     def public_url(self, key: str) -> str:
         return f"{self.settings.s3_public_url_base.rstrip('/')}/{key}"
