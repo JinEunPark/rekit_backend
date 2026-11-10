@@ -1,0 +1,55 @@
+# 운영 Prometheus — prod/docker-compose.yml 에서 마운트. 규칙은 ../prometheus/rules (로컬과 공용)
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    env: prod
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # 앱 — REKLE_APP_NETWORK(rekit-backend_default) 위에서 컨테이너명으로. gunicorn 워커 합산값
+  # job 이름은 알림 규칙(RekleAppDown)이 참조한다 — 바꾸면 rules 도 같이
+  - job_name: rekle-app
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["rekle-app:8000"]
+
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  - job_name: cadvisor
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  # SeaweedFS (레포 밖 ~/rekit/seaweedfs, 컨테이너명 seaweedfs, 네트워크 seaweedfs_default).
+  # weed 실행에 -metricsPort=9324 를 추가해야 열린다 (docs/monitoring.md "SeaweedFS").
+  # 켜기 전엔 이 target 이 down 이지만 알림은 안 울린다 — SeaweedFSDown 은 최근 7일 안에 메트릭을 한 번이라도
+  # 받은 뒤에만 활성, MonitoringTargetDown 은 이 job 을 제외. 컨테이너명이 바뀌면 여기 target 을 수정
+  - job_name: seaweedfs
+    static_configs:
+      - targets: ["seaweedfs:9324"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]

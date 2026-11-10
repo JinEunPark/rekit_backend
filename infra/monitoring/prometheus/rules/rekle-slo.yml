@@ -1,0 +1,32 @@
+# SLI 기록 규칙 (docs/slo.md) — good/total 을 따로 저장해 30일 비율을 가볍게 계산한다:
+#   sum_over_time(rekle:sli_<x>_good:rate5m[30d]) / sum_over_time(rekle:sli_<x>_total:rate5m[30d])
+# (비율을 저장해 평균 내면 트래픽 가중이 안 돼 틀린다 → 분자·분모를 각각 저장)
+#
+# le 값은 정규식으로 매칭 — prometheus_client 는 "0.3"/"1.0" 으로 내보내고 Prometheus 3 은 "1" 로 정규화한다.
+groups:
+  - name: rekle-sli
+    interval: 1m
+    rules:
+      # 가용성 — 5xx 가 아닌 응답 비율. <unmatched>(스캐너·CORS preflight)는 제외
+      - record: rekle:sli_availability_total:rate5m
+        expr: sum(rate(rekle_http_requests_total{path!="<unmatched>"}[5m]))
+      - record: rekle:sli_availability_good:rate5m
+        expr: sum(rate(rekle_http_requests_total{path!="<unmatched>",status!~"5.."}[5m]))
+
+      # 조회 API 지연 — GET /api/v1/* (관리자 제외) 중 300ms 안에 끝난 비율 (목표 95% = p95 < 300ms)
+      - record: rekle:sli_read_latency_total:rate5m
+        expr: sum(rate(rekle_http_request_duration_seconds_count{method="GET",path=~"/api/v1/.+",path!~"/api/v1/admin/.*"}[5m]))
+      - record: rekle:sli_read_latency_good:rate5m
+        expr: sum(rate(rekle_http_request_duration_seconds_bucket{method="GET",path=~"/api/v1/.+",path!~"/api/v1/admin/.*",le=~"0\\.3"}[5m]))
+
+      # 결제 승인 API 지연 — POST /api/v1/payments/confirm 중 1초 안에 끝난 비율 (목표 95%)
+      - record: rekle:sli_confirm_latency_total:rate5m
+        expr: sum(rate(rekle_http_request_duration_seconds_count{method="POST",path="/api/v1/payments/confirm"}[5m]))
+      - record: rekle:sli_confirm_latency_good:rate5m
+        expr: sum(rate(rekle_http_request_duration_seconds_bucket{method="POST",path="/api/v1/payments/confirm",le=~"1|1\\.0"}[5m]))
+
+      # 결제 성공률 — PG 를 실제 호출한 건 중 success. failed(카드 한도·사용자 취소 등 토스의 명시적 거절)는 분모에서 제외
+      - record: rekle:sli_payment_total:rate5m
+        expr: sum(rate(rekle_payment_confirm_total{result=~"success|unknown"}[5m]))
+      - record: rekle:sli_payment_good:rate5m
+        expr: sum(rate(rekle_payment_confirm_total{result="success"}[5m]))

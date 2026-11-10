@@ -1,0 +1,174 @@
+# 운영 모니터링 스택 — Prometheus · Alertmanager · Grafana + exporter 4종.
+#
+# 앱(docker-compose.prod.yml, 프로젝트 rekit-backend)과 **별도 compose 프로젝트**로 같은 서버에 띄운다 (O5-1 기본안).
+# 모든 포트는 127.0.0.1 바인딩 → 접근은 SSH 터널 (또는 엣지 nginx /grafana/). 사용법: docs/monitoring.md
+#
+#   docker compose -f infra/monitoring/prod/docker-compose.yml --env-file ~/rekit/secrets/rekle_monitoring.env up -d
+#
+# 별도 모니터링 서버로 옮길 때: REKLE_APP_NETWORK 대신 prod/prometheus.yml 의 target 을 서버 IP 로 바꾸고,
+# node_exporter/cadvisor 는 앱 서버에 남겨 그 포트만 모니터링 서버에 연다.
+name: rekle-monitoring
+
+# 운영 compose 와 같은 로그 로테이션 — json-file 무제한이면 디스크가 찬다
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: rekle-mon-prometheus
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      # 시간 보존보다 먼저 디스크가 차는 경우의 안전장치
+      - --storage.tsdb.retention.size=10GB
+      # k6 결과(experimental-prometheus-rw) 수신 — /api/v1/write
+      - --web.enable-remote-write-receiver
+      # curl -X POST localhost:9091/-/reload 로 설정·규칙 재적용 (포트가 loopback 이라 외부에선 불가)
+      - --web.enable-lifecycle
+      # 알림의 "Source" 링크가 SSH 터널 주소를 가리키게
+      - --web.external-url=http://localhost:${PROMETHEUS_PORT:-9091}
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9091}:9090"
+    networks:
+      - default
+      - app
+      # SeaweedFS(레포 밖 ~/rekit/seaweedfs) 메트릭 수집 — seaweedfs:9324
+      - seaweedfs
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    container_name: rekle-mon-alertmanager
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      # 단일 인스턴스 — HA gossip 비활성 (켜 두면 9094 를 열고 클러스터 합류를 기다린다)
+      - --cluster.listen-address=
+      # 슬랙 메시지의 링크가 컨테이너 id 대신 SSH 터널 주소를 가리키게
+      - --web.external-url=http://localhost:${ALERTMANAGER_PORT:-9093}
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # slack_webhook_url 등 시크릿 파일 — git 밖 (prod/.gitignore)
+      - ${ALERTMANAGER_SECRETS_DIR:-./secrets}:/etc/alertmanager/secrets:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    container_name: rekle-mon-grafana
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      # 기본값 없음 — 비어 있으면 기동 거부 (admin/admin 으로 뜨는 사고 방지)
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:?GF_SECURITY_ADMIN_PASSWORD 를 env 파일에 설정하세요}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      # 엣지 nginx /grafana/ 서브경로용. 비우면 Grafana 기본값(루트 경로)
+      GF_SERVER_ROOT_URL: ${GF_SERVER_ROOT_URL:-}
+      GF_SERVER_SERVE_FROM_SUB_PATH: ${GF_SERVER_SERVE_FROM_SUB_PATH:-false}
+    volumes:
+      # 로컬 스택과 같은 provisioning·대시보드 JSON 재사용 (데이터소스 url http://prometheus:9090 동일)
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3300}:3000"
+    networks:
+      - default
+      # 엣지 nginx 가 proxy_pass http://rekle-mon-grafana:3000 으로 접근
+      - edge
+    depends_on:
+      - prometheus
+
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    container_name: rekle-mon-node-exporter
+    restart: unless-stopped
+    logging: *default-logging
+    pid: host
+    command:
+      - --path.rootfs=/host
+      # 컨테이너·도커 내부 마운트는 cAdvisor 담당 — 호스트 디스크만 본다
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|run|sys|var/lib/docker/.+|var/lib/containerd/.+)($|/)
+    volumes:
+      - /:/host:ro,rslave
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
+    container_name: rekle-mon-cadvisor
+    restart: unless-stopped
+    logging: *default-logging
+    privileged: true
+    devices:
+      - /dev/kmsg
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=15s
+      # 라벨 전부 저장하면 시계열이 폭발 → compose 서비스·프로젝트만
+      - --store_container_labels=false
+      - --whitelisted_container_labels=com.docker.compose.service,com.docker.compose.project
+      - --disable_metrics=percpu,sched,tcp,udp,hugetlb,referenced_memory,cpu_topology,resctrl,advtcp,memory_numa,process
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: rekle-mon-postgres-exporter
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      DATA_SOURCE_URI: rekle-postgres:5432/rekle?sslmode=disable
+      DATA_SOURCE_USER: ${PG_MONITOR_USER:-rekle_monitor}
+      DATA_SOURCE_PASS: ${PG_MONITOR_PASSWORD:?PG_MONITOR_PASSWORD 를 env 파일에 설정하세요}
+    # O5-4(pg_stat_statements) 적용 후 --collector.stat_statements 추가
+    networks:
+      - default
+      - app
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.74.0
+    container_name: rekle-mon-redis-exporter
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      REDIS_ADDR: redis://rekle-redis:6379
+    networks:
+      - default
+      - app
+
+networks:
+  app:
+    external: true
+    name: ${REKLE_APP_NETWORK:-rekit-backend_default}
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:-rekit_edge}
+  seaweedfs:
+    external: true
+    name: ${SEAWEEDFS_NETWORK:-seaweedfs_default}
+
+volumes:
+  prometheus_data:
+  alertmanager_data:
+  grafana_data:

@@ -1,0 +1,46 @@
+# Alertmanager — Prometheus 알림을 묶어서(group) 슬랙으로 보낸다.
+# Alertmanager 는 설정 파일에서 환경변수를 치환하지 않는다 → 시크릿은 *_file 로 마운트된 파일에서 읽는다.
+#   슬랙: ${ALERTMANAGER_SECRETS_DIR}/slack_webhook_url  (Incoming Webhook URL 한 줄, git 밖)
+# 이메일로 바꾸려면 아래 receivers 의 email 예시 주석 참고.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: slack
+  group_by: [alertname, severity]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="critical"]
+      receiver: slack
+      repeat_interval: 1h
+
+receivers:
+  - name: slack
+    slack_configs:
+      - api_url_file: /etc/alertmanager/secrets/slack_webhook_url
+        send_resolved: true
+        title: '{{ if eq .Status "firing" }}[{{ .CommonLabels.severity | toUpper }}]{{ else }}[해결]{{ end }} {{ .CommonLabels.alertname }} ({{ .Alerts | len }}건)'
+        text: |-
+          {{ range .Alerts }}• *{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          {{ end }}
+  # 이메일 예시 (SMTP 비밀번호도 파일로):
+  # - name: email
+  #   email_configs:
+  #     - to: ops@example.com
+  #       from: alert@example.com
+  #       smarthost: smtp.example.com:587
+  #       auth_username: alert@example.com
+  #       auth_password_file: /etc/alertmanager/secrets/smtp_password
+  #       send_resolved: true
+
+inhibit_rules:
+  # 앱이 통째로 죽었으면 앱 지표 기반 경고(5xx·지연 등)는 소음 — 다운 알림 하나만
+  - source_matchers: [alertname="RekleAppDown"]
+    target_matchers: [component="app"]
+  # 같은 대상의 critical 이 떠 있으면 warning 은 생략 (예: 디스크 90% 가 80% 를 가림)
+  - source_matchers: [severity="critical"]
+    target_matchers: [severity="warning"]
+    equal: [alertname, instance, mountpoint]

@@ -1,9 +1,9 @@
-# 로컬 모니터링 스택 — Prometheus(수집·저장) + Grafana(대시보드). 운영 구성은 todo O5 에서 별도로.
+# 로컬 모니터링 스택 — Prometheus(수집·저장) + Grafana(대시보드). 운영 구성은 prod/docker-compose.yml (docs/monitoring.md).
 #
 #   docker compose -f infra/monitoring/docker-compose.yml up -d
 #   앱: .venv/bin/uvicorn app.main:app --reload          (8000)
 #   Prometheus: http://localhost:9090  → Status > Targets 에서 rekle-backend-local UP 확인
-#   Grafana:    http://localhost:3000  → 로그인 없이 "Rekle 서비스" 대시보드
+#   Grafana:    http://localhost:3000  → 로그인 없이 "Rekle 서비스" · "Rekle 부하테스트" 대시보드
 #
 # nginx 는 필요 없다 — Prometheus 가 Mac 에서 도는 앱에 host.docker.internal 로 직접 붙는다.
 services:
@@ -13,8 +13,12 @@ services:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
+      # k6 결과 수신 (k6 run -o experimental-prometheus-rw → http://localhost:9090/api/v1/write)
+      - --web.enable-remote-write-receiver
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # 알림·SLI 규칙 (운영과 공용). 로컬엔 Alertmanager 가 없어 Alerts 화면에서만 확인
+      - ./prometheus/rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
     ports:
       - "127.0.0.1:9090:9090"

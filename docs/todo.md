@@ -291,8 +291,10 @@
   - `rekle_payment_webhook_received_total{remote_status}` — 조회 API 로 재확인한 실제 상태별
   - `rekle_orders_created_total`, `rekle_signups_total{provider=email|kakao|naver|google}`, `rekle_abandoned_orders_released_total`
   - 테스트 `tests/test_business_metrics.py` (전후 차이로 검증)
-  - [ ] (미착수) `rekle_external_request_duration_seconds{service=octomo|smtp|s3|redis}` — Redis 도 포함
-        (인증코드·rate limit 의존. Redis 지연이 요청 지연으로 번지는지 구분)
+  - [x] **(2026-11-10 완료)** `rekle_external_request_duration_seconds{service,operation,outcome}` — service =
+        octomo·smtp·s3·kakao·naver·google·redis. 헬퍼 `observe_external_call()` (예외가 빠져나가면 `outcome=error`).
+        S3 는 네트워크 호출만(presign 제외, head 404 는 ok), Redis 는 `InstrumentedRedis.execute_command` 한 곳(pipeline 미사용).
+        테스트 `tests/test_external_request_metrics.py`(21)
 - [x] **O2-4 DB 커넥션 풀** — `rekle_db_pool_connections_in_use` (livesum), pool `checkout`/`checkin` 이벤트로 갱신.
       scrape 시점에 pool 을 읽으면 그 워커 하나 값만 보여 멀티 워커에서 틀림. `engine.dispose()` 후에도 유지 확인
 - [x] **O2-5 gunicorn 멀티프로세스** — **계획 변경**: compose `rm -rf` 대신 `gunicorn.conf.py` hook 으로 자체 완결
@@ -361,8 +363,8 @@
       루프가 30초 막히면 워커 재시작)·`graceful_timeout=8`(docker stop 기본 유예 10초 안)·`keepalive=75`(nginx upstream
       `keepalive_timeout` 기본 60초보다 길게 — 짧으면 간헐 502)·`max_requests=10000`+`jitter=1000`. 테스트 4건 추가
   - [ ] **(직접) 엣지 nginx 확인** — `~/rekit/nginx` upstream 의 `keepalive_timeout` 이 60초 이하인지
-  - [ ] **compose `command` 의 `sh -c "alembic … && gunicorn …"`** — sh 가 PID 1 이라 SIGTERM 이 gunicorn 에 전달
-        안 될 수 있음 → `&& exec gunicorn …` 으로 바꿔야 graceful_timeout 이 실제로 의미 있음 (미적용, 검토 필요)
+  - [x] **(2026-11-10 완료) compose `command` 에 `exec gunicorn`** — sh 가 PID 1 로 남으면 SIGTERM 이 gunicorn 에 안 가
+        graceful_timeout 무의미. prod·로컬 compose 모두 `exec` (Dockerfile CMD 는 원래 exec form). `tests/test_compose_config.py`
 - [ ] **O4b-5 rate limit** — 로그인은 bcrypt 로 요청당 CPU 가 큰 엔드포인트 → 그 자체로 DoS 경로. 부하테스트·공개 전 선행 검토
 
 ### O5. 모니터링 스택 (Prometheus + Grafana + exporter) — 로컬 ✅ 2026-11-05, 운영 구성 남음
@@ -372,26 +374,42 @@
   - Grafana provisioning — 데이터소스 + "Rekle 서비스" 대시보드(`grafana/dashboards/rekle-service.json`, 13패널:
     RPS·p95·5xx·in-progress·DB pool·결제 결과·토스 p95·주문/가입·웹훅·방치 주문 + 루프 지연 p99·풀 대기 p95·풀 타임아웃). 로컬 전용 익명 로그인
   - 실측: target up, 요청 60건이 경로·status 별 집계, Grafana→Prometheus 쿼리 60
-- [ ] **O5-1 운영 구성 위치 결정** — 운영 서버에 같이 띄울지 / 별도 모니터링 서버 둘지 (운영 서버 리소스 여유 확인 후)
-- [ ] **O5-2 운영 Prometheus** — scrape: `rekle-app:8000`(rekit_edge 또는 공용 네트워크), node_exporter, cAdvisor,
-      postgres_exporter, redis_exporter. 보존 30d, 외부 포트 미노출
-- [ ] **O5-3 exporter** — node_exporter(서버 CPU·메모리·디스크), cAdvisor(컨테이너별), postgres_exporter, redis_exporter
-- [ ] **O5-4 Postgres `pg_stat_statements` 활성화** — `shared_preload_libraries` 설정 + `CREATE EXTENSION`
-      (쿼리별 호출 수·평균 시간 → N+1·느린 쿼리 식별). 운영 적용 시 Postgres 재시작 필요 — 점검 시간에
-- [ ] **O5-5 운영 Grafana** — 로컬 대시보드 JSON 재사용 + 커뮤니티 대시보드(Node Exporter Full, cAdvisor, PostgreSQL, Redis).
-      접근은 SSH 터널 또는 nginx + 강한 비밀번호 (로컬의 익명 로그인 설정 금지)
+- [x] **O5-1 운영 구성 위치 (2026-11-10 결정)** — 운영 서버에 **별도 compose 프로젝트**(`rekle-monitoring`), 포트 전부
+      127.0.0.1 → SSH 터널 또는 엣지 nginx `/grafana/`. 네트워크 이름은 env 로 받아 다른 서버 이전 쉬움
+- [x] **O5-2·O5-3 운영 Prometheus + exporter (2026-11-10 코드 완료)** — `infra/monitoring/prod/` (사용법 `docs/monitoring.md`)
+  - Prometheus v3.5.0(30d/10GB, remote-write 수신) · Alertmanager v0.28.1 · node-exporter · cAdvisor · postgres-exporter · redis_exporter
+  - scrape: rekle-app·node·cadvisor·postgres·redis·`seaweedfs:9324`. 앱 네트워크 `rekit-backend_default`(운영 실측 확인 —
+    postgres·redis 는 이 네트워크에만 있음) + `rekit_edge` + `seaweedfs_default`
+  - 로컬 Mac 에서 기동 검증 (cAdvisor 컨테이너별 지표는 Docker Desktop 한계로 미확인 — 운영 Linux 에서 확인 필요)
+  - [ ] **(직접) 운영 배포** — 시크릿 env(`GF_SECURITY_ADMIN_PASSWORD`·`PG_MONITOR_PASSWORD`)·슬랙 웹훅 파일·
+        pg 모니터링 계정(`pg_monitor`) 생성 후 `docker compose -f prod/docker-compose.yml up -d` (절차 `docs/monitoring.md`)
+  - [ ] **(직접) SeaweedFS 메트릭** — `~/rekit/seaweedfs` command 에 `-metricsPort=9324`(publish 금지) 후 재생성
+  - [ ] **⚠️ (직접) SeaweedFS 포트 외부 노출** — 9333·8080·8888·8333 이 `0.0.0.0` publish (docker 는 ufw 우회).
+        2026-11-10 외부에서 **8888(filer) 200 응답** 확인 → `127.0.0.1:` 바인딩. 운영 명령에 `-s3.config` 도 없어 S3 인증 점검 필요
+- [x] **O5-4 `pg_stat_statements` (2026-11-10 코드 완료)** — prod·로컬 compose postgres `command` 에 preload +
+      alembic `a7c3e9f1b2d4` (`CREATE EXTENSION IF NOT EXISTS`). 로컬 실측 조회 OK.
+      **⚠️ 다음 배포 때 Postgres 컨테이너 재생성(Jenkins `up -d postgres redis app`) = 수 초~수십 초 다운타임** →
+      저트래픽 시간, 직전 `pg_dump`, 배포 후 `SHOW shared_preload_libraries` 확인
+- [x] **O5-5 운영 Grafana (2026-11-10 코드 완료)** — 익명 접근 없음, admin 비밀번호 미설정 시 기동 거부.
+      `GF_SERVER_ROOT_URL`·`SERVE_FROM_SUB_PATH` env 로 `/grafana` 서브경로 지원. 대시보드: 서비스(외부 호출 행 추가)·
+      인프라(호스트·컨테이너·PG·Redis·SeaweedFS·앱 측 S3)·부하테스트(k6 + 서버 지표 한 시간축). SeaweedFS 공식
+      대시보드는 컴포넌트별 job 전제라 `weed server` 단일 구성과 안 맞아 직접 작성
+  - [ ] **(직접) 엣지 nginx `/grafana/`** — 예시 `docs/monitoring.md`. 같은 출처라 IP 제한·auth_basic 권장 (서브도메인이 더 안전).
+        Jenkins `/jenkins` 도 같은 문서 메모 참고
 - [ ] **O5-6 (선택) 로그 수집** — Loki + Promtail(또는 Alloy) 로 컨테이너 JSON 로그 수집 → Grafana 에서
       request_id 로 검색. `docker logs` + `grep` 한계 느껴질 때 도입
 
 ### O6. 알림 (SLO 기반)
 
-- [ ] **O6-1 SLO 정의** (`docs/slo.md`) — 예: 조회 API p95 < 300ms · 결제 confirm p95 < 1s ·
-      5xx 비율 < 0.5% · 결제 성공률 ≥ 99% (토스 실패 제외 기준 명시) — 30일 기준
-- [ ] **O6-2 알림 규칙** (Grafana Alerting 또는 Alertmanager)
-  - 5xx 비율 5분간 > 2% / 결제 `unknown` 1건 이상 / 토스 API p95 > 3s 10분 지속 / readiness 실패
-  - 디스크 사용 > 80% / 컨테이너 재시작 감지
-  - CPU 같은 자원 지표는 대시보드만 (알림 피로 방지)
-- [ ] **O6-3 알림 채널** — 슬랙 또는 이메일 (Sentry·UptimeRobot·Grafana 채널 통일)
+- [x] **O6-1 SLO 정의 (2026-11-10 완료)** — `docs/slo.md`: SLI 5개 + PromQL·30일 이동 창·제외 기준.
+      기록 규칙 `prometheus/rules/rekle-slo.yml`(8개, good/total 분리 저장)
+- [x] **O6-2 알림 규칙 (2026-11-10 완료)** — Alertmanager 방식. `prometheus/rules/rekle-alerts.yml` 16개
+  - 앱 다운 · 5xx >2% 5분(최소 20건) · 결제 unknown(재기동 직후 새 시계열도 감지) · 토스 p95 >3s 10분 · 풀 타임아웃 ·
+    루프 지연 p99 >0.5s 5분 / PG·Redis 다운 · 데드락 · PG 커넥션 80% / 디스크 80·90% · 컨테이너 재시작 /
+    SeaweedFS 다운·S3 5xx / exporter 다운. CPU 는 대시보드만
+  - `promtool check`·`amtool check-config`·`promtool test rules`(`prometheus/tests/`) 통과
+- [ ] **O6-3 알림 채널** — Alertmanager → 슬랙(`api_url_file`, 시크릿은 git 밖) 코드 완료, 이메일은 주석 예시.
+      **(직접)** 슬랙 Incoming Webhook 발급 + Sentry·UptimeRobot 채널 통일
 - [ ] **O6-4 런북** — Week 7 `docs/runbook.md` 와 통합: 알림별 "확인할 대시보드 / 로그 쿼리 / 조치"
 
 ### O7. 부하테스트 (k6)
@@ -406,8 +424,9 @@
   - 혼합 비율: 상품 조회·검색 70% / 로그인 10% / 장바구니·관심 15% / 주문·결제 5% (운영 후 액세스 로그로 보정)
   - `sleep` 으로 사람 같은 대기, thresholds 로 합격 기준 코드화 (`p(95)<300`, `rate<0.01`)
   - 결과를 Prometheus remote write 로 보내 Grafana 에서 서버 지표와 같은 시간축으로 확인
-  - Prometheus 에 `--web.enable-remote-write-receiver` 플래그 필요 (`infra/monitoring/docker-compose.yml` 에 없음)
-    + 대시보드에 k6 패널 (VU 수·k6 측 p95) 추가
+  - [x] **(2026-11-10 완료)** Prometheus `--web.enable-remote-write-receiver` (로컬·운영) + `rekle-loadtest.json`
+    (k6 VU·p95 + 서버 지표, `testid` 변수). k6 1.1.0 실측으로 메트릭명(`k6_http_req_duration_p95`, 초 단위) 확인 —
+    `K6_PROMETHEUS_RW_TREND_STATS` 사용법은 `docs/monitoring.md`
   - **정합성 시나리오**: 재고 1개 상품에 VU N명 동시 주문 → 정확히 1건 성공 (초과 판매 없음) +
     장바구니가 겹치는 다품목 동시 주문 → `pg_stat_database.deadlocks` 0 확인
 - [ ] **O7-5b 토큰 사전 발급 스크립트** — VU 수천 명이 매번 로그인하면 bcrypt 가 결과를 지배 →
