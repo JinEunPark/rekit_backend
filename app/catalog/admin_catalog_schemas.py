@@ -58,6 +58,7 @@ class AdminImageItem(BaseModel):
     """
 
     url: str = Field(min_length=1, max_length=500)
+    thumb_url: str | None = Field(default=None, min_length=1, max_length=500)
     label: str | None = None
 
 
@@ -89,6 +90,7 @@ class AdminProductImageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     url: str
+    thumb_url: str | None = None
     sort_order: int
     label: str | None
 

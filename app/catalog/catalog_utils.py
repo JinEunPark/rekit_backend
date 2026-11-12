@@ -20,7 +20,11 @@ def discount_pct(product: Product) -> int | None:
 
 
 def thumbnail_url(product: Product) -> str | None:
-    return product.images[0].url if product.images else None
+    """카드·장바구니·주문 스냅샷용. 썸네일이 없는 기존 이미지는 원본 url 로 폴백."""
+    if not product.images:
+        return None
+    first = product.images[0]
+    return first.thumb_url or first.url
 
 
 def stock_decrement_status_case(new_stock: ColumnElement[int]) -> ColumnElement[ProductStatus]:

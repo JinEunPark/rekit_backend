@@ -29,7 +29,7 @@ class CartItemProductSummary(BaseModel):
     id: int
     title: str
     price: int
-    thumbnail_url: str | None  # 서비스에서 images[0].url 로 계산
+    thumbnail_url: str | None  # catalog_utils.thumbnail_url (thumb_url → url 폴백)
     status: ProductStatus
     stock: int
 

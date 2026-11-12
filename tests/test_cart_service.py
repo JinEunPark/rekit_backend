@@ -390,3 +390,16 @@ async def test_cart_item_thumbnail_none_when_no_images() -> None:
     result = await service.get_cart(user_id=1)
 
     assert result.items[0].product.thumbnail_url is None
+
+
+async def test_cart_item_thumbnail_prefers_thumb_url() -> None:
+    """대표 이미지에 썸네일이 있으면 카드용으로 thumb_url 을 쓴다."""
+    img = make_image(url="https://cdn.example.com/front.webp")
+    img.thumb_url = "https://cdn.example.com/front_thumb.webp"
+    product = make_product(product_id=1, images=[img])
+    item = make_cart_item(item_id=1, user_id=1, product=product)
+    service = _make_service(items=[item])
+
+    result = await service.get_cart(user_id=1)
+
+    assert result.items[0].product.thumbnail_url == "https://cdn.example.com/front_thumb.webp"

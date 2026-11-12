@@ -96,7 +96,13 @@ class AdminCatalogService:
         if product is None:
             raise ProductNotFoundError()
         images = [
-            ProductImage(product_id=product.id, url=item.url, sort_order=i, label=item.label)
+            ProductImage(
+                product_id=product.id,
+                url=item.url,
+                thumb_url=item.thumb_url,
+                sort_order=i,
+                label=item.label,
+            )
             for i, item in enumerate(data.images)
         ]
         await self._repo.replace_images(product, images)
@@ -162,6 +168,7 @@ def _to_image(img: ProductImage) -> AdminProductImageResponse:
     return AdminProductImageResponse(
         id=img.id,
         url=img.url,
+        thumb_url=img.thumb_url,
         sort_order=img.sort_order,
         label=img.label,
     )

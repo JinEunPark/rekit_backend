@@ -69,6 +69,7 @@ def _to_image(image: ProductImage) -> ProductImageResponse:
     return ProductImageResponse(
         id=image.id,
         url=image.url,
+        thumb_url=image.thumb_url,
         sort_order=image.sort_order,
         label=image.label,
     )

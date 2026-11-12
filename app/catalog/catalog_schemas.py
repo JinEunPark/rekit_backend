@@ -48,6 +48,7 @@ class ProductListParams(BaseModel):
 class ProductImageResponse(BaseModel):
     id: int
     url: str
+    thumb_url: str | None = None
     sort_order: int
     label: str | None
 
@@ -65,7 +66,7 @@ class ProductResponse(BaseModel):
     original_price: int | None
     discount_pct: int | None  # 0-100, original_price 없으면 None
     status: ProductStatus
-    thumbnail_url: str | None  # images[0].url, 이미지 없으면 None
+    thumbnail_url: str | None  # images[0].thumb_url → 없으면 url, 이미지 없으면 None
     created_at: datetime
 
 

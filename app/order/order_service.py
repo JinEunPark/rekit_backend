@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 import structlog
 
 from app.address.models import Address
+from app.catalog.catalog_utils import thumbnail_url as _thumbnail_url
 from app.catalog.models import ProductStatus
 from app.core.exceptions import (
     AddressNotFoundError,
@@ -167,7 +168,7 @@ class OrderService:
                 product_title_snapshot=p.title,
                 product_brand_snapshot=p.brand,
                 product_model_name_snapshot=p.model_name,
-                product_image_url_snapshot=p.images[0].url if p.images else None,
+                product_image_url_snapshot=_thumbnail_url(p),
                 price_snapshot=p.price,
                 quantity=i.quantity,
             )

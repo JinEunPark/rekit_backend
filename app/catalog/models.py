@@ -163,6 +163,11 @@ class ProductImage(Base):
         nullable=False,
         comment="S3 객체 URL (uploads/confirm 통과한 키만 허용)",
     )
+    thumb_url: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="카드용 썸네일(긴 변 480px) URL. NULL 이면 url 로 폴백",
+    )
     sort_order: Mapped[int] = mapped_column(
         Integer,
         default=0,

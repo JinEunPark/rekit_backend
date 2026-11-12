@@ -670,3 +670,37 @@ async def test_delete_category_not_found_raises() -> None:
 
     with pytest.raises(CategoryNotFoundError):
         await service.delete_category("UNKNOWN")
+
+
+# ── thumb_url ─────────────────────────────────────────────────
+
+
+async def test_replace_images_stores_thumb_url() -> None:
+    """교체 요청의 thumb_url 이 이미지에 저장되고 응답에 포함된다."""
+    product = make_product(product_id=1)
+    service, _ = _make_service([product])
+    data = AdminProductImagesReplace(
+        images=[
+            AdminImageItem(
+                url="https://cdn.example.com/front.webp",
+                thumb_url="https://cdn.example.com/front_thumb.webp",
+            ),
+        ]
+    )
+
+    result = await service.replace_images(1, data)
+
+    assert result.images[0].thumb_url == "https://cdn.example.com/front_thumb.webp"
+    assert product.images[0].thumb_url == "https://cdn.example.com/front_thumb.webp"
+
+
+async def test_replace_images_thumb_url_defaults_to_none() -> None:
+    """thumb_url 을 보내지 않는 기존 클라이언트 → None (카드는 url 로 폴백)."""
+    product = make_product(product_id=1)
+    service, _ = _make_service([product])
+
+    result = await service.replace_images(
+        1, AdminProductImagesReplace(images=[AdminImageItem(url="https://cdn.example.com/a.jpg")])
+    )
+
+    assert result.images[0].thumb_url is None

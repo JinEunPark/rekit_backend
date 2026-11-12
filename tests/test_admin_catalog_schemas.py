@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.catalog.admin_catalog_schemas import AdminCategoryUpdate
+from app.catalog.admin_catalog_schemas import AdminCategoryUpdate, AdminImageItem
 
 
 def test_update_category_omitting_fields_is_valid() -> None:
@@ -42,3 +42,13 @@ def test_update_category_valid_values_pass_through() -> None:
         "icon": "📺",
         "sort_order": 0,
     }
+
+
+def test_image_item_rejects_thumb_url_over_500_chars() -> None:
+    """thumb_url 컬럼은 VARCHAR(500) — 넘으면 DB 500 대신 422."""
+    with pytest.raises(ValidationError):
+        AdminImageItem(url="https://cdn/a.webp", thumb_url="https://cdn/" + "a" * 500)
+
+
+def test_image_item_thumb_url_is_optional() -> None:
+    assert AdminImageItem(url="https://cdn/a.webp").thumb_url is None

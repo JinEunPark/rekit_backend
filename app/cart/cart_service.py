@@ -12,6 +12,7 @@ from app.cart.cart_schemas import (
     UpdateCartItemRequest,
 )
 from app.cart.models import CartItem
+from app.catalog.catalog_utils import thumbnail_url as _thumbnail_url
 from app.catalog.models import Product, ProductStatus
 from app.core.exceptions import CartItemNotFoundError, OutOfStockError, ProductNotFoundError
 
@@ -27,12 +28,11 @@ class CartService:
 
     def _build_item_response(self, item: CartItem) -> CartItemResponse:
         product = item.product
-        thumbnail_url = product.images[0].url if product.images else None
         product_summary = CartItemProductSummary(
             id=product.id,
             title=product.title,
             price=product.price,
-            thumbnail_url=thumbnail_url,
+            thumbnail_url=_thumbnail_url(product),
             status=product.status,
             stock=product.stock,
         )
