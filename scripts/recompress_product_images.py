@@ -10,7 +10,7 @@
     - `products/` 접두사 객체를 나열 → 긴 변 MAX_EDGE 로 축소, EXIF 회전 반영 후 재인코딩
     - **키·확장자·Content-Type 은 유지** (.jpg → JPEG) → DB 의 product_images.url 은 손대지 않는다
     - 덮어쓰기 전 원본을 `backup/originals/<key>` 로 복사.
-      백업이 이미 있으면 처리된 것으로 보고 건너뜀(멱등)
+      처리 여부는 크기·해상도로 판단(재실행 시 "이미 작음"), 백업은 없을 때만 만든다(멱등)
     - 기본은 dry-run(측정만). `--apply` 를 줘야 실제로 쓴다.
 
 실행:
@@ -94,14 +94,14 @@ async def main(apply: bool, prefix: str) -> None:
         mode = "apply" if apply else "dry-run"
         print(f"{mode} · bucket={bucket} · prefix={prefix} · {len(keys)} objects\n")
         for key in sorted(keys):
+            # 처리 여부는 recompress() 의 "이미 작음" 으로 판단한다. 백업 존재로 판단하면
+            # 백업 복사 후 덮어쓰기가 실패한 객체가 영영 건너뛰어진다 (운영 2026-11-13 실제 발생).
             backup_key = BACKUP_PREFIX + key
             try:
                 await s3.head_object(Bucket=bucket, Key=backup_key)
-                print(f"SKIP  {key}  (백업 존재 — 이미 처리됨)")
-                skipped += 1
-                continue
+                has_backup = True
             except ClientError:
-                pass
+                has_backup = False
 
             obj = await s3.get_object(Bucket=bucket, Key=key)
             raw = await obj["Body"].read()
@@ -120,9 +120,11 @@ async def main(apply: bool, prefix: str) -> None:
             print(f"{verb} {key}  {len(raw):>10,} → {len(res.data):>8,} B  (-{pct:.1f}%)  {dims}")
 
             if apply:
-                await s3.copy_object(
-                    Bucket=bucket, Key=backup_key, CopySource={"Bucket": bucket, "Key": key}
-                )
+                # 백업이 이미 있으면 그게 원본이다 — 다시 복사하면 원본 백업을 덮어쓸 수 있다
+                if not has_backup:
+                    await s3.copy_object(
+                        Bucket=bucket, Key=backup_key, CopySource={"Bucket": bucket, "Key": key}
+                    )
                 fmt = FORMAT_BY_EXT[key.rsplit(".", 1)[-1].lower()]
                 await s3.put_object(
                     Bucket=bucket, Key=key, Body=res.data, ContentType=CONTENT_TYPE_BY_FORMAT[fmt]

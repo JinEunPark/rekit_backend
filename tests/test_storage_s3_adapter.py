@@ -38,3 +38,22 @@ def test_generate_product_image_key_uses_products_prefix() -> None:
     key = S3StorageAdapter.generate_product_image_key("image/jpeg")
 
     assert key.startswith("products/")
+
+
+def test_client_config_computes_checksum_only_when_required() -> None:
+    """SeaweedFS 는 botocore 1.36+ 기본값(aws-chunked + CRC 트레일러) PutObject 를
+    InvalidAccessKeyId 로 거부한다 (운영 2026-11-13 재현). 필요할 때만 체크섬을 붙여야 한다."""
+    config = S3StorageAdapter.client_config(force_path_style=True)
+
+    assert config.request_checksum_calculation == "when_required"
+    assert config.response_checksum_validation == "when_required"
+
+
+@pytest.mark.parametrize(("force_path_style", "style"), [(True, "path"), (False, "auto")])
+def test_client_config_addressing_style_follows_setting(
+    force_path_style: bool, style: str
+) -> None:
+    config = S3StorageAdapter.client_config(force_path_style=force_path_style)
+
+    assert config.s3 == {"addressing_style": style}
+    assert config.signature_version == "s3v4"

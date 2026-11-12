@@ -43,16 +43,22 @@ class S3StorageAdapter:
             region_name=self.settings.s3_region,
             aws_access_key_id=self.settings.s3_access_key,
             aws_secret_access_key=self.settings.s3_secret_key,
-            config=AioConfig(
-                signature_version="s3v4",
-                s3={
-                    "addressing_style": "path"
-                    if self.settings.s3_force_path_style
-                    else "auto"
-                },
-            ),
+            config=self.client_config(self.settings.s3_force_path_style),
         ) as client:
             yield client
+
+    @staticmethod
+    def client_config(force_path_style: bool) -> AioConfig:
+        # botocore 1.36+ 는 기본으로 PutObject 본문을 aws-chunked + CRC 트레일러로 보내는데,
+        # SeaweedFS 는 이를 InvalidAccessKeyId 로 거부한다
+        # (서버 경유 SVG 업로드·재압축 스크립트가 실패).
+        # 필요한 API 에서만 체크섬을 붙이면 일반 서명 PUT 으로 나간다.
+        return AioConfig(
+            signature_version="s3v4",
+            s3={"addressing_style": "path" if force_path_style else "auto"},
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        )
 
     @staticmethod
     def generate_product_image_key(content_type: str) -> str:
