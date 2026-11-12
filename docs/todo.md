@@ -381,11 +381,18 @@
   - scrape: rekle-app·node·cadvisor·postgres·redis·`seaweedfs:9324`. 앱 네트워크 `rekit-backend_default`(운영 실측 확인 —
     postgres·redis 는 이 네트워크에만 있음) + `rekit_edge` + `seaweedfs_default`
   - 로컬 Mac 에서 기동 검증 (cAdvisor 컨테이너별 지표는 Docker Desktop 한계로 미확인 — 운영 Linux 에서 확인 필요)
-  - [ ] **(직접) 운영 배포** — 시크릿 env(`GF_SECURITY_ADMIN_PASSWORD`·`PG_MONITOR_PASSWORD`)·슬랙 웹훅 파일·
-        pg 모니터링 계정(`pg_monitor`) 생성 후 `docker compose -f prod/docker-compose.yml up -d` (절차 `docs/monitoring.md`)
-  - [ ] **(직접) SeaweedFS 메트릭** — `~/rekit/seaweedfs` command 에 `-metricsPort=9324`(publish 금지) 후 재생성
-  - [ ] **⚠️ (직접) SeaweedFS 포트 외부 노출** — 9333·8080·8888·8333 이 `0.0.0.0` publish (docker 는 ufw 우회).
-        2026-11-10 외부에서 **8888(filer) 200 응답** 확인 → `127.0.0.1:` 바인딩. 운영 명령에 `-s3.config` 도 없어 S3 인증 점검 필요
+  - [x] **운영 배포 (2026-11-10 완료)** — 서버 `~/rekit/monitoring` (레포 `infra/monitoring` 을 `git archive` 로 복사 —
+        **자동 동기화 없음**), 시크릿 `~/rekit/secrets/rekle_monitoring.env`(600, 비밀번호는 서버에서 무작위 생성),
+        PG 계정 `rekle_monitor`(`pg_monitor`, 커넥션 3) 생성, 컨테이너 7개 기동 → 수집 대상 8개 up
+  - [ ] **(직접) 슬랙 웹훅** — `~/rekit/secrets/monitoring/slack_webhook_url` + 디렉터리 755·파일 644(Alertmanager 는
+        nobody 사용자) → `docker restart rekle-mon-alertmanager`. **그 전까지 알림은 판정만, 전송 안 됨**
+  - [x] **SeaweedFS 메트릭 (2026-11-10 완료)** — `~/rekit/seaweedfs` command 에 `-metricsPort=9324`(publish 안 함) → target up
+  - [x] **SeaweedFS 포트 외부 노출 차단 (2026-11-10 완료)** — 9333·8080·8888·8333 을 `127.0.0.1:` 바인딩 (docker publish 는
+        ufw 우회라 compose 에서 막음). 외부 4포트 응답 없음 · `/s3/` 이미지 200 확인. 데이터 백업
+        `~/rekit/seaweedfs/data-backup-20261110-141659.tar.gz`. 관리 화면은 `ssh -L 8888:localhost:8888 -L 9333:localhost:9333 externalhost`
+  - [ ] **⚠️ SeaweedFS S3 인증** — 운영 command 에 `-s3.config` 없음 + 서버 안 `localhost:8333/` 익명 GET 200(버킷 목록
+        익명 허용 정황) → `/s3/` 는 nginx 로 공개 경로라 **키 없이 쓰기·삭제 가능성**. `anonymous` 에 `Read:rekle-images` 만,
+        앱 키에 Read·Write·List — 적용 후 이미지 GET·익명 List 거부·**관리자 업로드(사용자 직접)** 확인
 - [x] **O5-4 `pg_stat_statements` (2026-11-10 코드 완료)** — prod·로컬 compose postgres `command` 에 preload +
       alembic `a7c3e9f1b2d4` (`CREATE EXTENSION IF NOT EXISTS`). 로컬 실측 조회 OK.
       **⚠️ 다음 배포 때 Postgres 컨테이너 재생성(Jenkins `up -d postgres redis app`) = 수 초~수십 초 다운타임** →
@@ -394,10 +401,62 @@
       `GF_SERVER_ROOT_URL`·`SERVE_FROM_SUB_PATH` env 로 `/grafana` 서브경로 지원. 대시보드: 서비스(외부 호출 행 추가)·
       인프라(호스트·컨테이너·PG·Redis·SeaweedFS·앱 측 S3)·부하테스트(k6 + 서버 지표 한 시간축). SeaweedFS 공식
       대시보드는 컴포넌트별 job 전제라 `weed server` 단일 구성과 안 맞아 직접 작성
-  - [ ] **(직접) 엣지 nginx `/grafana/`** — 예시 `docs/monitoring.md`. 같은 출처라 IP 제한·auth_basic 권장 (서브도메인이 더 안전).
-        Jenkins `/jenkins` 도 같은 문서 메모 참고
-- [ ] **O5-6 (선택) 로그 수집** — Loki + Promtail(또는 Alloy) 로 컨테이너 JSON 로그 수집 → Grafana 에서
-      request_id 로 검색. `docker logs` + `grep` 한계 느껴질 때 도입
+  - [x] **엣지 nginx `/grafana/`·`/jenkins/` (2026-11-10 완료)** — `~/rekit/nginx/conf.d/rekit-ops.inc` 를 **443 블록에만**
+        include. Jenkins `JENKINS_OPTS=--prefix=/jenkins` + `rekit_edge` 망 + Jenkins URL 변경 + **8081 `127.0.0.1` 로 차단**
+  - [ ] (장기) 같은 출처(rekit.co.kr) 위험 → 서브도메인 분리 또는 nginx IP 제한·`auth_basic`
+  - [x] **nginx ↔ 앱 request_id 연결 (2026-11-10 완료, O1-2 남은 항목)** — `/api/`·`/health` 에
+        `proxy_set_header X-Request-ID $request_id`, `conf.d/00-log-format.conf` 의 `log_format rekit`(`rid=`·`rt=`·`urt=`).
+        종단 검증: 같은 ID 가 nginx·앱 로그에 찍힘, 클라이언트 위조 헤더는 무시됨
+  - 발견: nginx → 앱 사이 keepalive 없음(요청마다 새 연결, HTTP/1.0) → gunicorn `keepalive 75` 경합 없음. O8 최적화 후보로만
+- [ ] **O5-6 로그 수집 — Loki + Grafana Alloy** (2026-11-10 계획 확정, 다음 작업)
+
+  **왜 지금** — 로그가 docker json-file(`/var/lib/docker/containers/<id>/*-json.log`)에만 있어서
+  ① **컨테이너 재생성 = 로그 삭제** — 배포마다 rekle-app 이전 로그가 사라짐 (2026-11-10 0.0.6 배포 직후 101줄만 남음)
+  ② nginx·jenkins·seaweedfs·registry·certbot·rekle-web 은 **로테이션 없음**(`/etc/docker/daemon.json` 없음 → 무제한, nginx 8월부터 ≈26MB)
+  ③ 조회는 `ssh` + `docker logs | grep` 뿐 — 메트릭 이상 시점에서 로그로 못 넘어감
+
+  **결정** — Loki + **Grafana Alloy**. Promtail 은 **지원 종료(EOL)** 라 새로 도입하지 않는다.
+  ELK/OpenSearch 는 서버 1대(4코어·15GB)에 JVM 2~4GB+ 라 과함 (로그량 하루 수 MB). 개념 비교는 Obsidian 「모니터링 구조」
+
+  - [ ] **O5-6-1 이미지·버전** — `grafana/loki`(3.x), `grafana/alloy`(v1.x) **정확한 태그 고정**(2주 이상 지난 안정 버전,
+        릴리스 노트 확인). 기존 스택처럼 `x-logging` 로테이션 적용
+  - [ ] **O5-6-2 Loki 설정** (`infra/monitoring/loki/loki-config.yml`, 로컬·운영 공용)
+    - 단일 바이너리(monolithic), `auth_enabled: false`, 저장소 filesystem, 인덱스 `tsdb` + `schema: v13`
+    - **보관 30일** — `compactor.retention_enabled: true` + `limits_config.retention_period: 720h` (compactor 없으면 retention 미동작)
+    - `reject_old_samples`·수집 속도 제한 기본값 검토, 볼륨 `loki_data`
+    - **호스트 포트 publish 금지**(자체 인증 없음) — Grafana·Alloy·Prometheus 는 compose 내부망 `loki:3100` 으로. 디버깅은 `127.0.0.1` 바인딩만
+    - `mem_limit` 검토 (예: Loki 1g, Alloy 256m) — 쇼핑몰과 같은 서버
+  - [ ] **O5-6-3 Alloy 설정** (`infra/monitoring/alloy/config.alloy`)
+    - `discovery.docker` → `discovery.relabel` → `loki.source.docker` → `loki.write`
+    - ⚠️ **docker.sock 접근 = 호스트 장악 가능 권한** (`:ro` 여도 API 전체). 대안 비교 후 결정:
+      `tecnativa/docker-socket-proxy`(`CONTAINERS=1` 만 허용, 읽기 전용) 경유 권장
+    - **라벨은 값 종류가 적은 것만**: `container`, `compose_project`, `compose_service`, `stream`(stdout/stderr), `env=prod`,
+      (선택) 앱 JSON 의 `level`. **`request_id`·`user_id`·`path` 는 라벨 금지**(카디널리티 폭발) — 본문에 두고 `| json` 으로 검색
+    - 위치(positions) 저장용 볼륨 — Alloy 재시작 시 중복·누락 없이 이어 읽기
+    - 대상: 서버의 **모든 컨테이너** (앱·nginx·postgres·redis·seaweedfs·jenkins·모니터링 자신)
+  - [ ] **O5-6-4 Grafana**
+    - Loki 데이터소스 provisioning (`grafana/provisioning/datasources/`)
+    - **derived field** — 로그 본문의 `request_id`(앱 JSON) / `rid=`(nginx) 를 클릭하면 같은 ID 로그 전체로 이동하는 링크
+    - 대시보드: 서비스 대시보드에 "ERROR 로그" 패널 + 레벨별 로그 양, 인프라 대시보드에 컨테이너별 로그 양
+    - `docs/monitoring.md` 에 LogQL 예시 (`{container="rekle-app"} | json | request_id="..."`, `level="error"`, `duration_ms > 1000`,
+      nginx `|= "rid=..."`)
+  - [ ] **O5-6-5 Prometheus·알림 연동** — Loki·Alloy `/metrics` scrape 추가 (기존 `MonitoringTargetDown` 이 다운 감지),
+        (선택) Loki 수집 실패·드롭 지표 알림. 로그 기반 알림(예: `"토스 웹훅 금액 불일치"` 1건) 은 2차로
+  - [ ] **O5-6-6 나머지 컨테이너 로그 로테이션** (레포 밖 `~/rekit/*` compose, 재생성 필요) — nginx·jenkins·seaweedfs·
+        registry·certbot 에 `logging: {driver: json-file, options: {max-size: "20m", max-file: "5"}}`. rekle-web 은 프론트 레포 compose.
+        `daemon.json` 기본값은 docker 데몬 재시작(전 컨테이너 중단)이 필요해 compose 방식 우선
+  - [ ] **O5-6-7 로컬 스택에도 추가** (`infra/monitoring/docker-compose.yml`) — Mac Docker Desktop. ⚠️ 현재 `/Volumes/A` bind 마운트
+        오류(`mkdir /host_mnt/Volumes/A: file exists`) → **Docker Desktop 재시작 후** 진행. 로컬 Prometheus·Grafana 는 5일 전 설정이라 같이 재생성
+  - [ ] **O5-6-8 검증 (완료 조건)**
+    - `loki -config.file=... -verify-config`, `alloy fmt`/기동 로그 오류 0, `promtool check config`
+    - 앱 요청 → Grafana Explore 에서 `request_id` 로 앱·nginx 로그 동시 조회
+    - **앱 컨테이너 재생성 후에도 이전 로그가 Loki 에 남아 있는지** (이번 도입의 핵심 목적)
+    - 30일 retention 설정이 compactor 로그에 반영되는지, 디스크 사용량 확인
+    - JSON 로그 한국어 이벤트명(`"주문 생성"` 등) 이 깨지지 않고 검색되는지 (`ensure_ascii=False`)
+    - 테스트·lint·type 게이트 (`pytest -v`·`ruff check app tests`·`mypy app`) — 앱 코드 변경이 없어도 실행
+  - [ ] **O5-6-9 운영 배포** — `git archive origin/master infra/monitoring | ssh externalhost 'tar -x -C ~/rekit/monitoring --strip-components=2'`
+        → `cd ~/rekit/monitoring/prod && docker compose --env-file ~/rekit/secrets/rekle_monitoring.env up -d` → 위 검증을 운영에서 반복.
+        `docs/monitoring.md`·Obsidian 「모니터링 구조」 에 로그 흐름 절 추가
 
 ### O6. 알림 (SLO 기반)
 
@@ -621,6 +680,11 @@
 - [x] `PUT /admin/products/{id}/images` — 이미지 전체 교체 (추가·삭제·순서 일괄 반영)
 - [x] `PATCH /admin/products/{id}/images/{image_id}` — **신규 완료** 이미지 단건 수정 (라벨/순서 등 부분 업데이트)
 - [ ] `POST /admin/products/import-csv` — Phase 우선순위 낮음
+- [ ] **`AdminProductCreate`/`Update` 정수 필드 상한(`le=`)** — 정가 `100000000001` 입력 시 `INTEGER` 초과로 등록 500
+      (2026-11-13 발견). 프론트 입력은 막았음(정가·판매가 10억, 재고·연도 9,999) → API 직접 호출 시 422 가 나오게
+- [x] **카드용 썸네일 `product_images.thumb_url` (2026-11-13, 0.0.7)** — 마이그레이션 `660a6a71a631`(NULL 허용 컬럼 추가).
+      `catalog_utils.thumbnail_url` 이 thumb 우선·url 폴백 → 카드·장바구니·찜·주문 스냅샷 공통. 이미지 응답·`PUT .../images` 에 `thumb_url`
+  - [ ] 배포 후 기존 이미지 백필 — `scripts/generate_product_thumbnails.py` (stdin `id|url` → 480px WebP 업로드 + `UPDATE` SQL, dry-run 기본)
 
 ### 1.12 관리자 — 주문 (`/api/v1/admin/orders`) ✅ 대부분 구현 완료
 
@@ -651,6 +715,11 @@
 
 - [x] `POST /uploads/presign`
 - [x] `POST /uploads/confirm`
+- [x] **S3 PutObject 체크섬 설정 (2026-11-13, 0.0.7)** — botocore 1.36+ 기본(aws-chunked + CRC 트레일러)을 SeaweedFS 가
+      `InvalidAccessKeyId` 로 거부 → `request/response_checksum_validation="when_required"`. 서버 경유 업로드(`/uploads/svg`)·
+      스크립트가 영향. presign(브라우저 직접 PUT)은 무관. ⚠️ 운영 SVG 업로드 실제 실패 여부는 로그상 시도 없어 미확인 → 배포 후 1회 확인
+- [x] **기존 상품 이미지 재압축 운영 적용 (2026-11-13)** — `scripts/recompress_product_images.py`, 12장 38.7MB → 3.0MB (-92.2%),
+      키·이미지 ID·DB 무변경. 부분 실패 시 영구 skip 되던 멱등 판정 수정(백업 존재 → 크기 기준). 확인 후 `backup/originals/` 12개 삭제
 - [ ] **추가 검토**: `purpose`를 `product_image` 외 `verification_doc` 등으로 확장
 
 ---
