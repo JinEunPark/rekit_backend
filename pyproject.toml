@@ -41,6 +41,10 @@ dev = [
     "types-aioboto3[s3]>=15.5.0",
     "types-defusedxml>=0.7.0",
 ]
+# 운영 1회성 스크립트 전용 (scripts/recompress_product_images.py) — 런타임 이미지에는 넣지 않는다
+scripts = [
+    "pillow>=11.0.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
