@@ -61,6 +61,7 @@ async def test_ready_returns_503_with_failed_dependency_name(client: httpx.Async
     assert res.json() == {"status": "unavailable", "checks": {"database": "fail", "redis": "ok"}}
 
 
+@pytest.mark.infra
 async def test_ready_returns_200_when_real_database_and_redis_respond(
     client: httpx.AsyncClient,
 ) -> None:

@@ -67,6 +67,9 @@ ignore = ["B008"]  # FastAPI Depends() default args
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "infra: 실제 PostgreSQL·Redis 에 접속하는 테스트 (빌드 게이트에서는 -m \"not infra\" 로 제외)",
+]
 
 [tool.mypy]
 python_version = "3.11"

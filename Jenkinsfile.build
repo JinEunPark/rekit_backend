@@ -33,10 +33,19 @@ pipeline {
             }
         }
 
+        // 게이트 — ruff · mypy · 단위 테스트 (Dockerfile 의 test 단계). 실패하면 여기서 잡이 멈춰
+        // 아래 Build & Push 에 도달하지 않는다 → registry 에 이 태그 이미지가 없으니 deploy-was 도 불가.
+        // 검사용 이미지는 registry 에 올리지 않는다.
+        stage('Test') {
+            steps {
+                sh "docker build --target test -t ${IMAGE_NAME}-test:${env.IMAGE_TAG} ."
+            }
+        }
+
         stage('Build & Push') {
             steps {
                 sh """
-                    docker build -t ${REGISTRY}/${IMAGE_NAME}:${env.IMAGE_TAG} .
+                    docker build --target runtime -t ${REGISTRY}/${IMAGE_NAME}:${env.IMAGE_TAG} .
                     docker push ${REGISTRY}/${IMAGE_NAME}:${env.IMAGE_TAG}
                 """
             }
@@ -44,6 +53,10 @@ pipeline {
     }
 
     post {
+        always {
+            // 검사용 이미지는 남길 이유가 없다 — 디스크만 차지
+            sh "docker image rm ${IMAGE_NAME}-test:${env.IMAGE_TAG} || true"
+        }
         success {
             echo "이미지 push 완료: ${REGISTRY}/${IMAGE_NAME}:${env.IMAGE_TAG}. 배포는 deploy-was 잡에서 VERSION 드롭다운으로."
         }

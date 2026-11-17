@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import exc as sa_exc
@@ -55,11 +56,13 @@ async def _pg_setting_ms(name: str) -> int:
     return int(value)
 
 
+@pytest.mark.infra
 async def test_engine_connection_applies_statement_timeout() -> None:
     """느린 쿼리·락 대기가 커넥션을 무기한 점유하지 않게 세션 statement_timeout 을 건다."""
     assert await _pg_setting_ms("statement_timeout") == settings.database_statement_timeout_ms
 
 
+@pytest.mark.infra
 async def test_engine_connection_applies_idle_in_transaction_timeout() -> None:
     """트랜잭션을 연 채 방치된 세션(락 보유)은 서버가 끊는다."""
     assert (

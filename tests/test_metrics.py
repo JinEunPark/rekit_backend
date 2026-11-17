@@ -125,6 +125,7 @@ def test_render_latest_uses_process_registry_without_multiprocess_dir(
     assert b"rekle_http_requests_total" in body
 
 
+@pytest.mark.infra
 async def test_db_pool_gauge_tracks_checkout_and_checkin() -> None:
     """DB 커넥션 대여 중엔 사용 중 커넥션 Gauge 가 1 오르고, 반납하면 돌아온다 (pool 고갈 감시).
 
@@ -150,6 +151,7 @@ async def test_db_pool_gauge_tracks_checkout_and_checkin() -> None:
     assert _sample("rekle_db_pool_connections_in_use") == before
 
 
+@pytest.mark.infra
 async def test_app_engine_pool_stays_instrumented_after_dispose() -> None:
     """앱 전역 engine 의 풀도 계측된다 — dispose 로 풀이 새로 만들어져도 계측이 유지된다.
 
@@ -172,6 +174,7 @@ async def test_app_engine_pool_stays_instrumented_after_dispose() -> None:
     assert _sample("rekle_db_pool_connections_in_use") == before
 
 
+@pytest.mark.infra
 async def test_db_pool_checkout_wait_observed_per_connect() -> None:
     """커넥션 획득마다 풀 대기 시간이 한 번 관측된다 — in_use 만으론 "얼마나 기다렸나" 를 모른다."""
     from sqlalchemy import text
@@ -192,6 +195,7 @@ async def test_db_pool_checkout_wait_observed_per_connect() -> None:
     assert _sample("rekle_db_pool_checkout_wait_seconds_count") == before + 1
 
 
+@pytest.mark.infra
 async def test_db_pool_timeout_counted_when_pool_exhausted() -> None:
     """풀이 꽉 차 pool_timeout 을 넘기면 타임아웃 카운터가 오르고, 기다린 시간도 관측된다."""
     from sqlalchemy import exc as sa_exc
@@ -220,6 +224,7 @@ async def test_db_pool_timeout_counted_when_pool_exhausted() -> None:
     assert _sample("rekle_db_pool_checkout_wait_seconds_count") == before_waits + 2
 
 
+@pytest.mark.infra
 async def test_app_engine_pool_observes_checkout_wait_after_dispose() -> None:
     """앱 전역 engine 도 대기 시간을 잰다 — dispose 로 풀이 재생성돼도 같은 풀 클래스가 유지된다."""
     from sqlalchemy import text
