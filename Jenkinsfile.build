@@ -26,6 +26,8 @@ pipeline {
                         error "RELEASE_TAG 형식 오류: '${params.RELEASE_TAG}' (X.Y.Z 여야 함)"
                     }
                     env.IMAGE_TAG = params.RELEASE_TAG.trim()
+                    env.BUILD_RECIPE = 'Dockerfile'
+                    env.GATE_REV = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
                 }
                 // Jenkins SCM 은 master 를 받아오므로, 빌드 대상 태그의 트리로 명시적으로 이동
                 sh 'git fetch --tags --force --prune'
@@ -38,14 +40,27 @@ pipeline {
         // 검사용 이미지는 registry 에 올리지 않는다.
         stage('Test') {
             steps {
-                sh "docker build --target test -t ${IMAGE_NAME}-test:${env.IMAGE_TAG} ."
+                script {
+                    if (env.IMAGE_TAG ==~ /0[.]0[.][1-7]/) {
+                        env.GATE_TMP = pwd(tmp: true)
+                        env.BUILD_RECIPE = "${env.GATE_TMP}/legacy.Dockerfile"
+                        sh '''
+                            mkdir -p "$GATE_TMP"
+                            git show "$GATE_REV:.dockerignore" > "$BUILD_RECIPE.dockerignore"
+                            git show "$GATE_REV:Dockerfile" > "$GATE_TMP/gate.Dockerfile"
+                            git show "$GATE_REV:ci/legacy-dockerfile.sh" > "$GATE_TMP/legacy.sh"
+                            sh "$GATE_TMP/legacy.sh" "$GATE_TMP/gate.Dockerfile" > "$BUILD_RECIPE"
+                        '''
+                    }
+                }
+                sh 'docker build -f "$BUILD_RECIPE" --target test -t "$IMAGE_NAME-test:$IMAGE_TAG" .'
             }
         }
 
         stage('Build & Push') {
             steps {
                 sh """
-                    docker build --target runtime -t ${REGISTRY}/${IMAGE_NAME}:${env.IMAGE_TAG} .
+                    docker build -f "${env.BUILD_RECIPE}" --target runtime -t ${REGISTRY}/${IMAGE_NAME}:${env.IMAGE_TAG} .
                     docker push ${REGISTRY}/${IMAGE_NAME}:${env.IMAGE_TAG}
                 """
             }

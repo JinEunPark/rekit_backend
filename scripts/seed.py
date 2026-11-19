@@ -60,7 +60,6 @@ async def get_or_create_user(
         is_active=True,
         agreed_terms_at=now,
         agreed_privacy_at=now,
-        identity_verified_at=now,  # 주문 테스트용
         phone="010-1234-5678",
         phone_verified_at=now,
     )

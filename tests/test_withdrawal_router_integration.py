@@ -15,6 +15,7 @@ test_social_login.py / test_user_service.py 에서 이미 fake repo 로 검증 �
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import closing
 
 import pytest
 from fastapi.testclient import TestClient
@@ -65,7 +66,8 @@ class _FakeUserService:
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
-    with TestClient(app) as c:
+    # Router tests use dependency overrides and do not need the production S3 lifespan.
+    with closing(TestClient(app)) as c:
         yield c
     app.dependency_overrides.clear()
 

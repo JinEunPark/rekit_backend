@@ -4,7 +4,7 @@
 검사 실패 시 이미지를 push 하지 않으면, 검사를 통과하지 못한 태그는 배포할 이미지 자체가 없다.
 
 - Dockerfile 의 test 단계가 ruff · mypy · 단위 테스트를 실행해야 한다
-- 마지막 단계는 운영 이미지여야 한다 — 기본 build 대상이 test 가 되면 운영 이미지에 dev 도구가 들어간다
+- 기본 빌드는 개발 도구가 없는 운영 이미지를 만든다
 - Jenkinsfile.build 는 Build & Push 앞에서 test 단계를 빌드해야 한다
 """
 
@@ -34,6 +34,7 @@ def test_dockerfile_test_stage_runs_lint_type_and_unit_tests() -> None:
     """test 단계 하나만 빌드해도 세 가지 게이트가 모두 돈다."""
     body = _stage_body((_ROOT / "Dockerfile").read_text(encoding="utf-8"), "test")
 
+    assert 'pip install -e ".[dev,scripts]"' in body
     assert "ruff check app tests" in body
     assert "mypy app" in body
     assert "pytest" in body
@@ -49,7 +50,7 @@ def test_infra_marker_is_registered() -> None:
 
 
 def test_tests_that_connect_to_real_infra_are_marked() -> None:
-    """integration 폴더 밖에서 실제 DB·Redis 에 붙는 테스트는 infra 마커가 있어야 빌드 게이트에서 빠진다."""
+    """integration 폴더 밖의 DB·Redis 테스트에는 infra 마커가 필요하다."""
     unmarked: list[str] = []
     for path in (_ROOT / "tests").glob("test_*.py"):
         if path.name == Path(__file__).name:  # 이 파일은 검사 문자열을 담고 있다
@@ -93,4 +94,4 @@ def test_jenkins_build_runs_test_stage_before_push() -> None:
     assert test_at != -1, "Jenkinsfile.build 에 Test 단계가 없다"
     assert test_at < push_at
     assert "--target test" in jenkinsfile
-    assert "--target runtime" in jenkinsfile
+    assert "--target runtime" in jenkinsfile[push_at:]

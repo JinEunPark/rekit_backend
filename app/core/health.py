@@ -27,9 +27,7 @@ async def check_database() -> None:
 
 
 async def check_redis() -> None:
-    # redis-py 타입 스텁이 sync/async 겸용이라 Awaitable[bool] | bool —
-    # asyncio 클라이언트는 항상 awaitable
-    await get_redis().ping()  # type: ignore[misc]
+    await get_redis().ping()
 
 
 def get_readiness_checks() -> Mapping[str, ReadinessCheck]:

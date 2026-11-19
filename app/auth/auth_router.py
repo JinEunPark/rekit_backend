@@ -365,9 +365,9 @@ async def social_callback(
 async def social_reauth_for_withdrawal(
     body: SocialCallbackRequest,
     provider: SocialProvider = Path(description="kakao | naver | google"),
+    user: User = Depends(get_active_user),
     oauth: OAuthProvider = Depends(get_oauth_provider),
     service: AuthService = Depends(get_auth_service),
-    user: User = Depends(get_active_user),
 ) -> WithdrawalReauthResponse:
     """소셜 전용 계정(비밀번호 없음) 탈퇴 직전 본인 확인.
 

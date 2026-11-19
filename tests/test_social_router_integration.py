@@ -10,6 +10,7 @@ DB 가 필요한 multi-call 통합은 SQLAlchemy async + TestClient 의 event lo
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from contextlib import closing
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,7 +40,8 @@ def _override_with(profile: SocialProfile) -> Callable[[SocialProvider], OAuthPr
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
-    with TestClient(app) as c:
+    # Router tests use dependency overrides and do not need the production S3 lifespan.
+    with closing(TestClient(app)) as c:
         yield c
     app.dependency_overrides.clear()
 
